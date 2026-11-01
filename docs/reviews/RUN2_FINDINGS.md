@@ -152,7 +152,7 @@ Excluding the first 120 s, FPS by recorded draws was 26.9 (300-800), 21.9 (800-1
 Captures took **66 s and 72 s**. The replay itself took 12-15 s, consistent with about 700 KB
 of draw log in a small stdio buffer, and the rest went to reading back and writing about 30
 PNG targets. `0.0.12-log4` makes the combo write only the screenshot, draw log and GLSL, moves
-targets behind `LSWTCS_CAPRES=1` and uses larger stdio buffers. The gain is not yet measured.
+targets to a separate combo (also holding L + R, from `0.0.12-log5`) and uses larger stdio buffers. The gain is not yet measured.
 Logs and captures now go to `sdmc:/lswtcs/logs/<date_time>/`.
 
 The two screenshots look correct, and the normal-buffer composite shows no seam at the tile

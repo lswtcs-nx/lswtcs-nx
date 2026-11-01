@@ -40,7 +40,7 @@ try {
         $chunk = New-Object byte[] $size
         $read = [UIntPtr]::Zero
         $ok = [TcsReferenceReader]::ReadProcessMemory($handle,
-            [IntPtr]($hostOffset + $guestBase + $offset), $chunk, [UIntPtr]$size, [ref]$read)
+            [IntPtr]($hostOffset + $guestBase + $offset), $chunk, [UIntPtr][uint64]$size, [ref]$read)
         if (-not $ok -or $read.ToUInt64() -ne $size) {
             throw ('Incomplete reference read at image offset 0x{0:X}; no output saved' -f $offset)
         }

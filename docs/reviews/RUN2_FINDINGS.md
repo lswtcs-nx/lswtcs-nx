@@ -70,3 +70,32 @@ buffering change.
 The warm session shows 15 holds and 8.4 s over about 24 minutes, against 45 holds and 30 s
 over 6.5 minutes on the cold first run. The saved program list is working, though the two
 sessions did not play identical routes.
+
+## Run 3: `0.0.12-log2`, height fix applied
+
+About 6.4 minutes with `profiles/hardware-untile.env`, 10 save commits, no `crash.log`,
+empty stderr. **The tile merge works on hardware: 30 of 33 sampled heavy frames merged.**
+Records fell from a median near 700 to near 360 drawn, for example 2,765 recorded and
+1,021 drawn. Two samples with a key difference were still seen, so some groups stay rejected.
+
+Non-hold frames compared with run 2, binned by recorded draws. Routes and lengths differ,
+so treat these as indications, not a controlled comparison.
+
+| Recorded draws | Replay ms, before → after | Median frame ms, before → after | FPS, before → after |
+| --- | --- | --- | --- |
+| 300–800 | 9.1 → 5.7 | 48 → 45 | 19.8 → 21.4 |
+| 800–1300 | 18.1 → 10.7 | 58 → 55 | 17.4 → 16.8 |
+| 1300–1800 | 25.0 → 14.1 | 67 → 55 | 14.5 → 17.7 |
+| 1800+ | 32.8 → 19.2 | 70 → 64 | 13.9 → 14.5 |
+
+Replay CPU fell by about 40 %, but the GPU wait stayed near 30–35 ms, so pacing improved
+only a little, which fits the pixel-dominated GPU cost above.
+
+Audio did not improve: median production stayed at 98 %, and device-empty time did not fall.
+Recorded draw merging is therefore not the main audio cause.
+
+Visual acceptance of merging still depends on the tester's report and a longer run.
+
+The Load Game screen shows the save date as 12/31/1969 21:00 (`shot_1141`), the existing
+register item. That is the Unix epoch at UTC-3, which suggests the time reaching the game
+is zero. `st_mtime` from the native save file system is the suspect, not yet confirmed.

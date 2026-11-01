@@ -40,6 +40,9 @@ def print_marks(rows,marks):
 def print_stdout(path):
     lines=path.read_bytes().decode('latin-1').splitlines()
     print(f"\nSave commits: {sum('[SAVEFS] commit' in l for l in lines)}")
+    tiles=[re.search(r'of (\d+) draws.*untiled: (\d+) tile groups, (\d+) tile repeats',l) for l in lines if 'untiled:' in l]
+    heavy=[match for match in tiles if match and int(match[1])>=300]
+    print(f"Sampled frames with at least 300 draws: {len(heavy)}, with a merged tile group: {sum(int(m[2])>0 for m in heavy)}")
     audio=[l for l in lines if l.startswith('[AUDIO] ') and 'buffers played' in l]
     if audio:print('Last audio line:',audio[-1])
     print('Audio windows with an empty device queue ([AUDIOQ]):')

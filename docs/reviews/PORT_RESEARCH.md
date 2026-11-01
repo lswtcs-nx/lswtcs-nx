@@ -76,7 +76,7 @@ registers make this a risky driver change for an uncertain return.
 
 [bo2-360-nx](https://github.com/AlvaroEPena/bo2-360-nx) is Black Ops II from the 360 executable, by static recompilation with ReXGlue,
 drawing through Vulkan on NVK. GPL-3: read for technique, no code taken. Its numbers come from A/B runs on that game, and do not
-transfer. What applies here:
+transfer. Candidates, costs and a suggested order are in `BO2_OPTIMIZATION_PATHS.md`. What applies here:
 
 - **Threads are the big difference.** Each of its guest threads is a Horizon thread on several cores, with the 360's atomics behind a
   global lock. TCS runs one guest thread at a time on core 0. In run 7 that was the limit. `LSWTCS_WALKOFF`, the small step in that

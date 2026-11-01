@@ -44,3 +44,7 @@ This does not alter the009 W1/P1 gate or promise performance/corruption repair.
   adapted to TCS's requested two-player identities; no added input mode yet.
 All eight source pins/limits are in the current reference review; no direct
 validated Nouveau BO fix or TCS-compatible replacement frontend was established.
+
+1 November addition (supporting item 9, not started): CPU optimization paths from
+bo2-360-nx are in [reviews/BO2_OPTIMIZATION_PATHS.md](reviews/BO2_OPTIMIZATION_PATHS.md).
+Techniques only, since its license differs; the first console profile sets the order.

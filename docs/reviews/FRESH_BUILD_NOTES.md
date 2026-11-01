@@ -16,7 +16,7 @@ an emulator or on hardware.
 | Patched Mesa | Built with 2 jobs |
 | Mesa012 game target | Built in about 47 minutes with 2 jobs; no compile errors |
 | `validate_tcs360_switch.py` | Passed; NACP 0.0.12, strict link true |
-| `image.bin` | Not yet captured |
+| `image.bin` | Captured from Xenia Canary `02d2cb5`; code hash matches; hardware use untested |
 
 The NRO has the owner's exact size, 115,026,117 bytes, but a different hash:
 
@@ -50,7 +50,8 @@ MSYS2 Python 3.12.16, CMake 4.4.4 (Windows) and 4.4.5 (MSYS).
 
 ## Open question for `image.bin`
 
-The capture was prepared with the latest official Xenia Canary release, `02d2cb5`
-(March 2026), which differs from the source pin. The owner's Xenia build is not recorded.
-The capture tool checks the code hash, so a wrong read fails with no output saved. It
-does not validate import thunks, which the runtime keeps from the dump.
+The capture used the latest official Xenia Canary release, `02d2cb5` (March 2026), which
+differs from the source pin. The owner's Xenia build is not recorded. Its image sits at
+host address `0x282000000`, not the old fixed offset, so the capture script now searches
+for the image and accepts it only if the code hash matches. Import thunks come from this
+Xenia build and are not validated by that hash, so they are a suspect if early boot fails.

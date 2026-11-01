@@ -3,7 +3,7 @@
 Answers [FIRST_TASK.md](../FIRST_TASK.md) against the 1 November 2026 handoff.
 W0–W5 position: W1, native BO fault. This review is **source reading only**: nothing
 was compiled, helper-tested, emulator-run or hardware-run. Mesa 20.1 and libdrm's
-`bufctx.c` are not in the handoff, so statements about them are marked unverified.
+`bufctx.c` are not in the handoff; they were read later at their recorded pins.
 First invalidator: **unknown**. No repair is proposed.
 
 ## Main finding
@@ -47,8 +47,18 @@ crashes (003, 009) are compatible with this reading but do not prove it.
 | Delete | `nouveau_bo_del`, `nouveau.c:341` | Fence wait, unmap, then `free` |
 
 Line 298 followed by line 378 matters most. A BO left in `bctx->current` is acquired
-again at the next validate. If that list holds no reference of its own (my memory of
-upstream libdrm, unverified here), then Mesa must clear the list before the BO dies.
+again at the next validate, and `nouveau_pushbuf_kick` validates right after flushing
+(`pushbuf.c:683-684`). Upstream `bufctx.c` at v1.0.1 confirms that `nouveau_bufctx_refn`
+stores the pointer **without taking a reference**. So Mesa must clear that entry before
+the BO dies, or the next validate raises the count of freed memory.
+
+Mesa 20.1 at the recorded pin confirms the sharing: every nvc0 context uses the screen's
+one pushbuf and client (`nvc0_context.c:381-382`) but has its own bufctx (`:384-389`).
+`nvc0_invalidate_resource_storage` runs only for the context that invalidated the
+resource. Fence-deferred frees (`nouveau_fence_unref_bo`, `nouveau_buffer.c:82`) run from
+`nouveau_fence_update`, on whichever thread updates fences.
+
+This shows the route exists. It does **not** identify a bufctx entry that outlived its BO.
 
 ## Threads and locking
 
@@ -135,7 +145,7 @@ about a fix. It must never ship as a repair, and neither should a null guard.
 
 ## Not done
 
-- No local reproducer or negative control: this machine has no C++ compiler yet.
-- Mesa's bufctx clearing and BO release paths are unread, because Mesa is fetched
-  separately. Reading them at the recorded pin is the next source step.
-- The 012 regression was not run here, and 012's hardware test stays with the owner.
+- No local reproducer or negative control.
+- Not every Mesa path that clears a bufctx bin has been audited against BO release.
+- The 012 regression was not run here. One short 012 hardware session has since run on
+  a fresh build with no crash, which says nothing about this intermittent fault.

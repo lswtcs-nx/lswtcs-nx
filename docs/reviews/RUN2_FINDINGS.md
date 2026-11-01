@@ -99,3 +99,16 @@ Visual acceptance of merging still depends on the tester's report and a longer r
 The Load Game screen shows the save date as 12/31/1969 21:00 (`shot_1141`), the existing
 register item. That is the Unix epoch at UTC-3, which suggests the time reaching the game
 is zero. `st_mtime` from the native save file system is the suspect, not yet confirmed.
+
+## Early depth testing: next candidate
+
+None of the 136 saved pixel shaders uses `early_fragment_tests`, and nearly all contain
+`discard` from the translator's runtime alpha test, which is emitted unless the early hint
+is set (`spirv_shader_translator_rb.cc:473`). `nvc0_program.c:443` then marks the program as
+killing pixels, even in draws with alpha test off. The earlier source comment assumed
+Maxwell already tested early in those cases, but the shaders never qualified as non-killing.
+
+`0.0.12-log3` sets the hint under the same conditions as Xenia's Vulkan path, with
+`LSWTCS_GLEARLYZ=0` as the switch back. Compiled and statically validated only: the real
+gain depends on how much overdraw these scenes have, which has not been measured. A shader
+can now have two programs, so the first session may show more shader holds.

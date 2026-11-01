@@ -426,10 +426,23 @@ extern "C" int lsw_gpu_prepare(const uint32_t* regs_in, const uint32_t* vs_ucode
       ps_mod.pixel.param_gen_interpolator = ps_param_gen_pos;
       ps_mod.pixel.param_gen_point = uint32_t(prim_type == xenos::PrimitiveType::kPointList);
     }
-    // No early-fragment-tests hint (Vulkan sets it when the shader neither kills nor writes depth and
-    // coverage does not depend on alpha): exactly when Maxwell already runs depth tests early on its
-    // own, and with the hint every such pixel shader was a second program (twice the compile).
-    ps_mod.pixel.depth_stencil_mode = SpirvShaderTranslator::Modification::DepthStencilMode::kNoModifiers;
+    // Early-fragment-tests hint under the Vulkan path's conditions (LSWTCS_GLEARLYZ, default on; =0 = no hint).
+    // Without it every translation keeps the runtime alpha test, whose discard marks the program as killing
+    // pixels (nvc0_program.c), even in draws with the test off. The price: such a shader can have two programs.
+    {
+      static const bool early_z = [] { const char* e = getenv("LSWTCS_GLEARLYZ"); return !(e && e[0] == '0'); }();
+      const bool hint = early_z && ps->implicit_early_z_write_allowed() &&
+                        (!ps->writes_color_target(0) ||
+                         !draw_util::DoesCoverageDependOnAlpha(regs.Get<reg::RB_COLORCONTROL>()));
+      ps_mod.pixel.depth_stencil_mode = hint ? SpirvShaderTranslator::Modification::DepthStencilMode::kEarlyHint
+                                             : SpirvShaderTranslator::Modification::DepthStencilMode::kNoModifiers;
+      static uint64_t draws = 0, hinted = 0;
+      hinted += hint;
+      if ((++draws % 100000) == 0) {
+        printf("[GLEARLYZ] %llu of %llu draws with the early hint\n", (unsigned long long)hinted, (unsigned long long)draws);
+        fflush(stdout);
+      }
+    }
     ps_mod.pixel.rt0_blend_rgb_factor_for_premult = xenos::BlendFactor::kOne;
     ps_mod.pixel.rt0_blend_a_factor_for_premult = xenos::BlendFactor::kOne;
     if (ps->writes_color_target(0)) {

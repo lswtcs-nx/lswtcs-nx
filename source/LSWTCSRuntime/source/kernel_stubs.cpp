@@ -816,8 +816,11 @@ static inline void lswtcs_advance_all_kprcb_ticks() {
 static std::atomic<uint64_t> g_sched_prio_mask{0};
 static void sched_mark_prio(int id) { if (id >= 0 && id < LSW_SCHED_MAX) g_sched_prio_mask.fetch_or(1ull << id); }
 // 1 = chosen first at every handoff AND a waiting audio thread cuts the LSWTCS_QDIV divisor short; 2 = chosen first only.
+// LSWTCS_ABCYCLE (gl_backend.cpp) changes it during play, through lsw_sched_ab_set.
+static std::atomic<int> g_audioprio_mode{-1};
 static int audioprio_mode() {
-    static const int m = [] { const char* e = getenv("LSWTCS_AUDIOPRIO"); return e ? atoi(e) : 0; }();
+    int m = g_audioprio_mode.load(std::memory_order_relaxed);
+    if (m < 0) { const char* e = getenv("LSWTCS_AUDIOPRIO"); m = e ? atoi(e) : 0; g_audioprio_mode.store(m, std::memory_order_relaxed); }
     return m;
 }
 static bool audioprio_on() { return audioprio_mode() != 0; }
@@ -838,7 +841,11 @@ static uint64_t g_urg_q = 0, g_urg_qspin = 0, g_urg_qcomp = 0;   // DIAG: quantu
 static int sched_next_locked(int from) {
     if (g_sched_count <= 0) return -1;
     if (const int u = g_sched_urgent; u >= 0 && u != from && g_sched_alive[u] && g_sched_runnable[u]) { g_sched_urgent = -1; return u; }
-    if (const int p = sched_prio_waiting(from); p >= 0) return p;
+    // At most a few audio turns in a row: two audio threads that both spin on something another thread must do (the
+    // game waiting for voices at a level change) would otherwise pass the turn between them forever.
+    static int prio_streak = 0;
+    if (const int p = sched_prio_waiting(from); p >= 0 && prio_streak < 8) { ++prio_streak; return p; }
+    prio_streak = 0;
     for (int i = 1; i <= g_sched_count; i++) {
         int c = (from + i) % g_sched_count;
         if (g_sched_alive[c] && g_sched_runnable[c]) return c;
@@ -1118,7 +1125,16 @@ static void sched_rejoin_urgent(int id) {
 // the walk to finish (walk_wait_other) instead of claiming the GPU caught up while it is still reading.
 extern "C" __attribute__((weak)) void lsw_offcore_begin_prio(int) {}   // Switch: platform_switch.cpp
 extern "C" void lsw_offcore_end();
-static bool walkoff_on() { static const bool on = [] { const char* e = getenv("LSWTCS_WALKOFF"); return e && e[0] == '1'; }(); return on; }
+static std::atomic<int> g_walkoff_state{-1};   // read when a walk begins, so a change applies from the next one (lsw_sched_ab_set)
+static bool walkoff_on() {
+    int v = g_walkoff_state.load(std::memory_order_relaxed);
+    if (v < 0) { const char* e = getenv("LSWTCS_WALKOFF"); v = e && e[0] == '1'; g_walkoff_state.store(v, std::memory_order_relaxed); }
+    return v != 0;
+}
+extern "C" void lsw_sched_ab_set(int audioprio, int walkoff) {
+    g_audioprio_mode.store(audioprio ? 1 : 0, std::memory_order_relaxed);
+    g_walkoff_state.store(walkoff ? 1 : 0, std::memory_order_relaxed);
+}
 static thread_local bool t_walk_off = false;      // this thread is walking off the rotation right now
 static std::atomic<int> g_walk_off_sid{-1};       // scheduler id of the thread with an off-rotation walk in progress
 static std::mutex g_walk_mtx;
@@ -6225,6 +6241,8 @@ PPC_FUNC(__imp__VdSwap) {
                   else k += snprintf(b + k, sizeof b - k, " %d(%08X)=%.1f", i, g_sp_entry[i], d);
               }
               dbg_ram("%s\n", b);
+              printf("%s\n", b);
+              fflush(stdout);
           }
           t_last = t; io_prev = io; ions_prev = io_ns; ion_prev = io_n;
           lsw_guest::copy(gp_prev, g_gpuprof, sizeof gp_prev);

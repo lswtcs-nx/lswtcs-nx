@@ -23,6 +23,10 @@ extern "C" void lsw_bo_check_init(uint64_t);
 extern "C" void lsw_bo_check_dump(FILE*, const uintptr_t*, size_t);
 extern "C" void lsw_bo_check_finish();
 #endif
+extern "C" bool lsw_log_async_init();
+extern "C" void lsw_log_async_path(char* out, size_t capacity, const char* name);
+extern "C" void lsw_log_async_drain();
+extern "C" void lsw_hw_monitor_start();
 
 #ifndef LSW_DATA_DIR
 #define LSW_DATA_DIR "sdmc:/lswtcs"
@@ -258,6 +262,7 @@ extern "C" void __libnx_exception_handler(ThreadExceptionDump* ctx) {
         fflush(o);
     }
     if (f) fclose(f);
+    lsw_log_async_drain();
     svcExitProcess();
 }
 
@@ -268,12 +273,14 @@ extern "C" [[noreturn]] void __wrap_exit(int code) {
     printf("[NX] exit(%d) called from +0x%llX\n", code,
            (unsigned long long)((u64)__builtin_return_address(0) - (u64)&__start__));
     fflush(stdout);
+    lsw_log_async_drain();
     __real_exit(code);
 }
 extern "C" [[noreturn]] void __wrap_abort(void) {
     printf("[NX] abort() called from +0x%llX\n",
            (unsigned long long)((u64)__builtin_return_address(0) - (u64)&__start__));
     fflush(stdout);
+    lsw_log_async_drain();
     __real_abort();
 }
 
@@ -360,18 +367,25 @@ extern "C" bool lsw_switch_init() {
     remove("resdump_now");
     // stdout/stderr -> log file (printf is the runtime's main log). A 1 KB default buffer meant one SD write per
     // 1 KB of log on the thread printing it: a capture's 700 KB draw log took 12-15 s.
-    char log_path[96];
-    lsw_log_path(log_path, sizeof log_path, "stdout.log");
+    // Both go through the ring in log_async.cpp: no thread that prints waits for the SD card.
+    const bool log_async = lsw_log_async_init();
+    char log_name[96], log_path[104];
+    lsw_log_path(log_name, sizeof log_name, "stdout.log");
+    lsw_log_async_path(log_path, sizeof log_path, log_name);
     g_stdout_log = freopen(log_path, "w", stdout);
+    if (!g_stdout_log) g_stdout_log = freopen(log_name, "w", stdout);
     if (g_stdout_log) setvbuf(g_stdout_log, nullptr, _IOFBF, 64 * 1024);
-    lsw_log_path(log_path, sizeof log_path, "stderr.log");
-    freopen(log_path, "w", stderr);
+    lsw_log_path(log_name, sizeof log_name, "stderr.log");
+    lsw_log_async_path(log_path, sizeof log_path, log_name);
+    if (!freopen(log_path, "w", stderr)) freopen(log_name, "w", stderr);
+    if (!log_async) printf("[NX] log ring unavailable: logging directly to the SD card\n");
     printf("[NX] LSWTCS Switch runtime\n");
     printf("[NX] run=%016llX\n", (unsigned long long)g_run_id);
     printf("[NX] TotalMemory %llu MB, UsedMemory %llu MB at start\n",
            (unsigned long long)(info_u64(InfoType_TotalMemorySize) >> 20),
            (unsigned long long)(info_u64(InfoType_UsedMemorySize) >> 20));
     load_env_file(LSW_DATA_DIR "/env.txt");
+    lsw_hw_monitor_start();
 #ifndef LSW_DEKO_BACKEND
     lsw_bo_check_init(g_run_id);
 #endif
@@ -444,5 +458,6 @@ int main(int, char**) {
     lsw_bo_check_finish();
 #endif
     if (g_stdout_log) fflush(g_stdout_log);
+    lsw_log_async_drain();
     return rc;
 }

@@ -68,6 +68,8 @@ struct AudioWindow {
     uint32_t empties = 0, min_queued = kBuffers;
 };
 AudioWindow g_aw;
+// Totals for the per-frame columns of frames.log (lsw_audio_stats): audio speed over any stretch of frames.
+std::atomic<uint64_t> g_total_played{0}, g_total_empty_ns{0};
 uint64_t g_last_submit_ns = 0, g_submit_gap_max_ns = 0;
 uint32_t g_client_depth_max = 0;
 
@@ -158,6 +160,7 @@ void output_thread() {
             } else if (g_aw.empty_since_ns) {
                 const uint64_t gap = now - g_aw.empty_since_ns;
                 g_aw.empty_ns += gap;
+                g_total_empty_ns.fetch_add(gap, std::memory_order_relaxed);
                 g_aw.empty_max_ns = std::max(g_aw.empty_max_ns, gap);
                 g_aw.empty_since_ns = 0;
             }
@@ -182,6 +185,7 @@ void output_thread() {
                 g_cv.wait_for(lk, std::chrono::milliseconds(20), ready);
             }
         }
+        g_total_played.store(played, std::memory_order_relaxed);
         static uint64_t next_log = 1875;   // ~10 s of buffers
         if (played >= next_log) {
             next_log = played + 1875;
@@ -235,6 +239,11 @@ bool engine_up() {
     return true;
 }
 }  // namespace
+
+extern "C" void lsw_audio_stats(uint64_t* played, uint64_t* empty_ns) {
+    *played = g_total_played.load(std::memory_order_relaxed);
+    *empty_ns = g_total_empty_ns.load(std::memory_order_relaxed);
+}
 
 // Returns true if host output exists; on_end(idx) is then called once per played frame.
 bool host_audio_open(int idx, EndFn on_end) {

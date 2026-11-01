@@ -21,6 +21,8 @@
 #include <deque>
 #include <cstdio>
 #include <cstring>
+#include <functional>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -43,6 +45,10 @@ void host_audio_hold(bool on);   // audio_switch.cpp: pause the device feed whil
 extern std::atomic<uint32_t> g_frame_marks;   // win32_switch.cpp: tester marks (ZL+ZR+left stick)
 extern std::atomic<uint32_t> g_capture_request;   // win32_switch.cpp: capture combos, 1 light, 2 full
 extern "C" void lsw_ft_ring_dump();   // kernel_stubs.cpp: game frame times of the last 120 swaps ([FTRING])
+extern "C" void lsw_sched_ab_set(int audioprio, int walkoff);   // kernel_stubs.cpp: LSWTCS_ABCYCLE
+extern "C" void lsw_audio_stats(uint64_t* played, uint64_t* empty_ns);   // audio_switch.cpp: frames.log columns
+extern "C" void lsw_log_async_path(char* out, size_t capacity, const char* name);   // log_async.cpp
+bool lsw_bg_submit(size_t bytes, std::function<void()> run);   // log_async.cpp: slow file work off this thread
 extern "C" void lsw_log_path(char* out, size_t capacity, const char* name);   // platform_switch.cpp: session folder
 
 namespace {
@@ -1070,6 +1076,8 @@ GLuint get_sampler(const uint32_t* fetch6, const LswGpuSamplerBinding& b) {
 // DIAG: the frame being captured (shot_now / LSWTCS_GLTEST replays 300 and 1500) logs every draw.
 bool g_capture_frame = false;
 bool g_resdump_requested = false;   // full capture combo: maybe_resdump dumps at this replay's present
+bool g_hist_dump_requested = false;   // capture combo: the frames before this one go out too (hist_dump)
+bool g_replay_same = false;   // LSWTCS_GLUNTILECHECK: replay the frame just drawn again, without taking a newer one
 uint64_t g_inputcheck_captured_serial=0;
 unsigned g_inputcheck_capture_count=0;
 bool g_inputcheck_rendered=false;
@@ -1312,16 +1320,21 @@ void dump_first_program(const LswGlShader* vs, const LswGlShader* ps, const LswG
 
 // DIAG: GLSL of every shader a captured frame uses, once per shader: sdmc:/lswtcs/capglsl/<key>.vert|frag|geom
 // (to compare a hardware capture's shaders with Eden's or the PC's).
+// Called for every shader of every draw of the frame: the stat() this did on the SD card each time was most of a light
+// capture's 13-15 s (run 6), so what was written is remembered here and the writes leave this thread.
 void dump_capture_glsl(const LswGlShader* s) {
     if (!s || s->glsl.empty()) return;
+    static std::unordered_set<uint64_t> written;
+    if (!written.insert(s->key).second) return;
     static char dir[80];
     if (!dir[0]) { lsw_log_path(dir, sizeof dir, "capglsl"); mkdir(dir, 0777); }
     static const char* const kExt[3] = {"vert", "frag", "geom"};
     char path[112];
     snprintf(path, sizeof path, "%s/%016llX.%s", dir, (unsigned long long)s->key, kExt[s->stage < 3 ? s->stage : 0]);
-    struct stat st;
-    if (stat(path, &st) == 0) return;
-    if (FILE* f = fopen(path, "wb")) { fwrite(s->glsl.data(), 1, s->glsl.size(), f); fclose(f); }
+    auto write_file = [p = std::string(path), s] {   // the shader lives as long as the process
+        if (FILE* f = fopen(p.c_str(), "wb")) { fwrite(s->glsl.data(), 1, s->glsl.size(), f); fclose(f); }
+    };
+    if (!lsw_bg_submit(s->glsl.size(), write_file)) write_file();
 }
 
 // What present_frame shows: a resolve target / render target (top-down rows) or the scene FBO.
@@ -1545,7 +1558,9 @@ uint32_t draw_color_targets(const LswGpuDrawRec& r) {
 // and scissor may differ. Ranges are upload deltas, not complete vertex spans:
 // equality here does not validate the recorder's earlier walk-time input reuse.
 // Zero means uncheckable and must never authorize a merge.
-uint64_t draw_content_key(const LswGpuFrame& f, const LswGpuDrawRec& r) {
+// Split in two for the plan: a walk-time copy (tile_repeat) differs from its source only in the tile part, so the base
+// of its source stands for its own and its constants and geometry are not hashed again (run 6: up to 8 ms per replay).
+uint64_t draw_base_key(const LswGpuFrame& f, const LswGpuDrawRec& r) {
     if (uint64_t(r.first_range) + r.range_count > f.ranges.size() ||
         r.ps_tex_count > 32 || r.vs_tex_count > 32 || r.ps_smp_count > 32 || r.vs_smp_count > 32) return 0;
     uint64_t k = XXH3_64bits(&r.vs_key, sizeof r.vs_key) ^ (r.ps_key * 0x9E3779B97F4A7C15ull);
@@ -1560,19 +1575,12 @@ uint64_t draw_content_key(const LswGpuFrame& f, const LswGpuDrawRec& r) {
     k = XXH3_64bits_withSeed(shaders, sizeof shaders, k);
     k = XXH3_64bits_withSeed(r.color_info_mrt, sizeof r.color_info_mrt, k);
     k = XXH3_64bits_withSeed(r.blend_mrt, sizeof r.blend_mrt, k);
-    // Tile state, not identity: y and height. GetHostViewportInfo clamps y to 0 and shrinks the height by the tile's
-    // offset, so hashing height rejected every real group. plan_untile checks the bottoms agree (bottom_of).
-    k = XXH3_64bits_withSeed(r.viewport, sizeof(float), k);
-    k = XXH3_64bits_withSeed(r.viewport + 2, sizeof(float), k);
-    k = XXH3_64bits_withSeed(r.viewport + 4, 2 * sizeof(float), k);
     auto arena_hash = [&](uint32_t off, uint64_t size) {
         if (uint64_t(off) + size > f.arena.size()) return false;
         if (size) k = XXH3_64bits_withSeed(f.arena.data() + off, size_t(size), k);
         return true;
     };
-    if (uint64_t(r.cb_sys_off) + r.cb_sys_size > f.arena.size()) return 0;
-    k = lsw_gl_tile_system_key(f.arena.data() + r.cb_sys_off, r.cb_sys_size, r.gs_type == 1, k);
-    if (!k || !arena_hash(r.cb_vsf_off, r.cb_vsf_size) || !arena_hash(r.cb_psf_off, r.cb_psf_size) ||
+    if (!arena_hash(r.cb_vsf_off, r.cb_vsf_size) || !arena_hash(r.cb_psf_off, r.cb_psf_size) ||
         !arena_hash(r.cb_bool_off, 160) || !arena_hash(r.cb_fetch_off, 768)) return 0;
     if (!r.ib_shm && !arena_hash(r.ib_off, uint64_t(r.ib_count) * (r.ib_32bit ? 4u : 2u))) return 0;
     k = XXH3_64bits_withSeed(r.ps_tex_fetch, r.ps_tex_count, k);
@@ -1589,6 +1597,16 @@ uint64_t draw_content_key(const LswGpuFrame& f, const LswGpuDrawRec& r) {
     }
     return k;
 }
+uint64_t draw_tile_key(const LswGpuFrame& f, const LswGpuDrawRec& r, uint64_t base) {
+    if (!base || uint64_t(r.cb_sys_off) + r.cb_sys_size > f.arena.size()) return 0;
+    // Tile state, not identity: y and height. GetHostViewportInfo clamps y to 0 and shrinks the height by the tile's
+    // offset, so hashing height rejected every real group. plan_untile checks the bottoms agree (bottom_of).
+    uint64_t k = XXH3_64bits_withSeed(r.viewport, sizeof(float), base);
+    k = XXH3_64bits_withSeed(r.viewport + 2, sizeof(float), k);
+    k = XXH3_64bits_withSeed(r.viewport + 4, 2 * sizeof(float), k);
+    return lsw_gl_tile_system_key(f.arena.data() + r.cb_sys_off, r.cb_sys_size, r.gs_type == 1, k);
+}
+uint64_t draw_content_key(const LswGpuFrame& f, const LswGpuDrawRec& r) { return draw_tile_key(f, r, draw_base_key(f, r)); }
 
 // ---- untiling (LSWTCS_GLUNTILE, default on) -----------------------------------------------------
 // The game renders its world with predicated tiling: the whole draw list once per EDRAM tile (1280x704 frame:
@@ -1610,10 +1628,16 @@ enum : uint8_t { UT_NONE = 0, UT_EXTEND = 1, UT_SKIP = 2, UT_SHIFT_RESOLVE = 3, 
 // "melting" bottom band, a staircase of old frames in rows 608-704). Drawn there (before any world draw of the
 // group) the tiles' clears cover the frame exactly as the tiled clears did.
 struct UntilePlan { std::vector<uint8_t> act, clear; std::vector<int32_t> arg, arg2; std::vector<uint32_t> order;
+                    std::vector<uint64_t> base, key;   // key: the draws of candidate segments only, 0 elsewhere
                     uint32_t groups = 0, skipped = 0; };
+// Candidate groups the plan refused, by the first reason, since the last report ([GLUNTILE] rejected).
+enum { UTR_LENGTH, UTR_UNCHECKABLE, UTR_CONTENT, UTR_TILE, UTR_BOTTOM, UTR_ORDER, UTR_COUNT };
+uint32_t g_ut_rejects[UTR_COUNT];
+// Replay-side switches: LSWTCS_ABCYCLE and the LSWTCS_GLUNTILECHECK replays turn merging off without touching the recording.
+bool g_ut_off_ab = false, g_ut_off_check = false;
 bool untile_on() {
     static const bool on = [] { const char* e = getenv("LSWTCS_GLUNTILE"); return !(e && e[0] == '0'); }();
-    return on;
+    return on && !g_ut_off_ab && !g_ut_off_check;
 }
 bool is_clear_quad(const LswGpuDrawRec& r) { return r.viewport[2] >= 4096.0f || r.viewport[3] >= 4096.0f; }
 void plan_untile(LswGpuFrame& f, UntilePlan& p) {
@@ -1625,6 +1649,8 @@ void plan_untile(LswGpuFrame& f, UntilePlan& p) {
     p.arg.assign(n, 0);
     p.arg2.assign(n, 0);
     p.groups = p.skipped = 0;
+    p.base.assign(n, 0);
+    p.key.assign(n, 0);
     if (!untile_on()) return;
     // Segments: a run of draws followed by a run of resolves.
     struct Seg { size_t d0, d1, r1; };
@@ -1637,8 +1663,29 @@ void plan_untile(LswGpuFrame& f, UntilePlan& p) {
         if (d1 > d0 && i > d1) segs.push_back({d0, d1, i});
         else if (d1 == d0 && i == d1) ++i;
     }
-    std::vector<uint64_t> key(n, 0);
-    for (size_t i = 0; i < n; ++i) if (f.draws[i].kind == 0) key[i] = draw_content_key(f, f.draws[i]);
+    // Only a segment next to one of its own length can merge; the rest of the frame (post-processing) is not hashed.
+    std::vector<uint64_t>& key = p.key;
+    std::vector<uint64_t>& base = p.base;
+    for (size_t j = 0; j < segs.size(); ++j) {
+        const size_t len = segs[j].d1 - segs[j].d0;
+        if (len < 8) continue;
+        const bool next = j + 1 < segs.size() && segs[j + 1].d1 - segs[j + 1].d0 == len;
+        const bool prev = j > 0 && segs[j - 1].d1 - segs[j - 1].d0 == len;
+        if (!next && !prev) continue;
+        for (size_t i = segs[j].d0; i < segs[j].d1; ++i) {
+            const LswGpuDrawRec& r = f.draws[i];
+            // tile_skip_copy starts from a copy of the record; what it replaces is exactly what draw_tile_key reads. The
+            // comparison keeps a damaged link from standing in for a real hash.
+            const LswGpuDrawRec* src = r.tile_repeat && r.tile_repeat <= i ? &f.draws[r.tile_repeat - 1] : nullptr;
+            const bool shared = src && src->kind == 0 && base[r.tile_repeat - 1] && src->vs_key == r.vs_key && src->ps_key == r.ps_key &&
+                                src->first_range == r.first_range && src->range_count == r.range_count &&
+                                src->cb_vsf_off == r.cb_vsf_off && src->cb_psf_off == r.cb_psf_off &&
+                                src->cb_bool_off == r.cb_bool_off && src->cb_fetch_off == r.cb_fetch_off &&
+                                src->ib_off == r.ib_off && src->ib_count == r.ib_count && src->surf_info == r.surf_info;
+            base[i] = shared ? base[r.tile_repeat - 1] : draw_base_key(f, r);
+            key[i] = draw_tile_key(f, r, base[i]);
+        }
+    }
     auto bottom_of = [&](const Seg& s, float& out) {   // the shared viewport bottom of a tile's world draws
         bool have = false;
         for (size_t i = s.d0; i < s.d1; ++i) {
@@ -1676,24 +1723,33 @@ void plan_untile(LswGpuFrame& f, UntilePlan& p) {
         if (len < 8 || !bottom_of(t0, b0)) { ++j; continue; }
         size_t m = j + 1;
         std::vector<int32_t> offs;
+        int why = -1;   // why this group's next tile was refused
         while (m < segs.size()) {
             const Seg& tk = segs[m];
-            if (tk.d1 - tk.d0 != len) break;
+            if (tk.d1 - tk.d0 != len) { why = UTR_LENGTH; break; }
             bool same = true;
             // The per-tile EDRAM clear quads (8192-wide viewport) differ per tile; untiled, the later tiles' ones are
             // skipped anyway (they would wipe the full render target), so they only have to line up.
             for (size_t q = 0; q < len && same; ++q) {
                 const bool c0 = is_clear_quad(f.draws[t0.d0 + q]), ck = is_clear_quad(f.draws[tk.d0 + q]);
                 same = (c0 && ck) || (!c0 && !ck && key[t0.d0 + q] && key[t0.d0 + q] == key[tk.d0 + q]);
+                if (!same) why = c0 != ck ? UTR_CONTENT : !key[t0.d0 + q] || !key[tk.d0 + q] ? UTR_UNCHECKABLE :
+                                 base[t0.d0 + q] != base[tk.d0 + q] ? UTR_CONTENT : UTR_TILE;
             }
             float bk;
-            if (!same || !bottom_of(tk, bk) || !(bk < b0)) break;
+            if (!same) break;
+            if (!bottom_of(tk, bk) || !(bk < b0)) { why = UTR_BOTTOM; break; }
             const int32_t off = int32_t(b0 - bk);
-            if (!offs.empty() && off <= offs.back()) break;
+            if (!offs.empty() && off <= offs.back()) { why = UTR_ORDER; break; }
             offs.push_back(off);
             ++m;
         }
-        if (offs.empty()) { ++j; continue; }
+        if (offs.empty()) {
+            // A short segment after a long one is the usual end of a chain, not a refused merge.
+            if (why >= 0 && why != UTR_LENGTH) ++g_ut_rejects[why];
+            ++j;
+            continue;
+        }
         // Only an accepted merge is a reuse decision; rejected candidates are not faults.
         if(!f.input_signatures.empty())for(size_t k=j+1;k<m;++k)for(size_t q=0;q<len;++q) {
             const size_t reference=t0.d0+q,record=segs[k].d0+q;
@@ -1898,6 +1954,44 @@ CamProbe cam_probe(const LswGpuFrame& f) {
     }
     return out;
 }
+// This replay's plan, for the frames.log columns and frame history: tile groups merged, walk-time copies drawn unmerged.
+uint32_t g_frame_groups = 0, g_frame_copies = 0;
+
+// LSWTCS_ABCYCLE=seconds: cycles through LSWTCS_ABSTATES during play, so one session compares settings over the same
+// scenes without a restart per setting. Each state is any of M (tile merging on), A (audio threads first in the guest
+// scheduler, LSWTCS_AUDIOPRIO), W (PM4 walk off the rotation, LSWTCS_WALKOFF) and V (LSWTCS_GLUNTILECHECK runs, its
+// hitches kept out of the other states' numbers); "-" is none. Written to frames.log as
+// "# ab STATE"; tools/analyze_run.py compares the states. Off by default: without it nothing changes during play.
+std::string g_ab_state;
+uint32_t g_ab_changes = 0;
+void ab_cycle_tick() {
+    static const uint64_t period_ns = [] { const char* e = getenv("LSWTCS_ABCYCLE"); return uint64_t(e ? atoi(e) : 0) * 1000000000ull; }();
+    if (!period_ns) return;
+    static const std::vector<std::string> states = [] {
+        std::vector<std::string> v;
+        const char* e = getenv("LSWTCS_ABSTATES");
+        std::string list = e ? e : "MA,MAW,M,A";
+        for (size_t at = 0; at <= list.size();) {
+            const size_t comma = std::min(list.find(',', at), list.size());
+            if (comma > at) v.push_back(list.substr(at, comma - at));
+            at = comma + 1;
+        }
+        return v;
+    }();
+    static uint64_t next_ns = 0;
+    static size_t index = 0;
+    const uint64_t now = gp_now();
+    if (states.empty() || now < next_ns) return;
+    next_ns = now + period_ns;
+    g_ab_state = states[index++ % states.size()];
+    const auto has = [](char c) { return g_ab_state.find(c) != std::string::npos; };
+    g_ut_off_ab = !has('M');
+    lsw_sched_ab_set(has('A'), has('W'));
+    ++g_ab_changes;
+    printf("[ABCYCLE] state %s from replay %llu\n", g_ab_state.c_str(), (unsigned long long)g_replays);
+    fflush(stdout);
+}
+
 void frame_log(const LswGpuFrame& f, uint64_t replay_ns) {
     if (!framelog_on()) return;
     static const bool cam_capture = env_on("LSWTCS_CAMCAPTURE", false);
@@ -1906,12 +2000,14 @@ void frame_log(const LswGpuFrame& f, uint64_t replay_ns) {
         return e && strtoull(e, nullptr, 10) != 0;
     }();
     static FILE* fl = [] {
-        char path[96];
-        lsw_log_path(path, sizeof path, "frames.log");
+        char name[96], path[104];
+        lsw_log_path(name, sizeof name, "frames.log");
+        lsw_log_async_path(path, sizeof path, name);
         FILE* x = fopen(path, "w");
-        if (x) setvbuf(x, nullptr, _IOFBF, 32 * 1024);   // flushed every 30 lines below: one SD write, not one per 1 KB
+        if (x) setvbuf(x, nullptr, _IOFBF, 32 * 1024);   // flushed every 30 lines below, into the ring of log_async.cpp
         if (x) fprintf(x, "# replay serial t_s game_ft_ms swap_real_ms replay_ms gpuwait_ms(prev) hold_ms draws | eye xyz | fwd xyz | "
-                          "view block (register, layout C/R, draws agreeing / world draws) | turn_deg move\n");
+                          "view block (register, layout C/R, draws agreeing / world draws) | turn_deg move | "
+                          "audio buffers played, empty ms | merged tile groups | walk-time copies drawn\n");
         if (x) fprintf(x, "# camera diagnostics %s; NOCAM fields are placeholders when disabled\n", cam_log ? "on" : "off");
         return x;
     }();
@@ -1938,10 +2034,18 @@ void frame_log(const LswGpuFrame& f, uint64_t replay_ns) {
         marks_logged = marks;
         fprintf(fl, "# mark %u replay %llu t %.3f\n", marks, (unsigned long long)g_replays, (now - t0) / 1e9);
     }
-    fprintf(fl, "%llu %llu%s %.3f %.1f %.1f %.1f %.1f %.1f %zu | %.2f %.2f %.2f | %.3f %.3f %.3f | c%u %c %u/%u | %.1f %.2f%s\n",
+    static uint32_t ab_logged = 0;
+    if (g_ab_changes != ab_logged) {
+        ab_logged = g_ab_changes;
+        fprintf(fl, "# ab %s replay %llu t %.3f\n", g_ab_state.c_str(), (unsigned long long)g_replays, (now - t0) / 1e9);
+    }
+    uint64_t audio_played = 0, audio_empty_ns = 0;
+    lsw_audio_stats(&audio_played, &audio_empty_ns);
+    fprintf(fl, "%llu %llu%s %.3f %.1f %.1f %.1f %.1f %.1f %zu | %.2f %.2f %.2f | %.3f %.3f %.3f | c%u %c %u/%u | %.1f %.2f%s | %llu %llu | %u | %u\n",
             (unsigned long long)g_replays, (unsigned long long)f.serial, repeat ? "R" : "", (now - t0) / 1e9, f.game_ft * 1000.0f,
             f.swap_real * 1000.0f, replay_ns / 1e6, gw / 1e6, g_frame_hold_ns / 1e6, f.draws.size(), cam.eye[0], cam.eye[1], cam.eye[2],
-            cam.fwd[0], cam.fwd[1], cam.fwd[2], cam.reg, cam.layout, cam.votes, cam.draws, turn, move, cam.ok ? "" : " NOCAM");
+            cam.fwd[0], cam.fwd[1], cam.fwd[2], cam.reg, cam.layout, cam.votes, cam.draws, turn, move, cam.ok ? "" : " NOCAM",
+            (unsigned long long)audio_played, (unsigned long long)(audio_empty_ns / 1000000), g_frame_groups, g_frame_copies);
     // Camera memory around the globals that hold the view matrix (LSWTCS_CAMFIND, Eden 2026-10-10), kept for the last
     // 16 replays; a sudden turn writes camdump_<replay>.txt: every word 16 replays earlier and now, changed words
     // marked, with float values. For the level-start camera that parks at the world origin (Kamino, 2026-10-10): the
@@ -1990,7 +2094,7 @@ void frame_log(const LswGpuFrame& f, uint64_t replay_ns) {
 
 PresentSrc replay() {
     g_inputcheck_rendered=false;
-    { RpScope rp(RP_TAKE); gpu_frame_take(); }
+    if (!g_replay_same) { RpScope rp(RP_TAKE); gpu_frame_take(); }
     LswGpuFrame& f = g_gpu_frame_render;   // replayed again if no newer frame was published
     ++g_replays;
     ++g_gl_epoch;   // present / capture / clears changed state since the last replay
@@ -2023,9 +2127,10 @@ PresentSrc replay() {
             if (FILE* t = fopen("shot_now", "rb")) { fclose(t); remove("shot_now"); g_capture_frame = true; }
         }
         // Capture combo: this replay, not the next file check (log6 session: shots came 10-29 replays after the press).
-        if (const uint32_t req = g_capture_request.exchange(0, std::memory_order_relaxed)) {
+        if (const uint32_t req = g_replay_same ? 0u : g_capture_request.exchange(0, std::memory_order_relaxed)) {
             g_capture_frame = true;
             g_resdump_requested = req == 2;
+            g_hist_dump_requested = true;
             printf("[CAPCOMBO] %s capture at replay %llu\n", req == 2 ? "full" : "light", (unsigned long long)g_replays);
             lsw_ft_ring_dump();
         }
@@ -2165,6 +2270,7 @@ PresentSrc replay() {
     const uint64_t t_plan = gp_now(), t_plan_in = g_rp_scoped;
     if (gpurt) plan_dead_work(f, dead); else dead.assign(f.draws.size(), 0);
     static UntilePlan ut;
+    g_frame_copies = 0;
     if (gpurt) plan_untile(f, ut); else { ut.act.assign(f.draws.size(), UT_NONE); ut.clear.assign(f.draws.size(), 0); ut.order.resize(f.draws.size()); for (size_t i = 0; i < f.draws.size(); ++i) ut.order[i] = uint32_t(i); ut.arg.assign(f.draws.size(), 0); ut.arg2.assign(f.draws.size(), 0); }
     if(f.input_mismatch.difference && f.serial!=g_inputcheck_captured_serial && g_inputcheck_capture_count<2) {
         const auto& m=f.input_mismatch;
@@ -2189,6 +2295,7 @@ PresentSrc replay() {
         if(FILE* file=fopen(name,"wb")){report(file);fclose(file);}
         g_capture_frame=true;
     }
+    g_frame_groups = ut.groups;
     rp_close(RP_PLAN, t_plan, t_plan_in);
     GLuint ebo_bound = g_arena;   // arena_upload bound the arena as the index buffer
     const uint64_t t_loop = gp_now(), t_loop_in = g_rp_scoped;
@@ -2231,6 +2338,7 @@ PresentSrc replay() {
             // its own tile's viewport, scissor and system constants, lsw_gpu_tile_state). Until 2026-10-11 these were
             // dropped, and everything below tile 0 that only those tiles drew went missing (characters cut off at row
             // 320 in an Episode I level). Counted: it means the walk's repeat check and plan_untile disagree.
+            ++g_frame_copies;
             static uint64_t n = 0;
             if ((++n % 1000) == 1) printf("[GLUNTILE] %llu walk-time tile copies outside an untiled group drawn\n", (unsigned long long)n);
         }
@@ -2500,7 +2608,7 @@ PresentSrc replay() {
             for (uint32_t i = 0; i < f.draws.size(); ++i) {
                 const LswGpuDrawRec& r = f.draws[i];
                 if (r.kind != 0) continue;
-                const uint64_t k = draw_content_key(f, r);
+                const uint64_t k = i < ut.key.size() ? ut.key[i] : 0;   // the plan's: hashing the frame again cost ~1 ms per replay
                 const uint64_t sk = (uint64_t(r.scissor[0]) << 48) ^ (uint64_t(r.scissor[1]) << 32) ^ (uint64_t(r.scissor[2]) << 16) ^ r.scissor[3];
                 ++scissors[sk];
                 if (!k) continue;   // incomplete input is not a duplicate
@@ -2521,6 +2629,9 @@ PresentSrc replay() {
             printf("[GLDRAW]   repeats: %u of %zu draws repeat an earlier draw (%u with a different scissor); "
                    "%zu scissor rects, top:%s | untiled: %u tile groups, %u tile repeats skipped\n", dups, f.draws.size(),
                    dups_other_scissor, scissors.size(), sc, ut.groups, ut.skipped);
+            printf("[GLUNTILE] rejected since last report: uncheckable %u, content %u, tile state %u, bottom %u, order %u\n",
+                   g_ut_rejects[UTR_UNCHECKABLE], g_ut_rejects[UTR_CONTENT], g_ut_rejects[UTR_TILE], g_ut_rejects[UTR_BOTTOM], g_ut_rejects[UTR_ORDER]);
+            for (uint32_t& x : g_ut_rejects) x = 0;
         }
         printf("[GLDRAW]   %zu programs, %u shaders compiled (%u failed, %u link failed), %zu textures (%llu MB, %u evicted), "
                "%zu RTs + %zu resolve targets + %zu views + %zu composites = %llu MB, arena buffers %lld MB, err 0x%X\n",
@@ -2530,7 +2641,7 @@ PresentSrc replay() {
         fflush(stdout);
     }
     g_inputcheck_rendered=true;
-    frame_log(f, gp_now() - replay_t0);
+    if (!g_replay_same) frame_log(f, gp_now() - replay_t0);
     return present;
 }
 
@@ -2577,7 +2688,8 @@ void write_png_rgba(const char* path, const uint8_t* rgba, int w, int h) {   // 
     fwrite("IDAT", 1, 4, f);
     const uint8_t zh[2] = {0x78, 0x01};
     put(zh, 2);
-    static uint8_t buf[65535];
+    std::vector<uint8_t> buf_store(65535);   // this runs on the render thread or the background thread
+    uint8_t* const buf = buf_store.data();
     uint32_t a = 1, b = 0;
     size_t pos = 0;
     do {
@@ -2601,6 +2713,14 @@ void write_png_rgba(const char* path, const uint8_t* rgba, int w, int h) {   // 
     png_chunk(f, "IEND", nullptr, 0);
     fclose(f);
 }
+// The file work of a capture leaves the render thread: the game keeps running while the files reach the SD card.
+void save_png(const char* path, std::vector<uint8_t>&& rgba, int w, int h) {
+    const size_t bytes = rgba.size();
+    auto job = [p = std::string(path), px = std::make_shared<std::vector<uint8_t>>(std::move(rgba)), w, h] {
+        write_png_rgba(p.c_str(), px->data(), w, h);
+    };
+    if (!lsw_bg_submit(bytes, job)) job();
+}
 void maybe_capture(const PresentSrc& src) {
     if (!g_capture_frame) return;
     const uint32_t w = src.w, h = src.h;
@@ -2618,9 +2738,136 @@ void maybe_capture(const PresentSrc& src) {
     char name[32], path[96];
     snprintf(name, sizeof name, "shot_%llu.png", (unsigned long long)g_replays);
     lsw_log_path(path, sizeof path, name);
-    write_png_rgba(path, px.data(), int(w), int(h));
+    save_png(path, std::move(px), int(w), int(h));
     printf("[GLSHOT] %s (%ux%u): %u pixels differ from the clear colour (err 0x%X)\n", path, w, h, differ, glGetError());
     fflush(stdout);
+}
+
+// ---- DIAG: frame history (LSWTCS_GLHISTORY=N, default 0 = off) ------------------------------------------------------
+// A fault of one or two frames is gone before anyone can press a button (docs/ISSUES.md asks not to expect that), so
+// the last N presented frames are always kept, at half size, and a capture combo saves them: hist_<replay>/<replay>_<m|u>
+// .png, m = tile groups merged in that frame, u = none. Only a GPU downscale per frame until then.
+constexpr uint32_t kHistW = 640, kHistH = 360;
+struct HistFrame { HostTex t; uint64_t replay = 0; uint32_t groups = 0; };
+std::vector<HistFrame> g_hist;
+size_t g_hist_next = 0;
+void hist_record(const PresentSrc& src) {
+    static const size_t count = [] { const char* e = getenv("LSWTCS_GLHISTORY"); return size_t(e ? std::clamp(atoi(e), 0, 120) : 0); }();
+    if (!count) return;
+    if (g_hist.empty()) g_hist.resize(count);
+    HistFrame& h = g_hist[g_hist_next];
+    g_hist_next = (g_hist_next + 1) % count;
+    if (!h.t.tex) h.t = host_tex_create(kHistW, kHistH, kDxgiRGBA8);
+    const GLuint dst = single_fbo(h.t);
+    glDisable(GL_SCISSOR_TEST);
+    glColorMaski(0, GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, src.fbo);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, dst);
+    glBlitFramebuffer(0, 0, GLint(src.w), GLint(src.h), 0, 0, GLint(kHistW), GLint(kHistH), GL_COLOR_BUFFER_BIT, GL_LINEAR);
+    glBindFramebuffer(GL_FRAMEBUFFER, g_scene_fbo);
+    glEnable(GL_SCISSOR_TEST);
+    ++g_gl_epoch;
+    h.replay = g_replays;
+    h.groups = g_frame_groups;
+}
+void hist_dump() {
+    if (g_hist.empty()) return;
+    char name[32], dir[96], path[128];
+    snprintf(name, sizeof name, "hist_%llu", (unsigned long long)g_replays);
+    lsw_log_path(dir, sizeof dir, name);
+    mkdir(dir, 0777);
+    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+    uint32_t saved = 0;
+    for (size_t i = 0; i < g_hist.size(); ++i) {   // oldest first
+        const HistFrame& h = g_hist[(g_hist_next + i) % g_hist.size()];
+        if (!h.t.tex || !h.replay) continue;
+        std::vector<uint8_t> px;
+        try { px.resize(size_t(kHistW) * kHistH * 4); }
+        catch (const std::bad_alloc&) { printf("[GLHIST] stopped at %u frames: out of memory\n", saved); break; }
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, single_fbo(h.t));
+        glReadPixels(0, 0, GLsizei(kHistW), GLsizei(kHistH), GL_RGBA, GL_UNSIGNED_BYTE, px.data());
+        for (size_t k = 3; k < px.size(); k += 4) px[k] = 255;
+        snprintf(path, sizeof path, "%s/%06llu_%c.png", dir, (unsigned long long)h.replay, h.groups ? 'm' : 'u');
+        save_png(path, std::move(px), int(kHistW), int(kHistH));
+        ++saved;
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, g_scene_fbo);
+    ++g_gl_epoch;
+    printf("[GLHIST] %u frames before replay %llu go to %s\n", saved, (unsigned long long)g_replays, dir);
+    fflush(stdout);
+}
+
+// ---- DIAG: merged against unmerged (LSWTCS_GLUNTILECHECK=N, default 0 = off) ----------------------------------------
+// Every N replays, on a heavy frame with a merged group: the frame just drawn merged is drawn again unmerged and once
+// more merged, and the three images compared. So nobody has to catch anything: if merging changes the picture it shows
+// here with the rows it touched. The second merged image is the noise floor, since an effect that reads the previous
+// frame differs on any second draw. Holds the frame for three replays plus the readbacks, so with LSWTCS_ABCYCLE it only
+// runs in states with a V.
+struct ImageDiff { uint32_t pixels = 0, x0 = UINT32_MAX, y0 = UINT32_MAX, x1 = 0, y1 = 0, bands[3] = {}; };
+ImageDiff image_diff(const std::vector<uint8_t>& a, const std::vector<uint8_t>& b, uint32_t w, uint32_t h) {
+    constexpr int kTolerance = 12;   // out of 255, on any colour channel
+    ImageDiff d;
+    const uint8_t* pa = a.data();
+    const uint8_t* pb = b.data();
+    for (uint32_t y = 0; y < h; ++y)
+        for (uint32_t x = 0; x < w; ++x, pa += 4, pb += 4) {
+            if (std::abs(pa[0] - pb[0]) <= kTolerance && std::abs(pa[1] - pb[1]) <= kTolerance && std::abs(pa[2] - pb[2]) <= kTolerance) continue;
+            ++d.pixels;
+            d.x0 = std::min(d.x0, x); d.y0 = std::min(d.y0, y);
+            d.x1 = std::max(d.x1, x); d.y1 = std::max(d.y1, y);
+            ++d.bands[y < 320 ? 0 : y < 608 ? 1 : 2];   // the game's tile rows
+        }
+    return d;
+}
+PresentSrc untile_check(const PresentSrc& shown) {
+    static const uint64_t every = [] { const char* e = getenv("LSWTCS_GLUNTILECHECK"); return uint64_t(e ? atoi(e) : 0); }();
+    static uint64_t next = 0;
+    const LswGpuFrame& f = g_gpu_frame_render;
+    if (!every || g_replays < next || f.draws.size() < 300 || !g_frame_groups || g_capture_frame || g_frame_hold_ns || !untile_on()) return shown;
+    if (!g_ab_state.empty() && g_ab_state.find('V') == std::string::npos) return shown;
+    next = g_replays + every;
+    const uint64_t replay_id = g_replays;
+    const uint32_t groups = g_frame_groups;
+    const uint32_t w = shown.w, h = shown.h;
+    std::vector<uint8_t> merged, unmerged, merged2;
+    auto read = [w, h](const PresentSrc& src, std::vector<uint8_t>& px) {
+        px.resize(size_t(w) * h * 4);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, src.fbo);
+        glPixelStorei(GL_PACK_ALIGNMENT, 1);
+        glReadPixels(0, 0, GLsizei(w), GLsizei(h), GL_RGBA, GL_UNSIGNED_BYTE, px.data());
+        for (size_t k = 3; k < px.size(); k += 4) px[k] = 255;
+    };
+    read(shown, merged);
+    g_replay_same = true;
+    g_ut_off_check = true;
+    const PresentSrc second = replay();
+    arena_fence();
+    read(second, unmerged);
+    g_ut_off_check = false;
+    const PresentSrc third = replay();
+    arena_fence();
+    read(third, merged2);
+    g_replay_same = false;
+    const ImageDiff diff = image_diff(merged, unmerged, w, h), noise = image_diff(merged, merged2, w, h);
+    static uint32_t checks = 0, flagged = 0, saved = 0;
+    ++checks;
+    const bool flag = diff.pixels > 256 && diff.pixels > noise.pixels * 4;
+    flagged += flag;
+    printf("[UNTILECHECK] replay %llu, %zu records, %u groups: unmerged differs in %u px (noise %u), box %d,%d..%d,%d, tile rows %u/%u/%u%s (check %u, %u flagged)\n",
+           (unsigned long long)replay_id, f.draws.size(), groups, diff.pixels, noise.pixels, diff.pixels ? int(diff.x0) : 0, diff.pixels ? int(diff.y0) : 0,
+           int(diff.x1), int(diff.y1), diff.bands[0], diff.bands[1], diff.bands[2], flag ? " FLAGGED" : "", checks, flagged);
+    fflush(stdout);
+    if (flag && saved < 10) {
+        ++saved;
+        char name[48], path[128];
+        const std::pair<const char*, std::vector<uint8_t>*> images[] = {{"merged", &merged}, {"unmerged", &unmerged}, {"merged2", &merged2}};
+        for (const auto& image : images) {
+            snprintf(name, sizeof name, "ucheck_%llu_%s.png", (unsigned long long)replay_id, image.first);
+            lsw_log_path(path, sizeof path, name);
+            save_png(path, std::move(*image.second), int(w), int(h));
+        }
+    }
+    return third;
 }
 
 // DIAG: file "resdump_now" in sdmc:/lswtcs -> every resolve target and colour render target of this
@@ -2693,7 +2940,7 @@ void maybe_resdump() {
         }
         char path[128];
         snprintf(path, sizeof path, "%s/%s_%08X_%ux%u.png", res_dir, prefix, name, w, h);
-        write_png_rgba(path, px.data(), int(w), int(h));
+        save_png(path, std::move(px), int(w), int(h));
         printf("[RESDUMP] %s fmt=%u%s", path, tex.fmt, depth ? " (depth, normalized)" : "");
         if (depth) printf(" range %.6f .. %.6f (png scale %.3f..%.3f)", zmin, zmax, zlo, zhi);
         printf("\n");
@@ -3220,13 +3467,19 @@ void render_thread_main() {
             std::unique_lock<std::mutex> lk(g_pipe_mtx);
             g_pipe_cv.wait(lk, [] { return g_pipe_up_done == g_pipe_up_queued && g_pipe_swap_done + 1 >= g_pipe_swap_queued; });
         }
+        ab_cycle_tick();
         const uint64_t t0 = gp_now();
         if (!g_glpipe) span_begin();
-        const PresentSrc shown = replay();
+        PresentSrc shown = replay();
         { RpScope rp(RP_FENCE); arena_fence(); }
         const uint64_t t_replay = gp_now() - t0;
         g_gpuprof[GP_REPLAY] += t_replay;
+        { RpScope rp(RP_PRESENT); hist_record(shown); }
+        const bool captured = g_capture_frame;
+        const uint64_t t_capture = gp_now();
         maybe_capture(shown);
+        if (g_hist_dump_requested) { g_hist_dump_requested = false; hist_dump(); }
+        const uint64_t t_targets = gp_now();
         if(g_gpu_frame_render.input_mismatch.difference && g_gpu_frame_render.serial!=g_inputcheck_captured_serial) {
             g_inputcheck_captured_serial=g_gpu_frame_render.serial;
             ++g_inputcheck_capture_count;
@@ -3236,6 +3489,12 @@ void render_thread_main() {
             lswtcs_inputcheck_captured(g_gpu_frame_render.serial);
         }
         maybe_resdump();
+        if (captured) {
+            printf("[CAPTIME] replay %llu held the game: draw log %.0f ms, screenshot and history %.0f ms, targets %.0f ms\n",
+                   (unsigned long long)g_replays, t_replay / 1e6, (t_targets - t_capture) / 1e6, (gp_now() - t_targets) / 1e6);
+            fflush(stdout);
+        }
+        shown = untile_check(shown);
         { RpScope rp(RP_EVICT); evict_textures(); }
         if (g_glpipe) {   // present blit recorded here; GPU-queue cap, swap and fence run on the worker (swap_job)
             { RpScope rp(RP_PRESENT); present_frame(shown); }

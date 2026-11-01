@@ -208,3 +208,48 @@ unmerged frames therefore mix during play. That could flicker if the two paths d
 
 FPS by recorded draws, frames over 300 ms excluded: 25.4 (300-800), 19.6 (800-1300), 18.6 (1300-1800), 18.1
 (1800-2400). Replay and GPU wait are now about equal in the heavy bands, 24 and 20 ms at 1800-2400.
+
+## What run 6 led to: `0.0.13-log7`, not yet run on hardware
+
+Compiled and validated; the planner has host tests. Nothing below has run on a console, so every expected effect
+is unconfirmed.
+
+**Audio: a likely mechanism.** One audio frame (5.33 ms) needs turns for the XAudio client worker and the render thread,
+and in heavy scenes a scheduler round holds a main-thread slice of about 2 ms and a PM4 walk slice of 3.6-5.8 ms. About
+8 ms a round against a 5.33 ms frame is about 67 % speed, close to what was measured. This fits; it is not proved.
+`LSWTCS_AUDIOPRIO` (audio threads first) already existed but was never in the run settings, nor was `LSWTCS_WALKOFF`
+(walk off the rotation, on core 2). Both can now change during play. `sched_next_locked` also gained a limit of 8 audio
+turns in a row, so two spinning audio threads cannot starve the others.
+
+**A/B during one session.** `LSWTCS_ABCYCLE=20` with `LSWTCS_ABSTATES=MA,MAW,M,A,MAV` changes settings every 20 s (profile
+`profiles/hardware-ab.env`). Defaults are unchanged without it, so nothing has been switched on for the owner's build.
+`tools/analyze_run.py` compares the states by draw band: FPS, audio speed, empty device time, replay, GPU wait.
+
+**Merged against unmerged, automatically.** In `V` states the frame is drawn merged, unmerged and merged again every 60
+replays and compared. The second merged image gives the noise floor, and flagged frames save all three images. This does
+not depend on anyone seeing a fault, and it does not cover early-Z, which needs `LSWTCS_GLEARLYZ=0`.
+
+**Captures.** `LSWTCS_GLHISTORY=40` keeps the last 40 presented frames at half size, saved with a combo and named by whether
+the frame merged. `dump_capture_glsl` called `stat` on the SD card for each of three shaders per draw, the likely bulk of
+the 13-15 s, so it now remembers what it wrote. PNG and GLSL writes moved to a background thread, bounded at 192 MB.
+`[CAPTIME]` reports the hold.
+
+**Logging off the producing threads.** `stdout.log`, `stderr.log` and `frames.log` go through a RAM ring (`log_async.cpp`).
+`[SCHEDPROF]` flushed to the SD card under the scheduler's mutex, and the audio output thread flushed every 10 s. Whether that
+caused any measured gap is unknown. On a crash the ring is drained, waiting at most 200 ms for the writer.
+
+**Clocks.** `[CLOCK]` every 5 s (`hw_monitor.cpp`, `LSWTCS_CLOCKLOG`): real CPU, GPU and memory clocks, GPU load,
+temperatures, battery, operation mode and apm configuration. Read-only. It answers the clock question left open in
+`PORT_RESEARCH.md`, including whether a sysmodule changes clocks.
+
+**Plan cost.** `[GLPROF]` showed `plan` up to 8 ms per replay. Walk-time copies now reuse their source's base key, only
+candidate segments are hashed, and the periodic `[GLDRAW]` repeat count reuses the plan's keys. Merge decisions should be the
+same: `tests/run_draw_identity.py` has three new cases, including that a reused key equals a full hash. The render thread is
+not the limit in heavy frames, so this should free CPU time rather than raise FPS.
+
+**Hitches still unexplained.** Of 28 stretches over 250 ms outside captures, 9 follow new shaders. Caching translations was
+therefore dropped. `LSWTCS_SPIKEMS=250` now also prints `[GSPIKE]`, splitting the time into guest threads, walk, file reads and
+render wait.
+
+Not attempted: stitching resolves directly (about 5 of 11.8 Mpx of blits per frame are second copies of tile pieces), colour
+compression and fetch-constant folding. They need the data above first and carry more risk.

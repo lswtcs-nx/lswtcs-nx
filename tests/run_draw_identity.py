@@ -12,7 +12,9 @@ def function(text,name):
  return text[start:b]
 current=(port/'switch/source/gl_backend.cpp').read_text(encoding='utf-8')
 before=(base/'tests/fixtures/gl_backend_mesa011.cpp').read_text(encoding='utf-8')
-def planner(s):return s[s.index('uint64_t draw_content_key('):s.index('void plan_dead_work(')]
+def planner(s):
+ start=s.find('uint64_t draw_base_key(')
+ return s[s.index('uint64_t draw_content_key(') if start<0 else start:s.index('void plan_dead_work(')]
 schema=(base/'tests/fixtures/spirv_shader_translator.h').read_text()
 p=schema.index('  struct SystemConstants {');a=schema.index('{',p);depth=1;b=a+1
 while depth:
@@ -104,7 +106,7 @@ void mutate(LswGpuFrame&f,const std::string&m){
   f.arena[8208]=1;
  }
 }
-bool same_plan(const Old::UntilePlan&a,const New::UntilePlan&b){return a.act==b.act&&a.clear==b.clear&&a.arg==b.arg&&a.arg2==b.arg2&&a.order==b.order&&a.groups==b.groups&&a.skipped==b.skipped;}
+template<class A,class B>bool same_plan(const A&a,const B&b){return a.act==b.act&&a.clear==b.clear&&a.arg==b.arg&&a.arg2==b.arg2&&a.order==b.order&&a.groups==b.groups&&a.skipped==b.skipped;}
 int main(){
  const char*changed[]={"viewport-height-mixed","vertex","topology","fifth-upload","fifth-address","index-width","color-mask","stencil","mrt","mrt-blend","mode","raster","output-mask","writes-depth","gs","viewport-x","viewport-width","viewport-depth","sampler","binding","system-flags","base-index","index-endian","alpha-test","clip-plane","point-diameter","ordinary-point-radius","inline-index"};
  unsigned old_bad=0;
@@ -117,6 +119,19 @@ int main(){
   Old::UntilePlan a;New::UntilePlan b;Old::plan_untile(f,a);New::plan_untile(f,b);
   assert(a.groups==1&&a.skipped==8&&same_plan(a,b));printf("preserved=%s groups=%u skipped=%u\n",mode,b.groups,b.skipped);
  }
+ // Walk-time copies: tile_skip_copy points them at tile 0's data, and the plan reuses the source's base key.
+ auto copies=[](LswGpuFrame&f){for(size_t i=9;i<17;++i){auto&r=f.draws[i];const auto&s=f.draws[i-9];
+  r.tile_repeat=uint32_t(i-9+1);r.first_range=s.first_range;r.cb_vsf_off=s.cb_vsf_off;r.cb_psf_off=s.cb_psf_off;
+  r.cb_bool_off=s.cb_bool_off;r.cb_fetch_off=s.cb_fetch_off;}};
+ {auto f=fixture();auto g=fixture();copies(g);New::UntilePlan a;New::UntilePlan b;New::plan_untile(f,a);New::plan_untile(g,b);
+  assert(a.groups==1&&same_plan(a,b));
+  // The reused key must equal the key a full hash gives, or a later comparison could disagree with the old planner.
+  for(size_t i=9;i<17;++i)assert(b.key[i]==New::draw_content_key(g,g.draws[i]));
+  printf("preserved=walk-copy groups=%u skipped=%u\n",b.groups,b.skipped);}
+ {auto g=fixture();copies(g);g.arena[2112+32]^=1;g.draws[10].cb_psf_off=2112+32;New::UntilePlan b;New::plan_untile(g,b);
+  assert(b.groups==0&&b.skipped==0);printf("changed=walk-copy-damaged-link new_skipped=%u\n",b.skipped);}
+ {auto g=fixture();copies(g);g.ranges[0].arena_off=kLswRangeResident;New::UntilePlan b;New::plan_untile(g,b);
+  assert(b.groups==0&&b.skipped==0);printf("unsupported=walk-copy-resident fallback=all-records\n");}
  // Unsupported or malformed inputs must never let two zero keys authorize a merge.
  for(unsigned mode=0;mode<7;++mode){auto f=fixture();
   for(auto&r:f.draws)if(r.kind==0){

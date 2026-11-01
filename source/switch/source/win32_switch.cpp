@@ -545,8 +545,9 @@ DWORD WINAPI nx_xinput_get_state(DWORD slot, void* out) {
         {HidNpadButton_Y, 0x4000}};
     for (auto& m : kMap) if (b & m.nx) st.buttons |= m.xi;
     // Capture combos (LSWTCS_CAPCOMBO, default on), right stick clicked last, at most once per 3 s:
-    // ZL + ZR: full capture, screenshot, per-draw [GLDRAWCAP] log, the frame's GLSL and every resolve/render target
-    // as PNG (about a minute on the SD card). L + R: the same without the targets (about 15 s).
+    // ZL + ZR: full capture, screenshot, per-draw [GLDRAWCAP] log, the frame's GLSL, the frame history (LSWTCS_GLHISTORY)
+    // and every resolve/render target as PNG. L + R: the same without the targets. The files reach the SD card in the
+    // background, while the game runs: [CAPSAVE] says when they are done.
     // Only a request here: the render thread takes it at its next replay and does the logging, because file access
     // from this thread held the game for 1-2.6 s per capture and the trigger files were polled every 30 replays.
     {

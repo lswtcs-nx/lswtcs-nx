@@ -41,6 +41,8 @@ extern uint8_t* g_base;
 extern "C" void lsw_bo_check_progress(uint64_t swaps);
 void host_audio_hold(bool on);   // audio_switch.cpp: pause the device feed while programs build
 extern std::atomic<uint32_t> g_frame_marks;   // win32_switch.cpp: tester marks (ZL+ZR+left stick)
+extern std::atomic<uint32_t> g_capture_request;   // win32_switch.cpp: capture combos, 1 light, 2 full
+extern "C" void lsw_ft_ring_dump();   // kernel_stubs.cpp: game frame times of the last 120 swaps ([FTRING])
 extern "C" void lsw_log_path(char* out, size_t capacity, const char* name);   // platform_switch.cpp: session folder
 
 namespace {
@@ -1067,6 +1069,7 @@ GLuint get_sampler(const uint32_t* fetch6, const LswGpuSamplerBinding& b) {
 
 // DIAG: the frame being captured (shot_now / LSWTCS_GLTEST replays 300 and 1500) logs every draw.
 bool g_capture_frame = false;
+bool g_resdump_requested = false;   // full capture combo: maybe_resdump dumps at this replay's present
 uint64_t g_inputcheck_captured_serial=0;
 unsigned g_inputcheck_capture_count=0;
 bool g_inputcheck_rendered=false;
@@ -2019,6 +2022,13 @@ PresentSrc replay() {
             next_check = g_replays + 30;
             if (FILE* t = fopen("shot_now", "rb")) { fclose(t); remove("shot_now"); g_capture_frame = true; }
         }
+        // Capture combo: this replay, not the next file check (log6 session: shots came 10-29 replays after the press).
+        if (const uint32_t req = g_capture_request.exchange(0, std::memory_order_relaxed)) {
+            g_capture_frame = true;
+            g_resdump_requested = req == 2;
+            printf("[CAPCOMBO] %s capture at replay %llu\n", req == 2 ? "full" : "light", (unsigned long long)g_replays);
+            lsw_ft_ring_dump();
+        }
         // LSWTCS_STALLSHOTS=1: capture a few replays right after a replay of 1 s or more (scene transitions).
         static const bool stall_shots = env_on("LSWTCS_STALLSHOTS", false);
         // LSWTCS_STALLSHOTOFFS=a,b,c: replays after the stall to capture (default 1,4,8,12,16,24,32,48).
@@ -2620,7 +2630,9 @@ void maybe_capture(const PresentSrc& src) {
 void maybe_resdump() {
     // LSWTCS_RESDUMPAT=N: dump at replay N without the trigger file (Switch hardware).
     static const uint64_t dump_at = [] { const char* e = getenv("LSWTCS_RESDUMPAT"); return uint64_t(e ? atoll(e) : 0); }();
-    if (!(dump_at && g_replays == dump_at)) {
+    if (g_resdump_requested) {
+        g_resdump_requested = false;
+    } else if (!(dump_at && g_replays == dump_at)) {
         if (g_replays % 30) return;
         FILE* t = fopen("resdump_now", "rb");
         if (!t) return;

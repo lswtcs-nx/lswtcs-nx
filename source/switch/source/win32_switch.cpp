@@ -20,8 +20,8 @@
 #include <sys/time.h>
 #include <unistd.h>
 #include "lsw_save_platform.h"
-extern "C" void lsw_ft_ring_dump();   // kernel_stubs.cpp: game frame times of the last 120 swaps ([FTRING])
 std::atomic<uint32_t> g_frame_marks{0};   // tester marks, written to frames.log by gl_backend.cpp
+std::atomic<uint32_t> g_capture_request{0};   // capture combos: 1 light, 2 full; taken by gl_backend.cpp
 
 namespace {
 
@@ -544,24 +544,23 @@ DWORD WINAPI nx_xinput_get_state(DWORD slot, void* out) {
         {HidNpadButton_A, 0x2000}, {HidNpadButton_B, 0x1000}, {HidNpadButton_X, 0x8000},
         {HidNpadButton_Y, 0x4000}};
     for (auto& m : kMap) if (b & m.nx) st.buttons |= m.xi;
-    // Capture combo (LSWTCS_CAPCOMBO, default on): hold ZL + ZR and click the right stick -> screenshot, per-draw
-    // [GLDRAWCAP] log in stdout.log and the frame's GLSL (shot_now), for glitches that stay on screen. Also holding
-    // L + R: every resolve/render target as PNG too (resdump_now), about a minute on the SD card. Click the stick
-    // last, or the lighter capture fires first. Files land in the session's log folder. At most once per 3 s.
+    // Capture combos (LSWTCS_CAPCOMBO, default on), right stick clicked last, at most once per 3 s:
+    // ZL + ZR: full capture, screenshot, per-draw [GLDRAWCAP] log, the frame's GLSL and every resolve/render target
+    // as PNG (about a minute on the SD card). L + R: the same without the targets (about 15 s).
+    // Only a request here: the render thread takes it at its next replay and does the logging, because file access
+    // from this thread held the game for 1-2.6 s per capture and the trigger files were polled every 30 replays.
     {
         static const bool combo_on = [] { const char* e = getenv("LSWTCS_CAPCOMBO"); return !(e && e[0] == '0'); }();
         static u64 last_ns = 0;
-        const u64 want = HidNpadButton_ZL | HidNpadButton_ZR | HidNpadButton_StickR;
-        const u64 full = HidNpadButton_L | HidNpadButton_R;
+        const u64 triggers = HidNpadButton_ZL | HidNpadButton_ZR;
+        const u64 shoulders = HidNpadButton_L | HidNpadButton_R;
         const u64 now_ns = armTicksToNs(armGetSystemTick());
-        if (combo_on && (b & want) == want && now_ns - last_ns > 3000000000ull) {
-            last_ns = now_ns;
-            const bool targets = (b & full) == full;
-            if (FILE* t = fopen("shot_now", "wb")) fclose(t);
-            if (targets) if (FILE* t = fopen("resdump_now", "wb")) fclose(t);
-            printf("[CAPCOMBO] %s capture requested\n", targets ? "full" : "light");
-            fflush(stdout);
-            lsw_ft_ring_dump();
+        if (combo_on && (b & HidNpadButton_StickR) && now_ns - last_ns > 3000000000ull) {
+            const bool full = (b & triggers) == triggers;
+            if (full || (b & shoulders) == shoulders) {
+                last_ns = now_ns;
+                g_capture_request.store(full ? 2 : 1, std::memory_order_relaxed);
+            }
         }
     }
     // Mark combo: hold ZL + ZR and click the left stick -> "# mark N" in frames.log and [MARK] in stdout.log, so a

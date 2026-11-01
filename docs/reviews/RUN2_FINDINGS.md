@@ -167,3 +167,44 @@ A next candidate is per-pixel work on fetch constants: each fetch re-derives LOD
 and exponent with `bitfieldExtract` although they are constant for a draw.
 
 The GPU sample at replay 1800 (980 ms, right after a level load) is excluded from cost rankings.
+
+## Run 6: long session, `0.0.12-log5`, 1 November 2026
+
+About 16.6 minutes, 20,879 frames, 6 save commits, no `crash.log`, no skipped draws (0 "no program"). The
+tester reported more brief visual faults than before, without being able to catch them on screen, and
+no effect on play. No marks were used.
+
+**Captures missed their moments.** The shots came 10, 29, 26 and 17 replays after the press, up to about
+1.5 s, because the trigger files were polled every 30 replays. The combo's file access on the input thread
+also held the game for 1.1, 1.1, 0.9 and 2.6 s, two swaps after each press. So these four shots do not
+show the faults, and their look says nothing about them. `0.0.12-log6` takes the request at the next replay
+and does the logging on the render thread. A press still arrives after a fault of one or two frames.
+
+**Light capture is still 12.7-15.3 s** and the full one about 61-76 s. So the larger stdio buffers did not
+bring the replay part down as run 5's note expected; the cause is unmeasured.
+
+**Combos from `0.0.12-log6`:** ZL + ZR + right stick is the full capture, as in builds before log4.
+L + R + right stick is the light one. ZL + ZR + left stick stays the mark.
+
+**Audio falls behind real time in heavy scenes.** 1875 buffers are 10 s of audio, and `[AUDIOQ]` windows
+give how long each took. Audio speed by mean draws in the window, windows over 30 s excluded:
+
+| Run, build | 700-1300 | 1300-1900 | 1900+ |
+|---|---|---|---|
+| 2, `log1`, no merging or early-Z | 94 % (39) | 90 % (20) | 79 % (11) |
+| 3, `log2` | 71 % (7) | | 51 % (1) |
+| 4, `log3` | 61 % (8) | | |
+| 5, `log3` | 67 % (10) | | |
+| 6, `log5` | 73 % (15) | 81 % (17) | 58 % (8) |
+
+Window counts in brackets. This is the owner's audio jitter on a number, and it looks worse since merging or
+early-Z. **That is not established**: the runs differ in scene and FPS is up, so an A/B at one spot is needed.
+Guest threads were still about 30 % idle on average in these scenes (`[SCHEDPROF]`), so plain CPU saturation
+does not explain it.
+
+**Merging:** 76 of 99 sampled heavy frames, and 25,001 walk-time copies were drawn outside a group. Merged and
+unmerged frames therefore mix during play. That could flicker if the two paths differ, but nothing here shows it.
+`LSWTCS_GLUNTILE=0` and `LSWTCS_GLEARLYZ=0` remain the A/B switches.
+
+FPS by recorded draws, frames over 300 ms excluded: 25.4 (300-800), 19.6 (800-1300), 18.6 (1300-1800), 18.1
+(1800-2400). Replay and GPU wait are now about equal in the heavy bands, 24 and 20 ms at 1800-2400.

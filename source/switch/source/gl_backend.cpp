@@ -1556,8 +1556,11 @@ uint64_t draw_content_key(const LswGpuFrame& f, const LswGpuDrawRec& r) {
     k = XXH3_64bits_withSeed(shaders, sizeof shaders, k);
     k = XXH3_64bits_withSeed(r.color_info_mrt, sizeof r.color_info_mrt, k);
     k = XXH3_64bits_withSeed(r.blend_mrt, sizeof r.blend_mrt, k);
+    // Tile state, not identity: y and height. GetHostViewportInfo clamps y to 0 and shrinks the height by the tile's
+    // offset, so hashing height rejected every real group. plan_untile checks the bottoms agree (bottom_of).
     k = XXH3_64bits_withSeed(r.viewport, sizeof(float), k);
-    k = XXH3_64bits_withSeed(r.viewport + 2, 4 * sizeof(float), k);
+    k = XXH3_64bits_withSeed(r.viewport + 2, sizeof(float), k);
+    k = XXH3_64bits_withSeed(r.viewport + 4, 2 * sizeof(float), k);
     auto arena_hash = [&](uint32_t off, uint64_t size) {
         if (uint64_t(off) + size > f.arena.size()) return false;
         if (size) k = XXH3_64bits_withSeed(f.arena.data() + off, size_t(size), k);

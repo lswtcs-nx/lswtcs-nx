@@ -60,6 +60,9 @@ LswGpuFrame fixture(unsigned count=8,unsigned ranges=1,unsigned tiles=2,bool cle
 }
 void mutate(LswGpuFrame&f,const std::string&m){
  for(size_t i=9;i<17;++i){auto&r=f.draws[i];
+  // GetHostViewportInfo clamps y to 0 and shrinks the extent: a later tile's real viewport is y 0, height 32.
+  if(m=="clamped-height"){r.viewport[1]=0;r.viewport[3]=32;}
+  if(m=="viewport-height-mixed"&&i==10)r.viewport[3]=300;
   if(m=="topology")r.topology=5;
   if(m=="index-width")r.ib_32bit=1;
   if(m=="color-mask")r.color_mask=7;
@@ -103,14 +106,14 @@ void mutate(LswGpuFrame&f,const std::string&m){
 }
 bool same_plan(const Old::UntilePlan&a,const New::UntilePlan&b){return a.act==b.act&&a.clear==b.clear&&a.arg==b.arg&&a.arg2==b.arg2&&a.order==b.order&&a.groups==b.groups&&a.skipped==b.skipped;}
 int main(){
- const char*changed[]={"vertex","topology","fifth-upload","fifth-address","index-width","color-mask","stencil","mrt","mrt-blend","mode","raster","output-mask","writes-depth","gs","viewport-x","viewport-width","viewport-depth","sampler","binding","system-flags","base-index","index-endian","alpha-test","clip-plane","point-diameter","ordinary-point-radius","inline-index"};
+ const char*changed[]={"viewport-height-mixed","vertex","topology","fifth-upload","fifth-address","index-width","color-mask","stencil","mrt","mrt-blend","mode","raster","output-mask","writes-depth","gs","viewport-x","viewport-width","viewport-depth","sampler","binding","system-flags","base-index","index-endian","alpha-test","clip-plane","point-diameter","ordinary-point-radius","inline-index"};
  unsigned old_bad=0;
  for(const char*mode:changed){auto f=fixture(8,std::string(mode).find("fifth")==0?5:1);mutate(f,mode);
   Old::UntilePlan a;New::UntilePlan b;Old::plan_untile(f,a);New::plan_untile(f,b);
   assert(b.groups==0&&b.skipped==0);for(size_t i=0;i<b.order.size();++i)assert(b.order[i]==i&&b.act[i]==New::UT_NONE);
   if(a.skipped)++old_bad;printf("changed=%s old_skipped=%u new_skipped=%u\n",mode,a.skipped,b.skipped);
  }
- for(const char*mode:{"identical","tile-system","point-tile-system"}){auto f=fixture();mutate(f,mode);
+ for(const char*mode:{"identical","tile-system","point-tile-system","clamped-height"}){auto f=fixture();mutate(f,mode);
   Old::UntilePlan a;New::UntilePlan b;Old::plan_untile(f,a);New::plan_untile(f,b);
   assert(a.groups==1&&a.skipped==8&&same_plan(a,b));printf("preserved=%s groups=%u skipped=%u\n",mode,b.groups,b.skipped);
  }
@@ -134,7 +137,7 @@ int main(){
  auto f=fixture(1000,0,3);auto t0=std::chrono::steady_clock::now();
  for(unsigned i=0;i<100;++i){New::UntilePlan b;New::plan_untile(f,b);assert(b.skipped==2000);}
  auto us=std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now()-t0).count();
- printf("summary changed=27 old_bad=%u supported=3 unsupported=7 equivalent_plans=300 host_warm_3000draw_us=%lld\n",old_bad,(long long)us);
+ printf("summary changed=28 old_bad=%u supported=4 unsupported=7 equivalent_plans=300 host_warm_3000draw_us=%lld\n",old_bad,(long long)us);
  assert(old_bad>=24);
 }
 '''

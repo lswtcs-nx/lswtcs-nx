@@ -31,8 +31,8 @@ The code uses actual before/after draw-key/planner functions and the current bri
 normalization helper. Small licensed Xenia/xxHash fixtures avoid an SDK/dependency
 download. Build/run files are temporary and removed afterward.
 
-Expected result: `passed: true`,27 changed-input cases (26 previously accepted,
-one already rejected),3 permitted tile cases,7 unsupported inputs and300 preserved
+Expected result: `passed: true`,28 changed-input cases (26 previously accepted,
+two already rejected),4 permitted tile cases,7 unsupported inputs and300 preserved
 legitimate plans. The observed host synthetic timing is **not Switch performance**.
 
 The fixture mocks env/MSAA helpers and the uint32 Endian enum around the extracted

@@ -1970,7 +1970,7 @@ void ab_cycle_tick() {
     static const std::vector<std::string> states = [] {
         std::vector<std::string> v;
         const char* e = getenv("LSWTCS_ABSTATES");
-        std::string list = e ? e : "MA,MAW,M,A";
+        std::string list = e ? e : "MA,M,A";
         for (size_t at = 0; at <= list.size();) {
             const size_t comma = std::min(list.find(',', at), list.size());
             if (comma > at) v.push_back(list.substr(at, comma - at));

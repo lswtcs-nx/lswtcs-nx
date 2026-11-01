@@ -253,3 +253,59 @@ render wait.
 
 Not attempted: stitching resolves directly (about 5 of 11.8 Mpx of blits per frame are second copies of tile pieces), colour
 compression and fetch-constant folding. They need the data above first and carry more risk.
+
+## Run 7: first hardware run of `0.0.13-log7`, 1 November 2026
+
+About 11 minutes, 11,969 frames, 2 save commits, no `crash.log`, in a much heavier jungle level: 3,000-5,800 records against
+at most about 2,800 before. The tester reported large faults at the end and could not finish the level. Archived as
+`private/runs/run7-log7`.
+
+**Clocks, now measured.** CPU 1020, GPU 307.2 and memory 1331.2 MHz, apm configuration `0x00020003`, handheld. SoC at most
+39.5 C. The only other reading, CPU 1785 and GPU 76.8 in 3 samples, is at the very end of the session; the cause was not checked.
+GPU load read 96-99 % or 0 %, and the zeros come also from heavy stretches, so single samples are not reliable.
+
+**`W` (walk off the rotation) is rejected.** All in `MAW` phases:
+- 5 of 40 history frames show one whole tile band black (`hist_8598`), and 0 of the 116 frames of the other three histories
+  that were scanned. Bands match the tile rows, in both merged and unmerged frames. The scan only looks for black rows.
+- A 20.6 s freeze: `[GSPIKE]` frame 20,557 ms, walk 20,542, prepare 9,554, guest idle 17,550.
+- FPS 3.2-5.1 against 5.8-10.9 in the next `MA` phases, and shader holds of 1.8-4.4 s per phase.
+- Merged frames 38-40 % in two phases where the next phases had 100 %.
+
+The picture stopped for good 25 s after that freeze: from replay 9574 every replay repeats serial 9811 (498 records, only tile 0
+resolved, rows below it stale, hence the seam at row 320 in `shot_10267`), for 87 s until the session ended, while audio and
+guest threads ran and guest swaps kept counting. No earlier session did this, and it began right after `W`. One occurrence: very
+likely, not proved. The mechanism was not found. `W` also gave the best audio at 1900+ draws (92 %), which does not matter now.
+It is gone from the profile, so the owner's faults are not explained by it: no earlier run used it.
+
+**Merging did not change the picture in the checks.** 12 checks on frames of 1,425-5,476 records: at most 2 pixels differ,
+noise 0, none flagged. A small sample, in this level only. It does not cover early-Z, and run 6's faults remain unexplained.
+
+**Audio priority works, and seems to cost FPS.** Same draw bands, `M` (off) against `MA` and `MAV` (on):
+
+| Draws | Audio off | Audio on | FPS off | FPS on |
+|---|---|---|---|---|
+| 1300-1900 | 43 % | 98-99 % | 16.3 | 5.8-7.2 |
+| 1900+ | 47 % | 60-65 % | 11.8 | 8.6-9.1 |
+
+The cycle order was fixed and the scene moves, so the FPS cost is an indication. With `M` the highest in its neighbourhood in each
+cycle it looks real. So this is a trade-off for the owner rather than a plain fix, and even with priority audio stays under
+real time above 1900 draws.
+
+**This level is limited by the guest CPU, not the GPU.** Heavy frames: swap to swap 99 ms, of which GPU 54 ms and GPU idle 47 ms.
+The turn is almost always held (idle 0.4-1.3 %), yet the main thread holds it for 31-44 % of the time while using only 17-18 % CPU.
+The walk thread is at 26-27 % turn, 20-23 % CPU. What the main thread waits on while holding the turn is unknown, and is the next
+question. 460.8 MHz would not by itself fix such a level; run 6's lighter levels were GPU-limited.
+
+**Early-Z:** 35 % of draws hinted, against about 90 % before. Likely alpha-tested foliage; not checked per shader.
+
+**Captures.** Hold: light 0.3 s (was 13-15), full 2.4 s (was 61-76). The background writer is too slow, though: when the session
+ended, `hist_10290` and `hist_12020` were empty, `hist_10267` had 36 of 40 frames, and `res_12020` was partial. About a minute
+was not enough for one full capture. Its priority is the first suspect.
+
+**Plan:** 4.3 ms per replay in heavy frames, on frames with about twice the records of run 6's 4.95 ms sample.
+
+**"texture unit with an unknown binding":** 22 `[GLBRIDGE]` lines, new in this level; none in runs 2, 5 and 6. Each drops a
+texture unit from a shader. Not yet examined, and a candidate for visible faults there.
+
+**Black Ops 2:** BO2-Requiem-NX is a port of a decompilation of the PC executables, through DXVK and Vulkan, not of the 360 build.
+Its source is announced for early November 2026. Not comparable with this port's frontend; its Vulkan path may be worth reading then.

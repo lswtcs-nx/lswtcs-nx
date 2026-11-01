@@ -40,6 +40,7 @@
 extern uint8_t* g_base;
 extern "C" void lsw_bo_check_progress(uint64_t swaps);
 void host_audio_hold(bool on);   // audio_switch.cpp: pause the device feed while programs build
+extern std::atomic<uint32_t> g_frame_marks;   // win32_switch.cpp: tester marks (ZL+ZR+left stick)
 
 namespace {
 
@@ -1920,6 +1921,12 @@ void frame_log(const LswGpuFrame& f, uint64_t replay_ns) {
         turn = std::acos(d) * 57.29578f;
         move = std::sqrt((cam.eye[0] - prev.eye[0]) * (cam.eye[0] - prev.eye[0]) + (cam.eye[1] - prev.eye[1]) * (cam.eye[1] - prev.eye[1]) +
                          (cam.eye[2] - prev.eye[2]) * (cam.eye[2] - prev.eye[2]));
+    }
+    static uint32_t marks_logged = 0;
+    const uint32_t marks = g_frame_marks.load(std::memory_order_relaxed);
+    if (marks != marks_logged) {
+        marks_logged = marks;
+        fprintf(fl, "# mark %u replay %llu t %.3f\n", marks, (unsigned long long)g_replays, (now - t0) / 1e9);
     }
     fprintf(fl, "%llu %llu%s %.3f %.1f %.1f %.1f %.1f %.1f %zu | %.2f %.2f %.2f | %.3f %.3f %.3f | c%u %c %u/%u | %.1f %.2f%s\n",
             (unsigned long long)g_replays, (unsigned long long)f.serial, repeat ? "R" : "", (now - t0) / 1e9, f.game_ft * 1000.0f,

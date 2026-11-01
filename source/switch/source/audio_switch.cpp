@@ -61,6 +61,15 @@ std::atomic<bool> g_hold{false};
 std::atomic<uint64_t> g_hold_ns{0};
 uint64_t g_hold_count = 0;
 float g_peak = 0;   // largest |sample| sent to the device since the last [AUDIO] line (output thread only)
+// [AUDIOQ] window stats, for audible jitter that [AUDIO] idle waits cannot show. Output thread only, except the
+// submit fields (under g_mx). "Empty" = nothing queued on the device while not holding: an audible gap.
+struct AudioWindow {
+    uint64_t start_ns = 0, empty_since_ns = 0, empty_ns = 0, empty_max_ns = 0;
+    uint32_t empties = 0, min_queued = kBuffers;
+};
+AudioWindow g_aw;
+uint64_t g_last_submit_ns = 0, g_submit_gap_max_ns = 0;
+uint32_t g_client_depth_max = 0;
 
 // Mixes one frame from every client that has one into slot s; returns false if no client had a frame.
 bool fill_slot(Slot& s) {
@@ -139,6 +148,20 @@ void output_thread() {
         // Filling may stop at an empty slot before later slots still playing.
         const bool any_queued = std::any_of(g_slots, g_slots + kBuffers,
                                           [](const Slot& s) { return s.queued; });
+        {
+            const uint64_t now = armTicksToNs(armGetSystemTick());
+            const uint32_t queued = uint32_t(std::count_if(g_slots, g_slots + kBuffers,
+                                                           [](const Slot& s) { return s.queued; }));
+            g_aw.min_queued = std::min(g_aw.min_queued, queued);
+            if (!any_queued && !hold) {
+                if (!g_aw.empty_since_ns) { g_aw.empty_since_ns = now; ++g_aw.empties; }
+            } else if (g_aw.empty_since_ns) {
+                const uint64_t gap = now - g_aw.empty_since_ns;
+                g_aw.empty_ns += gap;
+                g_aw.empty_max_ns = std::max(g_aw.empty_max_ns, gap);
+                g_aw.empty_since_ns = 0;
+            }
+        }
         if (any_queued) {
             // Wait for the device to release one (it plays 5.33 ms per buffer).
             rel = nullptr; count = 0;
@@ -166,6 +189,22 @@ void output_thread() {
                    (unsigned long long)underruns, (unsigned long long)g_hold_count,
                    (unsigned long long)(g_hold_ns.load() / 1000000ull), double(g_peak));
             g_peak = 0;
+            uint64_t submit_gap_ns;
+            uint32_t depth_max;
+            {
+                std::lock_guard<std::mutex> lk(g_mx);
+                submit_gap_ns = g_submit_gap_max_ns; depth_max = g_client_depth_max;
+                g_submit_gap_max_ns = 0; g_client_depth_max = 0;
+            }
+            const uint64_t now = armTicksToNs(armGetSystemTick());
+            printf("[AUDIOQ] t=%llums window=%llums empties=%u empty=%llums empty_max=%llums min_queued=%u/%d "
+                   "submit_gap_max=%.1fms client_depth_max=%u\n",
+                   (unsigned long long)(now / 1000000ull),
+                   (unsigned long long)(g_aw.start_ns ? (now - g_aw.start_ns) / 1000000ull : 0ull), g_aw.empties,
+                   (unsigned long long)(g_aw.empty_ns / 1000000ull), (unsigned long long)(g_aw.empty_max_ns / 1000000ull),
+                   g_aw.min_queued, kBuffers, submit_gap_ns / 1e6, depth_max);
+            g_aw = AudioWindow{};
+            g_aw.start_ns = now;
             fflush(stdout);
         }
     }
@@ -229,6 +268,10 @@ void host_audio_submit(int idx, const uint8_t* frame_be) {
         if (!c.open) return;
         if (c.frames.size() >= kMaxQueued) drop = c.on_end;   // should not happen: count it as played
         else c.frames.push_back(std::move(f));
+        const uint64_t now = armTicksToNs(armGetSystemTick());
+        if (g_last_submit_ns) g_submit_gap_max_ns = std::max(g_submit_gap_max_ns, now - g_last_submit_ns);
+        g_last_submit_ns = now;
+        g_client_depth_max = std::max(g_client_depth_max, uint32_t(c.frames.size()));
     }
     if (drop) drop(idx);
     g_cv.notify_one();

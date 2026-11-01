@@ -21,6 +21,7 @@
 #include <unistd.h>
 #include "lsw_save_platform.h"
 extern "C" void lsw_ft_ring_dump();   // kernel_stubs.cpp: game frame times of the last 120 swaps ([FTRING])
+std::atomic<uint32_t> g_frame_marks{0};   // tester marks, written to frames.log by gl_backend.cpp
 
 namespace {
 
@@ -557,6 +558,19 @@ DWORD WINAPI nx_xinput_get_state(DWORD slot, void* out) {
             printf("[CAPCOMBO] capture requested (ZL+ZR+R-stick)\n");
             fflush(stdout);
             lsw_ft_ring_dump();
+        }
+    }
+    // Mark combo: hold ZL + ZR and click the left stick -> "# mark N" in frames.log and [MARK] in stdout.log, so a
+    // tester can flag a moment (visual fault, audio jitter, combat start) without noting the time. Logging only.
+    {
+        static u64 last_mark_ns = 0;
+        const u64 want = HidNpadButton_ZL | HidNpadButton_ZR | HidNpadButton_StickL;
+        const u64 now_ns = armTicksToNs(armGetSystemTick());
+        if ((b & want) == want && now_ns - last_mark_ns > 1000000000ull) {
+            last_mark_ns = now_ns;
+            const uint32_t n = g_frame_marks.fetch_add(1, std::memory_order_relaxed) + 1;
+            printf("[MARK] %u at %llu ms\n", n, (unsigned long long)(now_ns / 1000000ull));
+            fflush(stdout);
         }
     }
     st.lt = (b & HidNpadButton_ZL) ? 255 : 0;

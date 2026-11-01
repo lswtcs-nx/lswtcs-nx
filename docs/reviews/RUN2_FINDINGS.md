@@ -112,3 +112,30 @@ Maxwell already tested early in those cases, but the shaders never qualified as 
 `LSWTCS_GLEARLYZ=0` as the switch back. Compiled and statically validated only: the real
 gain depends on how much overdraw these scenes have, which has not been measured. A shader
 can now have two programs, so the first session may show more shader holds.
+
+## Run 4: `0.0.12-log3`, early hint on
+
+About 4 minutes on a cold shader set for the new variants, with `profiles/hardware-earlyz.env`,
+2 save commits, no `crash.log`, empty stderr. **88–92 % of draws took the hint**, and 19 of 23
+sampled heavy frames merged tiles. No hint-related compile or link failure was logged.
+
+Non-hold frames by recorded draws. Routes and lengths differ, and run 4 is short, so these
+are indications. The 1300–1800 bin has only 49 frames in run 4.
+
+| Recorded draws | FPS: run 2 → run 3 → run 4 | GPU wait ms: run 3 → run 4 |
+| --- | --- | --- |
+| 300–800 | 19.8 → 21.4 → 22.6 | 30.9 → 22.3 |
+| 800–1300 | 17.4 → 16.8 → 19.1 | 33.3 → 22.9 |
+| 1300–1800 | 14.5 → 17.7 → 19.3 | 32.5 → 19.1 |
+
+The GPU wait fell by about 10 ms, which is the expected direction for early rejection.
+
+The cost shows up in shader preparation: 35 holds and 23.9 s, against 2 holds and 1.2 s in
+run 3, and 239 programs against 149. A warm session has to confirm that this settles. The
+audio queue also emptied more, which these holds and this cold start may explain. The audio
+peak reached 1.6 at times, against 0.6 in earlier sessions. Values above 1.0 are clipped by
+the output clamp. Its cause is unknown and needs checking on a warm run.
+
+Most expensive per draw in this run: `EB7221B1AAA62B09` at 2.9 ms, `0FA48AD390D6CBB9` at
+3.6 ms and `0E809EDDFB5D4D0D` at 1.3 ms. `capglsl/` from a capture holds GLSL under these keys,
+so capturing a heavy frame can identify them.

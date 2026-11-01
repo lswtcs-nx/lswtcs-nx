@@ -21,6 +21,7 @@
 #include <vector>
 
 extern "C" void dbg_ram(const char* fmt, ...);
+extern "C" void lsw_prof_register(const char* name, int sched_id);
 
 namespace {
 constexpr int kMaxClients = 8;
@@ -129,6 +130,7 @@ void output_thread() {
     // Core 2 (idle outside shader builds), above the compile worker there.
     svcSetThreadCoreMask(CUR_THREAD_HANDLE, 2, 1u << 2);
     svcSetThreadPriority(CUR_THREAD_HANDLE, 0x2B);
+    lsw_prof_register("audio_output", -1);
     uint64_t played = 0, underruns = 0;
     for (;;) {
         // Collect what the device finished.

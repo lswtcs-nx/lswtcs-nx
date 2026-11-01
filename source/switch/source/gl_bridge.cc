@@ -238,23 +238,26 @@ const LswGlShader* get_glsl(SpirvShader& shader, uint64_t modification, LswGlSta
       out->stage = stage;
       out->key = key;
       out->glsl = std::move(glsl);
-      const auto& tex = shader.GetTextureBindingsAfterTranslation();
-      const auto& smp = shader.GetSamplerBindingsAfterTranslation();
+      // This translation's own bindings. The shader's (GetTextureBindingsAfterTranslation) are the first translation's,
+      // and kLswTexturesUnsigned changes them: a shader drawn with unsigned and later with signed textures, or the
+      // reverse, lost every texture unit in its second translation, and those draws sampled whatever the units last held.
+      const auto counts = b.translator->LswLastBindingCounts();
       for (const LswGlslSampler& s : samplers) {
-        const uint32_t si = s.sampler_binding - uint32_t(tex.size());
-        if (s.image_binding >= tex.size() || si >= smp.size()) {
+        const uint32_t si = s.sampler_binding - uint32_t(counts.textures);
+        if (s.image_binding >= counts.textures || si >= counts.samplers) {
           log_once(key, "texture unit with an unknown binding", nullptr);
           continue;
         }
-        const auto& tb = tex[s.image_binding];
-        const auto& sb = smp[si];
+        uint32_t fetch = 0, dimension = 0, sampler_fetch = 0, mag = 0, min = 0, mip = 0, aniso = 0;
+        bool is_signed = false;
+        b.translator->LswLastTextureBinding(s.image_binding, fetch, dimension, is_signed);
+        b.translator->LswLastSamplerBinding(si, sampler_fetch, mag, min, mip, aniso);
         LswGlShaderUnit u;
         u.unit = s.unit;
-        u.fetch_constant = tb.fetch_constant;
-        u.dimension = uint32_t(tb.dimension);
-        u.is_signed = tb.is_signed ? 1u : 0u;
-        u.sampler = {sb.fetch_constant, uint32_t(sb.mag_filter), uint32_t(sb.min_filter),
-                     uint32_t(sb.mip_filter), uint32_t(sb.aniso_filter)};
+        u.fetch_constant = fetch;
+        u.dimension = dimension;
+        u.is_signed = is_signed ? 1u : 0u;
+        u.sampler = {sampler_fetch, mag, min, mip, aniso};
         out->units.push_back(u);
       }
     }
@@ -458,8 +461,21 @@ extern "C" int lsw_gpu_prepare(const uint32_t* regs_in, const uint32_t* vs_ucode
   // Specialisation: all textures of the shader unsigned in this draw (every texture in the hub) ->
   // fetches without the signed / biased / gamma paths (SpirvShaderTranslator::LswTexturesUnsigned).
   auto textures_unsigned = [&](const Shader& s) {
-    for (const auto& tb : s.texture_bindings())
-      if (texture_util::SwizzleSigns(regs.GetTextureFetch(tb.fetch_constant))) return false;
+    for (const auto& tb : s.texture_bindings()) {
+      const auto fetch = regs.GetTextureFetch(tb.fetch_constant);
+      const uint32_t signs = texture_util::SwizzleSigns(fetch);
+      if (!signs) continue;
+      // [GLSIGNS]: what reaches the signed translations. The replay binds one texture to both the unsigned and signed
+      // units, so a truly signed component (1) would read as unsigned; biased (2) and gamma (3) use the unsigned one.
+      static std::unordered_map<uint64_t, bool> seen;
+      bool& known = seen[(uint64_t(signs) << 8) | uint64_t(fetch.format)];
+      if (!known) {
+        known = true;
+        printf("[GLSIGNS] format %u signs %02X (2 bits per component: 1 signed, 2 biased, 3 gamma)\n", uint32_t(fetch.format), signs);
+        fflush(stdout);
+      }
+      return false;
+    }
     return true;
   };
   if (textures_unsigned(*vs)) vs_mod.value |= SpirvShaderTranslator::Modification::kLswTexturesUnsigned;

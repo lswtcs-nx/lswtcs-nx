@@ -27,6 +27,8 @@ extern "C" bool lsw_log_async_init();
 extern "C" void lsw_log_async_path(char* out, size_t capacity, const char* name);
 extern "C" void lsw_log_async_drain();
 extern "C" void lsw_hw_monitor_start();
+extern "C" void lsw_hw_profiler_start();
+extern "C" void lsw_prof_register(const char* name, int sched_id);
 
 #ifndef LSW_DATA_DIR
 #define LSW_DATA_DIR "sdmc:/lswtcs"
@@ -88,6 +90,7 @@ void* pinned_start(void* p) {
     const Result rc = svcSetThreadCoreMask(CUR_THREAD_HANDLE, s.core, 1u << s.core);
     const Result rp = svcSetThreadPriority(CUR_THREAD_HANDLE, 0x2C);
     printf("[NX] new thread pinned to core %d, priority 0x2C (rc 0x%X / 0x%X)\n", s.core, rc, rp);
+    lsw_prof_register("mesa_worker", -1);
     fflush(stdout);
     return s.fn(s.arg);
 }
@@ -386,6 +389,7 @@ extern "C" bool lsw_switch_init() {
            (unsigned long long)(info_u64(InfoType_UsedMemorySize) >> 20));
     load_env_file(LSW_DATA_DIR "/env.txt");
     lsw_hw_monitor_start();
+    lsw_hw_profiler_start();
 #ifndef LSW_DEKO_BACKEND
     lsw_bo_check_init(g_run_id);
 #endif

@@ -307,5 +307,32 @@ was not enough for one full capture. Its priority is the first suspect.
 **"texture unit with an unknown binding":** 22 `[GLBRIDGE]` lines, new in this level; none in runs 2, 5 and 6. Each drops a
 texture unit from a shader. Not yet examined, and a candidate for visible faults there.
 
-**Black Ops 2:** BO2-Requiem-NX is a port of a decompilation of the PC executables, through DXVK and Vulkan, not of the 360 build.
-Its source is announced for early November 2026. Not comparable with this port's frontend; its Vulkan path may be worth reading then.
+**Black Ops 2:** see `PORT_RESEARCH.md`. The tester meant bo2-360-nx, a real 360 static recompilation.
+
+## What run 7 led to: `0.0.14-log8`, not yet run on hardware
+
+Compiled and validated. The planner tests still pass, and the report tool was run on synthetic samples against the real ELF.
+Nothing below has run on a console.
+
+**A real texture bug, found by reading the code.** `SpirvShaderTranslator::PostTranslation` stores a shader's texture and sampler
+bindings only once, from its first translation. Upstream that holds, because bindings do not depend on the modification. The
+port's `kLswTexturesUnsigned` does change them: an unsigned translation has no signed bindings. So when a shader was translated
+in both forms, the second had binding numbers that no longer fit the stored lists, and `get_glsl` dropped its texture units with
+"texture unit with an unknown binding". Those draws then sampled whatever the units last held. The keys logged in run 7 match
+this: `82B78D7C67978A69` and `8E809EDDFB5D4D0D` are the shaders `02B78D7C67978A69` and `0E809EDDFB5D4D0D` of run 6's `capglsl`
+with bit 63 flipped, which is what that modification does to the key. `get_glsl` now reads the bindings of the translation it just
+made, through accessors added to the translator (`source/patches/xenia-canary.patch`, checked to apply on a clean checkout at the
+pin). Expected on hardware: no such `[GLBRIDGE]` line. Whether this caused any fault the tester saw is unproved. The black
+characters in `shot_10267` are a candidate, as they are below the seam in a frame from right after those lines.
+
+The replay binds one texture to the unsigned and signed units. That is fine for gamma and biased components and wrong for truly
+signed ones. `[GLSIGNS]` now reports what reaches these translations, to tell whether that needs work.
+
+**Where the guest CPU goes: `LSWTCS_HWPROF`** (`hw_profiler.cpp`). Every 2 ms the turn holder, and every 8 ms every thread, is paused
+for a few microseconds, and its pc, lr and likely callers are recorded with its band and whether it held the turn.
+`tools/hwprof_report.py` names them. This answers what the main thread waits on while holding the turn. The chain is a stack scan,
+so only pc and lr are exact. It costs some CPU on core 2, unmeasured. Nothing allocates or locks while a target is paused.
+
+**A/B.** States now run in a new random order each round, 15 s each, because run 7's fixed order confounded state with scene.
+
+**Capture saves** moved to core 1 under the render thread, and `[CAPSAVE]` reports MB and seconds.

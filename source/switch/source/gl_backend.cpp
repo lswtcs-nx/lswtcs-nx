@@ -48,6 +48,8 @@ extern "C" void lsw_ft_ring_dump();   // kernel_stubs.cpp: game frame times of t
 extern "C" void lsw_sched_ab_set(int audioprio, int walkoff);   // kernel_stubs.cpp: LSWTCS_ABCYCLE
 extern "C" void lsw_audio_stats(uint64_t* played, uint64_t* empty_ns);   // audio_switch.cpp: frames.log columns
 extern "C" void lsw_log_async_path(char* out, size_t capacity, const char* name);   // log_async.cpp
+extern "C" void lsw_prof_register(const char* name, int sched_id);   // hw_profiler.cpp
+extern "C" void lsw_prof_note_draws(uint32_t draws);
 bool lsw_bg_submit(size_t bytes, std::function<void()> run);   // log_async.cpp: slow file work off this thread
 extern "C" void lsw_log_path(char* out, size_t capacity, const char* name);   // platform_switch.cpp: session folder
 
@@ -499,6 +501,7 @@ void pin_to_core(int core, const char* what) {
 }
 
 void compile_worker_main(int index) {
+    lsw_prof_register(index ? "compile_1" : "compile_0", -1);
     // Worker 0 on core 2 (idle). Worker 1 on core 0 at the lowest priority: the guest threads live there
     // but are held while a new scene's programs build, and any guest thread that runs takes precedence.
     if (index == 1) {
@@ -1983,7 +1986,19 @@ void ab_cycle_tick() {
     const uint64_t now = gp_now();
     if (states.empty() || now < next_ns) return;
     next_ns = now + period_ns;
-    g_ab_state = states[index++ % states.size()];
+    // A new order each round: in run 7's fixed order each state always followed the same one, so a level's rising or
+    // falling load read as an effect of the state. Seeded from the clock, so runs differ.
+    static std::vector<size_t> order;
+    if (index % states.size() == 0) {
+        static uint64_t seed = now | 1;
+        order.resize(states.size());
+        for (size_t i = 0; i < order.size(); ++i) order[i] = i;
+        for (size_t i = order.size(); i > 1; --i) {
+            seed ^= seed << 13; seed ^= seed >> 7; seed ^= seed << 17;
+            std::swap(order[i - 1], order[size_t(seed % i)]);
+        }
+    }
+    g_ab_state = states[order[index++ % states.size()]];
     const auto has = [](char c) { return g_ab_state.find(c) != std::string::npos; };
     g_ut_off_ab = !has('M');
     lsw_sched_ab_set(has('A'), has('W'));
@@ -2296,6 +2311,7 @@ PresentSrc replay() {
         g_capture_frame=true;
     }
     g_frame_groups = ut.groups;
+    lsw_prof_note_draws(uint32_t(f.draws.size()));
     rp_close(RP_PLAN, t_plan, t_plan_in);
     GLuint ebo_bound = g_arena;   // arena_upload bound the arena as the index buffer
     const uint64_t t_loop = gp_now(), t_loop_in = g_rp_scoped;
@@ -3444,6 +3460,7 @@ void swap_job(void*) {
 
 void render_thread_main() {
     pin_to_core(1, "render thread");
+    lsw_prof_register("render", -1);
     lsw_core_load_start();
     g_gl_ok = egl_init();
     if (g_gl_ok) resources_init();

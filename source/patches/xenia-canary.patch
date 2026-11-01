@@ -836,13 +836,43 @@ index 83ba94461..4e459abc0 100644
    return value;
  }
 diff --git a/src/xenia/gpu/spirv_shader_translator.h b/src/xenia/gpu/spirv_shader_translator.h
-index db7365389..ece214a17 100644
+index db7365389..94909ea1b 100644
 --- a/src/xenia/gpu/spirv_shader_translator.h
 +++ b/src/xenia/gpu/spirv_shader_translator.h
-@@ -27,6 +27,27 @@ namespace gpu {
+@@ -27,6 +27,57 @@ namespace gpu {
  
  class SpirvShaderTranslator : public ShaderTranslator {
   public:
++  // LSWTCS: bindings of the translation just made, in the order of its SPIR-V
++  // binding decorations. SpirvShader keeps only the first translation's, which
++  // holds in Xenia, where a shader's bindings do not depend on its modification.
++  // kLswTexturesUnsigned removes the signed ones.
++  struct LswBindingCounts {
++    size_t textures;
++    size_t samplers;
++  };
++  LswBindingCounts LswLastBindingCounts() const {
++    return {texture_bindings_.size(), sampler_bindings_.size()};
++  }
++  void LswLastTextureBinding(size_t index, uint32_t& fetch_constant,
++                             uint32_t& dimension, bool& is_signed) const {
++    const TextureBinding& binding = texture_bindings_[index];
++    fetch_constant = binding.fetch_constant;
++    dimension = uint32_t(binding.dimension);
++    is_signed = binding.is_signed;
++  }
++  void LswLastSamplerBinding(size_t index, uint32_t& fetch_constant,
++                             uint32_t& mag_filter, uint32_t& min_filter,
++                             uint32_t& mip_filter,
++                             uint32_t& aniso_filter) const {
++    const SamplerBinding& binding = sampler_bindings_[index];
++    fetch_constant = binding.fetch_constant;
++    mag_filter = uint32_t(binding.mag_filter);
++    min_filter = uint32_t(binding.min_filter);
++    mip_filter = uint32_t(binding.mip_filter);
++    aniso_filter = uint32_t(binding.aniso_filter);
++  }
++
 +  // LSWTCS (Switch, LSWTCS_GLTEXBIAS): pixel-shader 1D / 2D / cube fetches with
 +  // a computed LOD and no register gradients sample with an implicit LOD plus a
 +  // bias of `lod` instead of explicit gradients (coarse derivatives scaled by
@@ -867,7 +897,7 @@ index db7365389..ece214a17 100644
    union Modification {
      // If anything in this is structure is changed in a way not compatible with
      // the previous layout, invalidate the pipeline storages by increasing this
-@@ -36,6 +57,15 @@ class SpirvShaderTranslator : public ShaderTranslator {
+@@ -36,6 +87,15 @@ class SpirvShaderTranslator : public ShaderTranslator {
      // incremental counter).
      static constexpr uint32_t kVersion = 8;
  
@@ -883,7 +913,7 @@ index db7365389..ece214a17 100644
      enum class DepthStencilMode : uint32_t {
        kNoModifiers,
        // Early fragment tests - enable if alpha test and alpha to coverage are
-@@ -224,6 +254,8 @@ class SpirvShaderTranslator : public ShaderTranslator {
+@@ -224,6 +284,8 @@ class SpirvShaderTranslator : public ShaderTranslator {
      // If alpha to mask is enabled, bits 0:7 are sample offsets, and bit 8 must
      // be 1.
      uint32_t alpha_to_mask;
@@ -892,7 +922,7 @@ index db7365389..ece214a17 100644
  
      float color_exp_bias[4];
  
-@@ -384,6 +416,12 @@ class SpirvShaderTranslator : public ShaderTranslator {
+@@ -384,6 +446,12 @@ class SpirvShaderTranslator : public ShaderTranslator {
      bool fragment_shader_sample_interlock;
  
      bool demote_to_helper_invocation;
@@ -905,7 +935,7 @@ index db7365389..ece214a17 100644
    };
  
    SpirvShaderTranslator(const Features& features,
-@@ -516,6 +554,12 @@ class SpirvShaderTranslator : public ShaderTranslator {
+@@ -516,6 +584,12 @@ class SpirvShaderTranslator : public ShaderTranslator {
      return Modification(current_translation().modification());
    }
  
@@ -918,7 +948,7 @@ index db7365389..ece214a17 100644
    bool IsSpirvVertexShader() const {
      return is_vertex_shader() &&
             !Shader::IsHostVertexShaderTypeDomain(
-@@ -878,9 +922,9 @@ class SpirvShaderTranslator : public ShaderTranslator {
+@@ -878,9 +952,9 @@ class SpirvShaderTranslator : public ShaderTranslator {
      kSystemConstantTextureSwizzles,
      kSystemConstantTexturesResolved,
      kSystemConstantAlphaTestReference,
@@ -929,7 +959,7 @@ index db7365389..ece214a17 100644
      kSystemConstantColorExpBias,
      kSystemConstantEdramPolyOffsetFrontScale,
      kSystemConstantEdramPolyOffsetBackScale,
-@@ -1063,6 +1107,29 @@ class SpirvShaderTranslator : public ShaderTranslator {
+@@ -1063,6 +1137,29 @@ class SpirvShaderTranslator : public ShaderTranslator {
    std::unique_ptr<spv::Instruction> main_switch_op_;
    spv::Block* main_switch_merge_;
    std::vector<spv::Id> main_switch_next_pc_phi_operands_;

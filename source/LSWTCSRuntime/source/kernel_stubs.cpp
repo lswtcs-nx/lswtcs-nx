@@ -908,6 +908,9 @@ static void sampleprof_loop(int mode) {
         }
     }
 }
+// Console profiler (hw_profiler.cpp): which thread to sample, and who holds the turn. Weak: not on the PC.
+extern "C" __attribute__((weak)) void lsw_prof_register_guest(int, uint32_t) {}
+extern "C" int lsw_sched_turn() { return g_sched_turn; }
 static void sched_register(int id) {
     if (!gil_on() || id < 0) return;
     { static int sp = -1; if (sp < 0) { const char* e = getenv("LSWTCS_SAMPLEPROF"); sp = (e && (e[0] == '1' || e[0] == '2')) ? e[0] - '0' : 0;
@@ -916,6 +919,7 @@ static void sched_register(int id) {
           g_sp_thread[id] = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_QUERY_INFORMATION, FALSE, GetCurrentThreadId()); }
     std::unique_lock<std::mutex> lk(g_sched_mtx);
     if (id < LSW_SCHED_MAX && schedprof_on()) g_sp_token[id] = lsw_thread_token();
+    if (id < LSW_SCHED_MAX) lsw_prof_register_guest(id, g_sp_entry[id]);
     if (id >= g_sched_count) g_sched_count = id + 1;
     g_sched_alive[id] = true; g_sched_runnable[id] = true;
     if (g_sched_turn == -1) sched_turn_set(id);         // idle → claim immediately

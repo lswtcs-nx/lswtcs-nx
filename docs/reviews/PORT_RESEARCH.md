@@ -72,6 +72,31 @@ registers make this a risky driver change for an uncertain return.
 - **Early depth for draws without alpha coverage** (Mass Effect ships this): done in `0.0.12-log3`. Mass
   Effect rejected it for alpha-tested writers because the image was wrong, and our conditions exclude those.
 
+## bo2-360-nx: the closest relative
+
+[bo2-360-nx](https://github.com/AlvaroEPena/bo2-360-nx) is Black Ops II from the 360 executable, by static recompilation with ReXGlue,
+drawing through Vulkan on NVK. GPL-3: read for technique, no code taken. Its numbers come from A/B runs on that game, and do not
+transfer. What applies here:
+
+- **Threads are the big difference.** Each of its guest threads is a Horizon thread on several cores, with the 360's atomics behind a
+  global lock. TCS runs one guest thread at a time on core 0. In run 7 that was the limit. `LSWTCS_WALKOFF`, the small step in that
+  direction, failed on hardware, which shows the guest and the walker share state without protection. Leaving the turn model is a large
+  change and needs evidence and the owner's decision.
+- **A contended lock can dominate.** Its early profile had game threads about 75 % of samples in `svcArbitrateLock`, because newlib's
+  mutex sleeps at the first contention; it spins briefly before sleeping. TCS's main thread holding the turn with little CPU could be
+  the same family, or not: `LSWTCS_HWPROF` decides first.
+- **LTO and PGO: +9.8 % and +9.0 %** in a CPU-limited game. Mass Effect measured nothing, so "Not to adopt" below was too strong. TCS has
+  neither (`-O2`, unity units), and heavy levels are CPU-limited. Worth one experiment, but the build cost with two jobs is unknown.
+- **A fourth core** from a forwarder gave +12-16 %, at some risk of instability. Audio and XMA went alone on it. An owner decision.
+- **Audio:** XMA frame cache +3.8 %, mixer rewrites +2.7 %. TCS's audio thread uses 40-48 % of a core in heavy scenes.
+- **Native rewrites run beside the original first**, compared word for word, and turn themselves off on a difference.
+- **Its renderer's gains** (+70-80 % from sampler cache, state fingerprints and copy-engine uploads) are Vulkan and NVK patches. Copy
+  engine +9.5 %: `gl_rt.inc` measured `glCopyImageSubData` slower here, so it does not carry over directly.
+- **Lower-quality presets and far-object hiding** are its main route to 60 FPS, and any such change here is a product decision.
+- **Not adopted there:** thread priorities (-2 to -5.4 %), which fits the FPS cost seen with `LSWTCS_AUDIOPRIO`; internal resolution
+  (no gain while the CPU sets the pace).
+- **Already matched here:** logs on their own thread, A/B within one run.
+
 ## Implications for Deko
 
 USF4's paired comparison at raised clocks shows GPU 9.3 to 8.4 ms but render thread **18.6 to 2.8 ms**:
@@ -83,7 +108,7 @@ and frontend, and compression may matter.
 
 - Lower internal resolution by default (Mass Effect, 960x544), or half-resolution post-processing,
   which Mass Effect rejected as inexact. Any quality change is a product decision.
-- LTO, PGO and function ordering as an expected gain: Mass Effect measured none.
+- Function ordering as an expected gain. For LTO and PGO, Mass Effect measured none and bo2-360-nx about +9 % each: an experiment, not an expectation.
 - Async compile that skips draws: Mass Effect saw 4,515 skipped draws as pop-in.
 
 ## Sources

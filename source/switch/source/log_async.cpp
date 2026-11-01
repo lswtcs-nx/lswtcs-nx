@@ -121,10 +121,11 @@ size_t g_job_bytes = 0;
 constexpr size_t kJobBytesMax = size_t(192) << 20;   // beyond this the caller does the work itself
 
 void job_main() {
-    // Core 2, below every thread there: a capture's files may take a minute, and the game keeps running.
-    svcSetThreadCoreMask(CUR_THREAD_HANDLE, 2, 1u << 2);
+    // Core 1, below the render thread: it waits for the GPU for much of a frame. On core 2, under the audio mix and Mesa's
+    // worker, one full capture was not done a minute later (run 7), and leaving the game lost the rest.
+    svcSetThreadCoreMask(CUR_THREAD_HANDLE, 1, 1u << 1);
     svcSetThreadPriority(CUR_THREAD_HANDLE, 0x3A);
-    uint64_t done = 0;
+    uint64_t done = 0, batch_ns = 0, batch_bytes = 0;
     for (;;) {
         Job job;
         {
@@ -133,8 +134,10 @@ void job_main() {
             job = std::move(g_jobs.front());
             g_jobs.pop_front();
         }
+        if (!batch_ns) batch_ns = armTicksToNs(armGetSystemTick());
         job.run();
         ++done;
+        batch_bytes += job.bytes;
         bool empty;
         {
             std::lock_guard<std::mutex> lk(g_job_mx);
@@ -142,8 +145,10 @@ void job_main() {
             empty = g_jobs.empty();
         }
         if (empty) {
-            printf("[CAPSAVE] all capture files written (%llu so far)\n", (unsigned long long)done);
+            const double seconds = (armTicksToNs(armGetSystemTick()) - batch_ns) / 1e9;
+            printf("[CAPSAVE] all capture files written (%llu so far): %.0f MB in %.1f s\n", (unsigned long long)done, batch_bytes / 1048576.0, seconds);
             fflush(stdout);
+            batch_ns = 0; batch_bytes = 0;
         }
     }
 }

@@ -86,7 +86,7 @@ def print_diagnostics(lines):
         match=re.match(r'\[GLUNTILE\] rejected since last report: uncheckable (\d+), content (\d+), tile state (\d+), bottom (\d+), order (\d+)',line)
         if match:rejected=[a+int(b) for a,b in zip(rejected,match.groups())]
     if any(rejected):print('\nMerge refusals: uncheckable {}, content {}, tile state {}, bottom {}, order {}'.format(*rejected))
-    for tag,title in (('[CAPTIME]','Captures'),('[GLHIST]','Frame history'),('[CAPSAVE]','Background saves')):
+    for tag,title in (('[GLSIGNS]','Signed textures'),('[GLBRIDGE]','Shader bridge messages'),('[HWPROF]','CPU profiler (tools/hwprof_report.py names hwprof.txt)'),('[CAPTIME]','Captures'),('[GLHIST]','Frame history'),('[CAPSAVE]','Background saves')):
         found=[l for l in lines if l.startswith(tag)]
         if found:
             print(f'\n{title}:')

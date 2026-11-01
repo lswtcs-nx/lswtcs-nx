@@ -41,6 +41,7 @@ extern uint8_t* g_base;
 extern "C" void lsw_bo_check_progress(uint64_t swaps);
 void host_audio_hold(bool on);   // audio_switch.cpp: pause the device feed while programs build
 extern std::atomic<uint32_t> g_frame_marks;   // win32_switch.cpp: tester marks (ZL+ZR+left stick)
+extern "C" void lsw_log_path(char* out, size_t capacity, const char* name);   // platform_switch.cpp: session folder
 
 namespace {
 
@@ -1310,11 +1311,11 @@ void dump_first_program(const LswGlShader* vs, const LswGlShader* ps, const LswG
 // (to compare a hardware capture's shaders with Eden's or the PC's).
 void dump_capture_glsl(const LswGlShader* s) {
     if (!s || s->glsl.empty()) return;
-    static bool dir = false;
-    if (!dir) { mkdir("capglsl", 0777); dir = true; }
+    static char dir[80];
+    if (!dir[0]) { lsw_log_path(dir, sizeof dir, "capglsl"); mkdir(dir, 0777); }
     static const char* const kExt[3] = {"vert", "frag", "geom"};
-    char path[64];
-    snprintf(path, sizeof path, "capglsl/%016llX.%s", (unsigned long long)s->key, kExt[s->stage < 3 ? s->stage : 0]);
+    char path[112];
+    snprintf(path, sizeof path, "%s/%016llX.%s", dir, (unsigned long long)s->key, kExt[s->stage < 3 ? s->stage : 0]);
     struct stat st;
     if (stat(path, &st) == 0) return;
     if (FILE* f = fopen(path, "wb")) { fwrite(s->glsl.data(), 1, s->glsl.size(), f); fclose(f); }
@@ -1902,7 +1903,10 @@ void frame_log(const LswGpuFrame& f, uint64_t replay_ns) {
         return e && strtoull(e, nullptr, 10) != 0;
     }();
     static FILE* fl = [] {
-        FILE* x = fopen("frames.log", "w");
+        char path[96];
+        lsw_log_path(path, sizeof path, "frames.log");
+        FILE* x = fopen(path, "w");
+        if (x) setvbuf(x, nullptr, _IOFBF, 32 * 1024);   // flushed every 30 lines below: one SD write, not one per 1 KB
         if (x) fprintf(x, "# replay serial t_s game_ft_ms swap_real_ms replay_ms gpuwait_ms(prev) hold_ms draws | eye xyz | fwd xyz | "
                           "view block (register, layout C/R, draws agreeing / world draws) | turn_deg move\n");
         if (x) fprintf(x, "# camera diagnostics %s; NOCAM fields are placeholders when disabled\n", cam_log ? "on" : "off");
@@ -2601,8 +2605,9 @@ void maybe_capture(const PresentSrc& src) {
         px[i + 3] = 255;   // alpha as the window shows it (opaque)
         if (px[i] != 13 || px[i + 1] != 13 || px[i + 2] != 20) ++differ;
     }
-    char path[64];
-    snprintf(path, sizeof path, "shot_%llu.png", (unsigned long long)g_replays);
+    char name[32], path[96];
+    snprintf(name, sizeof name, "shot_%llu.png", (unsigned long long)g_replays);
+    lsw_log_path(path, sizeof path, name);
     write_png_rgba(path, px.data(), int(w), int(h));
     printf("[GLSHOT] %s (%ux%u): %u pixels differ from the clear colour (err 0x%X)\n", path, w, h, differ, glGetError());
     fflush(stdout);
@@ -2632,7 +2637,11 @@ void maybe_resdump() {
     // Read back in strips of 64 rows: a whole target as floats was 15-21 MB in one block, and after a long session the
     // console's heap had no such block (Switch 2026-10-09: std::bad_alloc in a capture aborted the game). A target that
     // still does not fit is skipped and logged.
-    auto dump = [](const HostTex& tex, uint32_t name, uint32_t rows, const char* prefix = "res") {
+    char res_dir[80], res_name[32];
+    snprintf(res_name, sizeof res_name, "res_%llu", (unsigned long long)g_replays);
+    lsw_log_path(res_dir, sizeof res_dir, res_name);
+    mkdir(res_dir, 0777);
+    auto dump = [&res_dir](const HostTex& tex, uint32_t name, uint32_t rows, const char* prefix = "res") {
         const uint32_t w = tex.w, h = std::min(tex.h, rows);
         constexpr uint32_t kStrip = 64;
         const bool depth = tex.fmt == kDxgiR32F;
@@ -2670,8 +2679,8 @@ void maybe_resdump() {
                 out[i + 3] = 255;
             }
         }
-        char path[64];
-        snprintf(path, sizeof path, "%s_%08X_%ux%u.png", prefix, name, w, h);
+        char path[128];
+        snprintf(path, sizeof path, "%s/%s_%08X_%ux%u.png", res_dir, prefix, name, w, h);
         write_png_rgba(path, px.data(), int(w), int(h));
         printf("[RESDUMP] %s fmt=%u%s", path, tex.fmt, depth ? " (depth, normalized)" : "");
         if (depth) printf(" range %.6f .. %.6f (png scale %.3f..%.3f)", zmin, zmax, zlo, zhi);

@@ -5,6 +5,7 @@
 extern "C" {
 #include <nouveau.h>
 void _start();
+void lsw_log_path(char* out, size_t capacity, const char* name);
 int lsw_bo_check_allocator_observed() __attribute__((weak));
 int __real_nouveau_bo_new(nouveau_device*, uint32_t, uint32_t, uint64_t, nouveau_bo_config*, nouveau_bo**);
 int __real_nouveau_bo_name_ref(nouveau_device*, uint32_t, nouveau_bo**);
@@ -79,6 +80,11 @@ void Print(FILE* f, const uintptr_t* candidates = nullptr, size_t count = 0) { /
     }
     std::fprintf(f, "[BOCHECK] limits: boundary observations; internal submission increments not journaled; reused pointer alone does not identify its owner's generation; no pixel/performance validity claim\n");
 }
+FILE* OpenReport() {
+    char path[96];
+    lsw_log_path(path, sizeof path, "bocheck.log");
+    return std::fopen(path, "w");
+}
 template<class F> void Observe(F fn) {
     if (g_inside || !g_ledger.enabled.load(std::memory_order_acquire)) return;
     Inside inside;
@@ -95,7 +101,7 @@ template<class F> void Observe(F fn) {
     std::printf("[BOCHECK] %s: %s; details in bocheck.log\n", Incomplete(error) ? "INCOMPLETE" : "STOP", ErrorName(error));
     {
         std::lock_guard<std::mutex> lock(g_mutex);
-        if (FILE* f = std::fopen("bocheck.log", "w")) { Print(f); std::fclose(f); }
+        if (FILE* f = OpenReport()) { Print(f); std::fclose(f); }
         else std::printf("[BOCHECK] report file could not be opened\n");
     }
     std::fflush(stdout);
@@ -122,7 +128,7 @@ extern "C" void lsw_bo_check_init(uint64_t run) {
     // Persist identity before graphics starts. A HOME/process close need not
     // reach main's finish hook; an absent final report is not checker coverage.
     Inside inside;
-    if (FILE* report = std::fopen("bocheck.log", "w")) {
+    if (FILE* report = OpenReport()) {
         std::fprintf(report, "[BOCHECK] phase=armed; graphics coverage not yet observed; periodic coverage is in stdout.log; final shutdown not certified\n");
         Print(report);
         std::fclose(report);
@@ -168,7 +174,7 @@ extern "C" void lsw_bo_check_dump(FILE* f, const uintptr_t* candidates, size_t c
 }
 extern "C" void lsw_bo_check_finish() {
     if (!g_armed.load(std::memory_order_acquire)) return;
-    if (FILE* f = std::fopen("bocheck.log", "w")) { lsw_bo_check_dump(f, nullptr, 0); std::fclose(f); }
+    if (FILE* f = OpenReport()) { lsw_bo_check_dump(f, nullptr, 0); std::fclose(f); }
 }
 extern "C" int __wrap_nouveau_bo_new(nouveau_device* d, uint32_t flags, uint32_t align, uint64_t size,
                                       nouveau_bo_config* config, nouveau_bo** out) {

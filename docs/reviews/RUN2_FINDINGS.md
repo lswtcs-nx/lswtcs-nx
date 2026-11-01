@@ -131,11 +131,39 @@ are indications. The 1300–1800 bin has only 49 frames in run 4.
 The GPU wait fell by about 10 ms, which is the expected direction for early rejection.
 
 The cost shows up in shader preparation: 35 holds and 23.9 s, against 2 holds and 1.2 s in
-run 3, and 239 programs against 149. A warm session has to confirm that this settles. The
-audio queue also emptied more, which these holds and this cold start may explain. The audio
-peak reached 1.6 at times, against 0.6 in earlier sessions. Values above 1.0 are clipped by
-the output clamp. Its cause is unknown and needs checking on a warm run.
+run 3, and 239 programs against 149. A warm session has to confirm that this settles. The audio
+queue also emptied more, which these holds and this cold start may explain. Audio peaks above
+1.0, which the output clamp clips, appear in every session (highest 2.3 here, 2.1 in run 2),
+so they are not new with this change. Whether they are audible has not been established.
 
 Most expensive per draw in this run: `EB7221B1AAA62B09` at 2.9 ms, `0FA48AD390D6CBB9` at
 3.6 ms and `0E809EDDFB5D4D0D` at 1.3 ms. `capglsl/` from a capture holds GLSL under these keys,
 so capturing a heavy frame can identify them.
+
+## Run 5: warm session with captures
+
+About 5 minutes on `0.0.12-log3`, 2 save commits, no `crash.log`. The tester reported no
+visual or audio faults so far. Merging: 14 of 15 sampled heavy frames.
+
+Shader holds settled as expected: **1 hold and 0.6 s**, against 35 and 23.9 s on the cold run.
+Excluding the first 120 s, FPS by recorded draws was 26.9 (300-800), 21.9 (800-1300) and
+17.6 (1300-1800). The sample is short and has a different mix of scenes.
+
+Captures took **66 s and 72 s**. The replay itself took 12-15 s, consistent with about 700 KB
+of draw log in a small stdio buffer, and the rest went to reading back and writing about 30
+PNG targets. `0.0.12-log4` makes the combo write only the screenshot, draw log and GLSL, moves
+targets behind `LSWTCS_CAPRES=1` and uses larger stdio buffers. The gain is not yet measured.
+Logs and captures now go to `sdmc:/lswtcs/logs/<date_time>/`.
+
+The two screenshots look correct, and the normal-buffer composite shows no seam at the tile
+rows. That is one frame of evidence for merging, not a general proof.
+
+Shaders identified by capture: `0FA48AD390D6CBB9` is a full-screen grid (10,800 indices) reading
+the 1280x704 scene, a 160x88 target and more. `EB7221B1AAA62B09` is a 640x704 half-resolution
+pass with 4 texture fetches and a loop, run twice. Both look like post-processing, which is an
+inference from their inputs. Together they cost about 9 ms per frame.
+
+A next candidate is per-pixel work on fetch constants: each fetch re-derives LOD bias, offset
+and exponent with `bitfieldExtract` although they are constant for a draw.
+
+The GPU sample at replay 1800 (980 ms, right after a level load) is excluded from cost rankings.

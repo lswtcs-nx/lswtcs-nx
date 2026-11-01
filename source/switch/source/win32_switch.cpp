@@ -544,9 +544,10 @@ DWORD WINAPI nx_xinput_get_state(DWORD slot, void* out) {
         {HidNpadButton_A, 0x2000}, {HidNpadButton_B, 0x1000}, {HidNpadButton_X, 0x8000},
         {HidNpadButton_Y, 0x4000}};
     for (auto& m : kMap) if (b & m.nx) st.buttons |= m.xi;
-    // Capture combo (LSWTCS_CAPCOMBO, default on): hold ZL + ZR and click the right stick -> screenshot +
-    // per-draw [GLDRAWCAP] log in stdout.log (shot_now) + every resolve/render target as PNG (resdump_now), for
-    // glitches that are on screen only briefly (cutscenes). Files land in sdmc:/lswtcs. At most once per 3 s.
+    // Capture combo (LSWTCS_CAPCOMBO, default on): hold ZL + ZR and click the right stick -> screenshot, per-draw
+    // [GLDRAWCAP] log in stdout.log and the frame's GLSL (shot_now), for glitches that are on screen only briefly
+    // (cutscenes). LSWTCS_CAPRES=1 also writes every resolve/render target as PNG (resdump_now), about a minute on
+    // the SD card. Files land in the session's log folder. At most once per 3 s.
     {
         static const bool combo_on = [] { const char* e = getenv("LSWTCS_CAPCOMBO"); return !(e && e[0] == '0'); }();
         static u64 last_ns = 0;
@@ -554,7 +555,9 @@ DWORD WINAPI nx_xinput_get_state(DWORD slot, void* out) {
         const u64 now_ns = armTicksToNs(armGetSystemTick());
         if (combo_on && (b & want) == want && now_ns - last_ns > 3000000000ull) {
             last_ns = now_ns;
-            for (const char* n : {"shot_now", "resdump_now"}) if (FILE* t = fopen(n, "wb")) fclose(t);
+            static const bool targets = [] { const char* e = getenv("LSWTCS_CAPRES"); return e && e[0] == '1'; }();
+            if (FILE* t = fopen("shot_now", "wb")) fclose(t);
+            if (targets) if (FILE* t = fopen("resdump_now", "wb")) fclose(t);
             printf("[CAPCOMBO] capture requested (ZL+ZR+R-stick)\n");
             fflush(stdout);
             lsw_ft_ring_dump();

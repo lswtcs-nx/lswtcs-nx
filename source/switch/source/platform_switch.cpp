@@ -12,6 +12,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <cstdint>
+#include <ctime>
 #include <chrono>
 #include <condition_variable>
 #include <mutex>
@@ -33,6 +34,7 @@ extern int lsw_runtime_main();
 namespace {
 FILE* g_stdout_log;
 uint64_t g_run_id;
+char g_log_dir[48] = ".";   // this session's folder, relative to LSW_DATA_DIR
 
 uint64_t info_u64(uint32_t id) { uint64_t v = 0; svcGetInfo(&v, id, CUR_PROCESS_HANDLE, 0); return v; }
 
@@ -217,11 +219,17 @@ extern "C" int __wrap_thrd_create(void* thr, int (*func)(void*), void* arg) {
 // unrelocated symbol). Symbolize with: aarch64-none-elf-addr2line -fCe switch/build/lswtcs.elf <offset>
 extern "C" void _start();
 #define __start__ (*(char*)_start)
+extern "C" void lsw_log_path(char* out, size_t capacity, const char* name) {
+    snprintf(out, capacity, "%s/%s", g_log_dir, name);
+}
+
 alignas(16) u8 __nx_exception_stack[0x10000];
 u64 __nx_exception_stack_size = sizeof(__nx_exception_stack);
 extern "C" void __libnx_exception_handler(ThreadExceptionDump* ctx) {
     const u64 b = (u64)&__start__;
-    FILE* f = fopen(LSW_DATA_DIR "/crash.log", "w");
+    char crash_path[96];
+    lsw_log_path(crash_path, sizeof crash_path, "crash.log");
+    FILE* f = fopen(crash_path, "w");
     FILE* outs[2] = {f, stdout};
     for (FILE* o : outs) {
         if (!o) continue;
@@ -338,22 +346,26 @@ extern "C" void lsw_malloc_lock_stats(uint64_t* wait_ns, uint64_t* contended, ui
 extern "C" bool lsw_switch_init() {
     mkdir(LSW_DATA_DIR, 0777);
     chdir(LSW_DATA_DIR);
-    // The previous session's logs are kept as *_prev.log (a relaunch used to overwrite them before they were read:
-    // the [FTRING] of a camera capture was lost, 2026-10-09). Capture triggers left by a session that ended
-    // mid-capture are dropped, or the first frame of this one is captured (a black shot_1.png).
-    for (const char* n : {"stdout", "trace", "frames", "stderr", "crash", "bocheck"}) {
-        char cur[32], prev[32];
-        snprintf(cur, sizeof cur, "%s.log", n);
-        snprintf(prev, sizeof prev, "%s_prev.log", n);
-        remove(prev);
-        rename(cur, prev);
-    }
+    g_run_id = armGetSystemTick();
+    // Every session logs into its own logs/<date_time> folder, so a relaunch overwrites nothing. Capture triggers
+    // left by a session that ended mid-capture are dropped, or the first frame of this one is captured (a black
+    // shot_1.png).
+    mkdir("logs", 0777);
+    const time_t session_time = time(nullptr);
+    const tm* local = localtime(&session_time);
+    if (local && local->tm_year >= 120) strftime(g_log_dir, sizeof g_log_dir, "logs/%Y-%m-%d_%H-%M-%S", local);
+    else snprintf(g_log_dir, sizeof g_log_dir, "logs/run_%016llX", (unsigned long long)g_run_id);
+    mkdir(g_log_dir, 0777);
     remove("shot_now");
     remove("resdump_now");
-    // stdout/stderr -> log file (printf is the runtime's main log; dbg_ram writes trace.log).
-    g_stdout_log = freopen(LSW_DATA_DIR "/stdout.log", "w", stdout);
-    freopen(LSW_DATA_DIR "/stderr.log", "w", stderr);
-    g_run_id = armGetSystemTick();
+    // stdout/stderr -> log file (printf is the runtime's main log). A 1 KB default buffer meant one SD write per
+    // 1 KB of log on the thread printing it: a capture's 700 KB draw log took 12-15 s.
+    char log_path[96];
+    lsw_log_path(log_path, sizeof log_path, "stdout.log");
+    g_stdout_log = freopen(log_path, "w", stdout);
+    if (g_stdout_log) setvbuf(g_stdout_log, nullptr, _IOFBF, 64 * 1024);
+    lsw_log_path(log_path, sizeof log_path, "stderr.log");
+    freopen(log_path, "w", stderr);
     printf("[NX] LSWTCS Switch runtime\n");
     printf("[NX] run=%016llX\n", (unsigned long long)g_run_id);
     printf("[NX] TotalMemory %llu MB, UsedMemory %llu MB at start\n",

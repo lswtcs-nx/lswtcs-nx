@@ -1,0 +1,1199 @@
+{
+  "snapshot": "tcs360-collaborator-20261101",
+  "date": "2026-11-01",
+  "last_development_checkpoint": "2026-10-26",
+  "latest_candidate": "0.0.12",
+  "generated_game_tree_or_binaries_included": false,
+  "files": [
+    {
+      "path": ".gitignore",
+      "bytes": 454,
+      "sha256": "5c013c9f4d9a7675bd95952d6b33fbad241a530a9affaaf375e7e33294b04adb"
+    },
+    {
+      "path": "AGENTS.md",
+      "bytes": 2566,
+      "sha256": "f5568ec903410b8fe230755a1c7bafcbd6daabb3ad761939a937ada6721a2a23"
+    },
+    {
+      "path": "CLAUDE.md",
+      "bytes": 330,
+      "sha256": "f95a4a21290e9717f8dbb5033cc8f5b2b9f8e156ce67fc856933874fe9345653"
+    },
+    {
+      "path": "docs/ARCHITECTURE.md",
+      "bytes": 5386,
+      "sha256": "47ae949319c703ac841610636be8d7ecb047b846634c62bb2bd0ba4b36190a26"
+    },
+    {
+      "path": "docs/BUILDING.md",
+      "bytes": 9652,
+      "sha256": "fa8b5038ea287a4453cec854ab7a45bd2882babf493c92f1c9ab89efe6b2c836"
+    },
+    {
+      "path": "docs/COLLABORATING.md",
+      "bytes": 3070,
+      "sha256": "2b2b7865f32ba47cc01b1460ada5be1374aa564da02c816dae51b20289d573d5"
+    },
+    {
+      "path": "docs/CURRENT_STATUS.md",
+      "bytes": 4698,
+      "sha256": "99b00b6bbeb9f79300d2c69113026539bcd03b2ba648cd8f05cc1b4edd0f0406"
+    },
+    {
+      "path": "docs/FIRST_TASK.md",
+      "bytes": 3660,
+      "sha256": "6f9a1a27ef6a90def6c0585da323572b5a8e1365661af90e3353b858671db553"
+    },
+    {
+      "path": "docs/ISSUES.md",
+      "bytes": 4743,
+      "sha256": "b556ac42b090cf58de0352c11b7ead6074b2699103d0f10412fd6ae4171eaeec"
+    },
+    {
+      "path": "docs/NEXT_SESSION.md",
+      "bytes": 6532,
+      "sha256": "d38fdd793c6470e559aa7fd3edfe290481ce2861a38547e5cb0e1ad2559f282a"
+    },
+    {
+      "path": "docs/RENDERER_DECISION.md",
+      "bytes": 2399,
+      "sha256": "ef907356b618d786632eafe8c376daf68c1718528cc1ff5b0edf4cc0c0106f3f"
+    },
+    {
+      "path": "docs/TCS360_CURRENT_BACKLOG.md",
+      "bytes": 5703,
+      "sha256": "da2d1347fda18210710acfa24fbe24e8b4a1752f11326e2501a27ac82b3e49a6"
+    },
+    {
+      "path": "docs/TCS360_DEKO_IMPLEMENTATION_PLAN.md",
+      "bytes": 42772,
+      "sha256": "fda023a5a82f67d177493d9edc5c7cd8c2afb9e869b632cbfcb7bdff83a8f150"
+    },
+    {
+      "path": "docs/TCS360_MESA_REFERENCE_REVIEW.md",
+      "bytes": 22162,
+      "sha256": "f29c0868ef541dd46037efc38b43d861e2a50795ac2efca425d357b40d793d62"
+    },
+    {
+      "path": "docs/VALIDATION.md",
+      "bytes": 2416,
+      "sha256": "8a4ae2f1f3f67ed57ceabbe87a7fa50b6af4bc05a8d98eb9063e79cb6384d225"
+    },
+    {
+      "path": "DRAFT_MESSAGE.md",
+      "bytes": 1289,
+      "sha256": "460b1d54f6e72b69f72b1a9eef4a62905635406696645b21aafea3e57211427f"
+    },
+    {
+      "path": "evidence/bo-observation-review.json",
+      "bytes": 1449,
+      "sha256": "096871ba419129bc66bf150bca3e5203c0f33cfbd6451b034fab07b8ec150701"
+    },
+    {
+      "path": "evidence/mesa011-summary.json",
+      "bytes": 596,
+      "sha256": "ff14854df952faca6bcc06520aa092664615bbbadea595fb0265b7c390a422fe"
+    },
+    {
+      "path": "evidence/mesa012-local-checks.json",
+      "bytes": 2289,
+      "sha256": "8b61b51398e96f3bcbabdc07cbc3655b75418e6960408d1ea0095c024f2340cf"
+    },
+    {
+      "path": "evidence/mesa012-summary.json",
+      "bytes": 2125,
+      "sha256": "d4bc7259a0749613ecf9097adde4c59eb0a9b7982d635b5fb28d04508b9d39c2"
+    },
+    {
+      "path": "notices/FFmpeg/COPYING.GPLv2",
+      "bytes": 18092,
+      "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+    },
+    {
+      "path": "notices/FFmpeg/COPYING.GPLv3",
+      "bytes": 35147,
+      "sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903"
+    },
+    {
+      "path": "notices/FFmpeg/COPYING.LGPLv2.1",
+      "bytes": 26517,
+      "sha256": "246041b6ecf9bc32d718a62c57877c78b5eb397b6467e74ed7ae2626ab189c30"
+    },
+    {
+      "path": "notices/FFmpeg/COPYING.LGPLv3",
+      "bytes": 7651,
+      "sha256": "da7eabb7bafdf7d3ae5e9f223aa5bdc1eece45ac569dc21b3b037520b4464768"
+    },
+    {
+      "path": "notices/README.md",
+      "bytes": 1447,
+      "sha256": "1b6132bd8ea6b82df9f95ea09429b7dc1f37eea8f022bcd51a81e2f3cc9f6412"
+    },
+    {
+      "path": "notices/SIMDe/COPYING",
+      "bytes": 1077,
+      "sha256": "75ce0a8c5a7bff42fbd6f8f3b469b518132132c4f4948fb8d02b1ccb5d0df9d8"
+    },
+    {
+      "path": "notices/SPIRV-Cross/LICENSE",
+      "bytes": 11358,
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+    },
+    {
+      "path": "notices/xenia-canary/LICENSE",
+      "bytes": 1481,
+      "sha256": "369ea6b0f7ba57544067e9d470ca82a927da787fb0a749b11cb55f1fd0ba47ae"
+    },
+    {
+      "path": "notices/XenonRecomp/LICENSE.md",
+      "bytes": 1089,
+      "sha256": "bcb33ae2cbc6c0f2818712d806112e774e684fce01ce80573f92adf80b7487f4"
+    },
+    {
+      "path": "notices/xxHash/LICENSE",
+      "bytes": 1389,
+      "sha256": "6ffedbc0f7878612d2b23589f1ff2ab15633e1df7963a5d9fc750ec5500c7e7a"
+    },
+    {
+      "path": "profiles/hardware-B.env",
+      "bytes": 1339,
+      "sha256": "6f1cf4fce359b8d60062eec95c0799e0fdafc72f709082c49d1a1c066efe3f6f"
+    },
+    {
+      "path": "provenance/dependencies.json",
+      "bytes": 2345,
+      "sha256": "d048554a9b20ebc17e053aab962b82bb40ea402d7fc296cc3f317e0a151c29be"
+    },
+    {
+      "path": "provenance/expected-inputs.json",
+      "bytes": 793,
+      "sha256": "675e194c1e771b5d08f576f7bcca4d7c6cc9d89d0d593d32d9d8570d990b7985"
+    },
+    {
+      "path": "provenance/exported-source.json",
+      "bytes": 72403,
+      "sha256": "ef5401fc7d3750d68811c10a245e99bf2429625fc8238b3fbf1a08b2035b5978"
+    },
+    {
+      "path": "provenance/folded-generation-baseline.json",
+      "bytes": 708065,
+      "sha256": "327b8e319e5092fe221d0e5f76ce3b48aa6a7e8357534ab5b2c5bcf496b8f262"
+    },
+    {
+      "path": "provenance/generated-output-target.json",
+      "bytes": 708718,
+      "sha256": "0efae878127f922a6c80b44f8bfab2fe04f1f12ea87f8097c61a86fb0bd21131"
+    },
+    {
+      "path": "provenance/generator-reference.patch",
+      "bytes": 857,
+      "sha256": "d2562d33b726e48aece83f48c44dd9d8ce07566344a82178e3bb4d41da6b371a"
+    },
+    {
+      "path": "provenance/project-state.json",
+      "bytes": 1003,
+      "sha256": "601da6d25bb9bba6211fa7490fd6cb5ca97df940dba46fa426f73fc494c81fb3"
+    },
+    {
+      "path": "provenance/UPSTREAM_README.md",
+      "bytes": 1759,
+      "sha256": "a8420df3993c0d43dd6aec06dc5f1a66c445faf9e3b8257228d90ebbca16d969"
+    },
+    {
+      "path": "provenance/xenia-canary-gitmodules.txt",
+      "bytes": 3993,
+      "sha256": "e42348a5c028d23de541b29a9de597b391b70548cfd1e0231a845d6890eff073"
+    },
+    {
+      "path": "provenance/xenia-canary-submodules.json",
+      "bytes": 3501,
+      "sha256": "e5c98017c62424aed077a50b0f39608510a8071586bb8b8b27db671a0cf0ab2f"
+    },
+    {
+      "path": "provenance/XenonRecomp-gitmodules.txt",
+      "bytes": 651,
+      "sha256": "0db42edac2c53638497f65f4b522e5b42b6b91fa9d8739bfdaf53752f51c02c9"
+    },
+    {
+      "path": "provenance/XenonRecomp-submodules.json",
+      "bytes": 606,
+      "sha256": "ecc24d3c0f53a202e4fd5a56c4d38d71633654809dbd8f6ce837e18a077c86e1"
+    },
+    {
+      "path": "README.md",
+      "bytes": 4070,
+      "sha256": "dc197a3fbfee5b1c7c7e7ab927aac016621c0c759ab8ae57fa97603ad904c21e"
+    },
+    {
+      "path": "reference-source/libdrm-nouveau/nouveau.c",
+      "bytes": 12204,
+      "sha256": "ece1e4301d7bdc7b8c32a58727ff4c84dbd4d16bfa2bb2203012913b369cb8a1"
+    },
+    {
+      "path": "reference-source/libdrm-nouveau/nouveau.h",
+      "bytes": 7741,
+      "sha256": "ebb8682e9333f20789860e37cac57b52e0b0b9c4d74c063598ad1c91ef80d7ec"
+    },
+    {
+      "path": "reference-source/libdrm-nouveau/private.h",
+      "bytes": 1715,
+      "sha256": "21db6949da33a887de7cd3b637777326c7926dba990963d0e698f29719a9e372"
+    },
+    {
+      "path": "reference-source/libdrm-nouveau/pushbuf.c",
+      "bytes": 18402,
+      "sha256": "fd3e827dcb710cb7293f589dc1f24f71b21f487156d2cfbc9a9852e6b70fb871"
+    },
+    {
+      "path": "reference-source/libdrm-nouveau/sources.json",
+      "bytes": 638,
+      "sha256": "4c7d60c58c5d022d175dfb54aeb9937d652a22bd6a37e46601a67cdc0018343e"
+    },
+    {
+      "path": "source/Convert 360/LSWTCS/GUARD_sub_826937F8_emptylist.patch.txt",
+      "bytes": 2607,
+      "sha256": "a5857fcf171ff64f5d8bded20e36f0dba248feace90fbad6d68500c7c02f42f6"
+    },
+    {
+      "path": "source/Convert 360/LSWTCS/lswtcs.toml",
+      "bytes": 363,
+      "sha256": "c360d189566d867ecb1cb0a1c2a8b762e268fdbb7f4bd13acec6cdf093ece9e2"
+    },
+    {
+      "path": "source/Convert 360/LSWTCS/lswtcs_baseline.toml",
+      "bytes": 372,
+      "sha256": "b85e49a49cf637cf29b4862957af560c3d844eb961ba916e8bf48a1b0263fd68"
+    },
+    {
+      "path": "source/Convert 360/LSWTCS/lswtcs_locals.toml",
+      "bytes": 533,
+      "sha256": "7e41de336e8c8396582c34b177ef33c90854f74835e7f7f9dd45e869ef8a5554"
+    },
+    {
+      "path": "source/Convert 360/LSWTCS/lswtcs_ref.toml",
+      "bytes": 368,
+      "sha256": "b4d8ffd0a6ebb1737867c79e077903ca592a65b2fce3c0c46ca4a026204e8227"
+    },
+    {
+      "path": "source/Convert 360/LSWTCS/switches.toml",
+      "bytes": 154909,
+      "sha256": "8135105f751597011b4133c6bd675c0638b6e11a041bd4f6240521b2cc33cc91"
+    },
+    {
+      "path": "source/LICENSE",
+      "bytes": 15113,
+      "sha256": "0956db52d8d3ce2633eadb0aaa29918f3245d69f6056d4a8fd7d61cb8f639c78"
+    },
+    {
+      "path": "source/LSWTCSRuntime/CMakeLists.txt",
+      "bytes": 7016,
+      "sha256": "182e04730f5efcb518ab65cab6bd7681b7ee566b973c2632d6549a8cefa02b74"
+    },
+    {
+      "path": "source/LSWTCSRuntime/ffmpeg_sources.cmake",
+      "bytes": 7228,
+      "sha256": "a676a2f313e2908f7c2343274a39b24b626f1fc3832e2204e2ac67bb856e322e"
+    },
+    {
+      "path": "source/LSWTCSRuntime/include/lsw_frame_capture.h",
+      "bytes": 2899,
+      "sha256": "96addb5734eadd58fbe83f433500dfe9be014445f94890571873c36769a6a762"
+    },
+    {
+      "path": "source/LSWTCSRuntime/include/lsw_frame_capture_fragments.inc",
+      "bytes": 7442,
+      "sha256": "9484b0416dfb35d74d30722b11a1411ba7c00ac47c9d5f8d70ec6b74e981a8bc"
+    },
+    {
+      "path": "source/LSWTCSRuntime/include/lsw_frame_capture_gpu.inc",
+      "bytes": 11832,
+      "sha256": "42589075ffbe870fb7bd759385eff04e2b52b7e4e2df11caf2dc3e69aa2343c8"
+    },
+    {
+      "path": "source/LSWTCSRuntime/include/lsw_frame_capture_vertices.inc",
+      "bytes": 7911,
+      "sha256": "296c0b9231c1e79eb869dd01225164db2848a17c93cfe99fa6ab5a3f0ad50f3c"
+    },
+    {
+      "path": "source/LSWTCSRuntime/include/lsw_frame_capture_writer.inc",
+      "bytes": 9761,
+      "sha256": "d2cbafa31e7e662ae42a9ef4405ab2a4c8674fe8d311b8c46e788fc0f3b4174a"
+    },
+    {
+      "path": "source/LSWTCSRuntime/include/lsw_gpu_bridge.h",
+      "bytes": 6027,
+      "sha256": "70dcef690611262843891220d1e690abe5357d8a5861de541ba73968cb0c722d"
+    },
+    {
+      "path": "source/LSWTCSRuntime/include/lsw_gpu_frame.h",
+      "bytes": 12836,
+      "sha256": "2dc1b3b932488c327c9df3fb5ec64f7bc3f73d70112d5eb58356a6e938ba774a"
+    },
+    {
+      "path": "source/LSWTCSRuntime/include/lsw_gpu_input_check.h",
+      "bytes": 4566,
+      "sha256": "4049cdf592b1922e8c99b74c7f7a834a58f54017db5c12490f1443e6098e9e33"
+    },
+    {
+      "path": "source/LSWTCSRuntime/include/lsw_gpu_swap.h",
+      "bytes": 647,
+      "sha256": "ac69ce9dd7c8436fc0825c951f1a19a3e2663f499c8129759e0f2c8012df0d0c"
+    },
+    {
+      "path": "source/LSWTCSRuntime/include/lsw_gpu_texture_layout.h",
+      "bytes": 1371,
+      "sha256": "f61fc82eb6435dc4175459ba93b4aaab59fd8f0d3706ed7f94ea113377d14f3a"
+    },
+    {
+      "path": "source/LSWTCSRuntime/include/lsw_gpu_texture_layout.inc",
+      "bytes": 7598,
+      "sha256": "9a1c0c145f2f97ef181f7a0445dd1f2e6d50c1ad13aa868410b6f4fb725141b0"
+    },
+    {
+      "path": "source/LSWTCSRuntime/include/lsw_guest_host_lock.h",
+      "bytes": 543,
+      "sha256": "a8a04913bf2a91add92bdefcb7f89d3e75934726aa2834ff3fd229df2e0f9a93"
+    },
+    {
+      "path": "source/LSWTCSRuntime/include/lsw_guest_layout.h",
+      "bytes": 781,
+      "sha256": "e8a929d1d50ea01d0eb7f3712ac3fabb0e6732755fbfb4f470d6b0f5426bccc5"
+    },
+    {
+      "path": "source/LSWTCSRuntime/include/lsw_guest_memory_access.h",
+      "bytes": 6841,
+      "sha256": "3cfc96f875f0e2fa179de4f0d845acd9adc2760da27d2186c067d09dbf53e28f"
+    },
+    {
+      "path": "source/LSWTCSRuntime/include/lsw_guest_memory_ppc.h",
+      "bytes": 2989,
+      "sha256": "64d1a15e5116bc31b5bee877a051fe8ce10c6fbc0e0001bf686c1b149a22d267"
+    },
+    {
+      "path": "source/LSWTCSRuntime/include/lsw_kernel_variables.h",
+      "bytes": 4696,
+      "sha256": "cca1384cee7c16da1b3d412713241f8fe2242eaeaa404e6c74ff28d5dc3bbd05"
+    },
+    {
+      "path": "source/LSWTCSRuntime/include/lsw_menu_policy.h",
+      "bytes": 499,
+      "sha256": "2909afbea3e77e96b081e304f1c91c4ae011be6320814d75d647ddf4e7c29f23"
+    },
+    {
+      "path": "source/LSWTCSRuntime/include/lsw_save_platform.h",
+      "bytes": 1597,
+      "sha256": "8ee14c32c68ef8ef5618a62f83cdbe2306f5f60700be61b614287dfc9e5cde1c"
+    },
+    {
+      "path": "source/LSWTCSRuntime/include/xe_types.h",
+      "bytes": 824,
+      "sha256": "663649a610f786501288162ab8f3874cc8b9982fcd50ccfbcc3a885b8a2dc7d2"
+    },
+    {
+      "path": "source/LSWTCSRuntime/include/xenos_vs.h",
+      "bytes": 1890,
+      "sha256": "6bdd26a00f8f44665c472a8bb85157a76863fafc4654a5767bfed7fc1126f34f"
+    },
+    {
+      "path": "source/LSWTCSRuntime/source/gpu_d3d12.cpp",
+      "bytes": 64328,
+      "sha256": "82a554a5bf5bdb40d420eb9cb16dcea27c614695fe6f9aaeec0cc5cfbed3acab"
+    },
+    {
+      "path": "source/LSWTCSRuntime/source/gpu_d3d12.h",
+      "bytes": 743,
+      "sha256": "21573314b7df603aacc988bd7dcd440ed885c6508dbd64eb3cecf6bcaf5ba8ef"
+    },
+    {
+      "path": "source/LSWTCSRuntime/source/gpu_ringbuf.cpp",
+      "bytes": 2034,
+      "sha256": "03ba274040f1ae8794cc34992a0e076299116247a3e44c5e92b1e93747e3b3df"
+    },
+    {
+      "path": "source/LSWTCSRuntime/source/gpu_ringbuf.h",
+      "bytes": 1192,
+      "sha256": "47f54fc7da49d66e8a2d19c49334b3c592551bb11c5949963d1726b4c3b4ae74"
+    },
+    {
+      "path": "source/LSWTCSRuntime/source/gpu_xedraw.inc",
+      "bytes": 106745,
+      "sha256": "8e8857d08ecc7a84a13733a4bd2e75c6c6146aeecefd878c9f3a630aa1095bcd"
+    },
+    {
+      "path": "source/LSWTCSRuntime/source/host_audio.cpp",
+      "bytes": 7111,
+      "sha256": "359a23d896bc7327af0a8f73851ebdab1b2a961ef5aeee8531cc0025521de486"
+    },
+    {
+      "path": "source/LSWTCSRuntime/source/kernel_stubs.cpp",
+      "bytes": 470810,
+      "sha256": "8aae82e8500938e5428de8ebde299fda0025de35130b920e3559066ad228f2a9"
+    },
+    {
+      "path": "source/LSWTCSRuntime/source/lsw_net.inc",
+      "bytes": 92803,
+      "sha256": "1cd08c1fa65eb763b29d69f0841c565304675fdde3f5a7a6a153ed43f357abd2"
+    },
+    {
+      "path": "source/LSWTCSRuntime/source/lsw_net_host.cpp",
+      "bytes": 11556,
+      "sha256": "680315b19934e0f8aa68ed2497f9f7084f9384f8e807c68febdb35458aee4307"
+    },
+    {
+      "path": "source/LSWTCSRuntime/source/lsw_save_regression.inc",
+      "bytes": 6167,
+      "sha256": "1f12dbce9a8929a4fc1dfff84ada69137c77d7d42234f307c569dfd47e440bc7"
+    },
+    {
+      "path": "source/LSWTCSRuntime/source/main.cpp",
+      "bytes": 100711,
+      "sha256": "c73f4767adac824d177dc184eed8dcccebf804b832eeedace7ff29938210bb0e"
+    },
+    {
+      "path": "source/LSWTCSRuntime/source/menu_switch.cpp",
+      "bytes": 3076,
+      "sha256": "64e7b1bec029ebe372b921b994e449fa3b36fe85fad2f7b4fab0b659da985fc9"
+    },
+    {
+      "path": "source/LSWTCSRuntime/source/native_crt.cpp",
+      "bytes": 10988,
+      "sha256": "3ac9a655fce9a8b0b5f5870fbde408c9887bd4f4434a9dc41a1ee0740df41d26"
+    },
+    {
+      "path": "source/LSWTCSRuntime/source/native_lz2k.cpp",
+      "bytes": 23965,
+      "sha256": "b9b9e009d5a4a8cd680ffcd2ac2d911786c0f8c20d471df6cad14e83b437781d"
+    },
+    {
+      "path": "source/LSWTCSRuntime/source/native_reverb.cpp",
+      "bytes": 24821,
+      "sha256": "808e4802b503327fe6b14903c053b90463d794e70d9eef7461ca2a70e2e45701"
+    },
+    {
+      "path": "source/LSWTCSRuntime/source/renderdoc_app.h",
+      "bytes": 36480,
+      "sha256": "b7005e7dc34c3635046868bbd76d81b9b055aede0f56daa0bd39fedee0639ffb"
+    },
+    {
+      "path": "source/LSWTCSRuntime/xenos/shim/lsw_xenia_compat.h",
+      "bytes": 484,
+      "sha256": "39e5f3c29d363805097e2bdea505dca6817e5a2a153a9972c70bf8278feda798"
+    },
+    {
+      "path": "source/LSWTCSRuntime/xenos/shim/xenia/gpu/shader.h",
+      "bytes": 899,
+      "sha256": "79ded3a21734afdbd750c44616c3978cc4b1e3c628da59505325987de987df6a"
+    },
+    {
+      "path": "source/LSWTCSRuntime/xenos/shim/xenia/gpu/trace_writer.h",
+      "bytes": 423,
+      "sha256": "3b8fc656289f4c79719fdd3be72b10197df999bc0ecd8b38c66d1ff342bea192"
+    },
+    {
+      "path": "source/LSWTCSRuntime/xenos/shim/xenia/memory.h",
+      "bytes": 1068,
+      "sha256": "1e0a9f485936f3c560291a118ae85b0734bc3ecad7c6d93eb54776176fcc2abb"
+    },
+    {
+      "path": "source/LSWTCSRuntime/xenos/xenos_glue.cpp",
+      "bytes": 8901,
+      "sha256": "6e62b25ef0755a43111c704e9740b96a0a07e9c805ab3625c1f9a69a837e2831"
+    },
+    {
+      "path": "source/LSWTCSRuntime/xenos_dxbc/lsw_dxbc_stubs.cc",
+      "bytes": 1855,
+      "sha256": "e9bd809f66cfe4794457c766f9ca7cd74238776588ff601f7b03c58c360cf3c5"
+    },
+    {
+      "path": "source/LSWTCSRuntime/xenos_dxbc/lsw_gpu_bridge.cc",
+      "bytes": 22521,
+      "sha256": "47e5fc0cc290234f50dc1898f767c932f981ceb9c64bcd07e27b8f089fa40742"
+    },
+    {
+      "path": "source/LSWTCSRuntime/xenos_dxbc/lsw_gpu_gs.cc",
+      "bytes": 50787,
+      "sha256": "161b599e023aea7779907b861ac9d32d9ae6dbc9c302543a7c63eb9759345ed6"
+    },
+    {
+      "path": "source/LSWTCSRuntime/xenos_dxbc/lsw_gpu_texture.cc",
+      "bytes": 8324,
+      "sha256": "487c600ac7e0827b51e1ee13352761c70df30e514c306aa0f5f84d673b19dfe1"
+    },
+    {
+      "path": "source/LSWTCSRuntime/xenos_dxbc/shim/lsw_dxbc_compat.h",
+      "bytes": 268,
+      "sha256": "1cf28e5e9186ab23c90a95d44d9618c4ede26ff285753052c54859e1ecf515ab"
+    },
+    {
+      "path": "source/LSWTCSRuntime/xenos_dxbc/test/xlate_test.cc",
+      "bytes": 1712,
+      "sha256": "6871bc591aae17ead1ea57ce53525dd4df6e10075df65272e992a056c4181d2b"
+    },
+    {
+      "path": "source/LSWTCSRuntime/xma/lsw_xma.cc",
+      "bytes": 6854,
+      "sha256": "96c74c71ec3215addee593495e4151f9a93612c7dd76e1231f5eaa3b9ce1808d"
+    },
+    {
+      "path": "source/LSWTCSRuntime/xma/shim/xenia/apu/xma_decoder.h",
+      "bytes": 193,
+      "sha256": "1d12e2812b34cc67f6b99c2b8135345a4877d7dd025061a06f3954c81cd3c449"
+    },
+    {
+      "path": "source/LSWTCSRuntime/xma/shim/xenia/base/threading.h",
+      "bytes": 1483,
+      "sha256": "47d2a88f253e6e056e9b4c743af7bab521fe78cbe042f792a9e547cebec0d36a"
+    },
+    {
+      "path": "source/LSWTCSRuntime/xma/shim/xenia/memory.h",
+      "bytes": 1539,
+      "sha256": "7974fcfb612e6df4bbe3dc7ea110b2cebfa8336e68fb65e586145f1a848ee6b5"
+    },
+    {
+      "path": "source/patches/recomp_output_edits.patch",
+      "bytes": 18877583,
+      "sha256": "a0f8a33df47675cca92c95b9a33dcac30a2857fbca82163705f6cbbc977bc889"
+    },
+    {
+      "path": "source/patches/SPIRV-Cross.base",
+      "bytes": 41,
+      "sha256": "47ec82aec9b9cceb9b07c7b672da4d2f43426dd0f37009965526e82e08426eb7"
+    },
+    {
+      "path": "source/patches/xenia-canary.base",
+      "bytes": 41,
+      "sha256": "7cf8f2b412a089bd8ac0f0c3d1d81f2f2ec5d1bb75847db7f223093c14a198aa"
+    },
+    {
+      "path": "source/patches/xenia-canary.patch",
+      "bytes": 59525,
+      "sha256": "627aceab5d6ce42f6b8603ca578d10261aab0d1c1df8bde2787fe331c6c7cfa0"
+    },
+    {
+      "path": "source/patches/XenonRecomp.base",
+      "bytes": 41,
+      "sha256": "4cf2bd2f1a83e5d9776c1af13604d583b7304c151837a149b12ef2abf32899d0"
+    },
+    {
+      "path": "source/patches/XenonRecomp.patch",
+      "bytes": 6351,
+      "sha256": "c0adaf7f6901b85c9cdddb4f87f8cffda824449e017602e92d9b513d8fd3a7db"
+    },
+    {
+      "path": "source/README.md",
+      "bytes": 1247,
+      "sha256": "04db1c8c52cd7a4678b3f09ca30647bd673d92f4a271b632ec47d488925b71ce"
+    },
+    {
+      "path": "source/switch/CMakeLists.txt",
+      "bytes": 15703,
+      "sha256": "67bddde73775998ffb0b3565b53884ff555e116c16dfecd7173423522d9f1750"
+    },
+    {
+      "path": "source/switch/include/ffmpeg/config.h",
+      "bytes": 1216,
+      "sha256": "e176cfd3344d80c82aed39de92f5f98d12fc71e65989c972c98b5acdec27bdb1"
+    },
+    {
+      "path": "source/switch/include/linuxshim/linux/futex.h",
+      "bytes": 376,
+      "sha256": "60b0fd3b6e477868bee9a5f33a66cbe38108a86b70f9c5d5481840abc7d914cc"
+    },
+    {
+      "path": "source/switch/include/linuxshim/sys/syscall.h",
+      "bytes": 281,
+      "sha256": "051908a8652644c66d17e409e483108279305be14ab510f5168ef9103f948254"
+    },
+    {
+      "path": "source/switch/include/lsw_bo_check.h",
+      "bytes": 6376,
+      "sha256": "193edd09a676ee55ced6bcd815ca966bc4ef32e533e5519ca809ce3acf48f3cb"
+    },
+    {
+      "path": "source/switch/include/lsw_deko_draw.inc",
+      "bytes": 5391,
+      "sha256": "e889a8f39590e7d4f86def35d2edce59537cd3353f4744987a030000d5354513"
+    },
+    {
+      "path": "source/switch/include/lsw_deko_draw_extent.h",
+      "bytes": 4799,
+      "sha256": "9a269d76b1ad7118445970dd69e76dad512a0a395a4477ef33f819d8f02833c8"
+    },
+    {
+      "path": "source/switch/include/lsw_deko_edram.h",
+      "bytes": 8659,
+      "sha256": "139b00e24fe07c3167a458152ea8d63386e9559fed8eadc6c6ff617df59b31d1"
+    },
+    {
+      "path": "source/switch/include/lsw_deko_executor.h",
+      "bytes": 3625,
+      "sha256": "1cf509011ee07b4f066ee0e2870fccca8a541f02eb817948b3ddeb66c5f9c422"
+    },
+    {
+      "path": "source/switch/include/lsw_deko_frame_data.h",
+      "bytes": 1243,
+      "sha256": "ab0937fa1014085e99535e1207f2f42a76ab06f222529452e135ee6d437a237c"
+    },
+    {
+      "path": "source/switch/include/lsw_deko_frame_plan.h",
+      "bytes": 5229,
+      "sha256": "5c3709660e7f7161fcce90525188200fe810602ad478fded29f8e04ebc29de1e"
+    },
+    {
+      "path": "source/switch/include/lsw_deko_image_view.h",
+      "bytes": 358,
+      "sha256": "87dfa5ab57bbfd58aeb343da3fbf25f8e1d8fb66c47d8a65a781b534100dabec"
+    },
+    {
+      "path": "source/switch/include/lsw_deko_present.inc",
+      "bytes": 516,
+      "sha256": "42c8269d1e85b60a7cd6b6fd4fa9d28bb6ba63bf883a13d2dc6406f183f0e3ef"
+    },
+    {
+      "path": "source/switch/include/lsw_deko_record_textures.h",
+      "bytes": 9519,
+      "sha256": "c81b86d72f4e5d4d233546b41d473b26f46b1c29a22b2b2dc8e9fc080451bff9"
+    },
+    {
+      "path": "source/switch/include/lsw_deko_resolve_memory.h",
+      "bytes": 9214,
+      "sha256": "60b8dfb98557661e6d93801533d0574d8b54a83b1bca1454ed706c4af76d78eb"
+    },
+    {
+      "path": "source/switch/include/lsw_deko_resolve_plan.h",
+      "bytes": 4351,
+      "sha256": "08107d289d0041fee95dc8d81e1df15b536290da7c5b62bfbcf93909b90e70f5"
+    },
+    {
+      "path": "source/switch/include/lsw_deko_resource_owner.h",
+      "bytes": 8265,
+      "sha256": "877ec3bcd7cad3787d9be4b456e4b9db1fc80ca5d2ab08e7ed9079192d6535e1"
+    },
+    {
+      "path": "source/switch/include/lsw_deko_resources.h",
+      "bytes": 8193,
+      "sha256": "72fc2183202a502d511695fc2dc6efc0a1342cfcaa1b059decb04e734f370dd7"
+    },
+    {
+      "path": "source/switch/include/lsw_deko_shader_cache.h",
+      "bytes": 4024,
+      "sha256": "2bbcd5abfd500956601970b774bafcf1ab55582939ac3355d5e75de9691cc41a"
+    },
+    {
+      "path": "source/switch/include/lsw_deko_shader_cache_id.h",
+      "bytes": 171,
+      "sha256": "3a207f663a2882ce7b443d47faf08b0e8e98c919a13c0daa9005679895edf2eb"
+    },
+    {
+      "path": "source/switch/include/lsw_deko_submission.h",
+      "bytes": 1044,
+      "sha256": "6ee956fc3974dc399bdf0294f2221ff542ed74fd1f02a32ffaee5713ddcb7378"
+    },
+    {
+      "path": "source/switch/include/lsw_deko_texture_sources.h",
+      "bytes": 2987,
+      "sha256": "ed36ae72eac8d2435f1d922e34e38a946d2ca3973a1fd87031791ba471378f2f"
+    },
+    {
+      "path": "source/switch/include/lsw_deko_writeback_check.inc",
+      "bytes": 6890,
+      "sha256": "79909a46448c6cdcfbc42f75ddf8f1412d871008c773df8c3fa719a9abd53d96"
+    },
+    {
+      "path": "source/switch/include/lsw_gl_shader.h",
+      "bytes": 1680,
+      "sha256": "c41d7e85fc911e582f21a8097dc66172da6f5a22a19997b655afed101d998428"
+    },
+    {
+      "path": "source/switch/include/lsw_spirv_glsl.h",
+      "bytes": 2149,
+      "sha256": "110cfb1492e3d0f9d990871ca36bf4b6efe1aa3459c488126f5a320c6e800d4e"
+    },
+    {
+      "path": "source/switch/include/lsw_switch_compat.h",
+      "bytes": 1128,
+      "sha256": "4151a2ef210aa44b8e803e79eae9f53d890a26b0a92af728c81bbeb1458bac5b"
+    },
+    {
+      "path": "source/switch/include/spirvshim/xenia/ui/vulkan/vulkan_device.h",
+      "bytes": 1533,
+      "sha256": "ef17eb66922b6d6e55fda8b40eb95217fa071f52b6641ae36f36783359371ce6"
+    },
+    {
+      "path": "source/switch/include/win32/windows.h",
+      "bytes": 10337,
+      "sha256": "4194dc1b4a86b3944cebd3b5d9b02046995675c21ce951bea5bf400ee152a16d"
+    },
+    {
+      "path": "source/switch/mesa/mesa_cache_edits.py",
+      "bytes": 8698,
+      "sha256": "d6f62bc4c91bb3db0706f9fbddb5a4d5fab9e5bb76ea68193696f1b9e86e5405"
+    },
+    {
+      "path": "source/switch/mesa/mesa_cache_race_edits.py",
+      "bytes": 2470,
+      "sha256": "9837f82ecb65bfd7c5b7466387629ec6b03ffdf72bb533f70c89f3ec4bad1043"
+    },
+    {
+      "path": "source/switch/mesa/mesa_cbflush_edits.py",
+      "bytes": 5422,
+      "sha256": "67ceb034a9d6e5edc293df610fb4b8fe956b0018bfc8d4295c35164dd64435c6"
+    },
+    {
+      "path": "source/switch/mesa/mesa_egl_share_edits.py",
+      "bytes": 1492,
+      "sha256": "522ddad73aa140d84d0188d51e166a163ca8db1cdacbf4df0485192a881fb265"
+    },
+    {
+      "path": "source/switch/mesa/mesa_fmz_edits.py",
+      "bytes": 2008,
+      "sha256": "b7c94cd74f951ed7ba2822f8e4266451e4364a7490ac361618fc3d74794019bc"
+    },
+    {
+      "path": "source/switch/mesa/mesa_glthread_edits.py",
+      "bytes": 10538,
+      "sha256": "216585dce9406adc26369660bb966ab308e993d28527b47a533a275edb1f970f"
+    },
+    {
+      "path": "source/switch/mesa/mesa_nir_edits.py",
+      "bytes": 1276,
+      "sha256": "4623073a2c297c34e10b9c19bc028cb756641813bfdb76869fc6ce106248e7a5"
+    },
+    {
+      "path": "source/switch/mesa/mesa_pushbuf_edits.py",
+      "bytes": 1889,
+      "sha256": "f102d094657bb00738727223f7ad86881a21b12b01086a70d85cd5cfb2dadb8e"
+    },
+    {
+      "path": "source/switch/source/audio_switch.cpp",
+      "bytes": 11261,
+      "sha256": "5df4c3d1e3f21643368397b3973903ebab05d99229a1a20e2810c06464c7c941"
+    },
+    {
+      "path": "source/switch/source/bo_check.cpp",
+      "bytes": 12898,
+      "sha256": "9e57ae86cac6b0e42b0d25280264768cbce9474b4d528b26337c92fe095b4f8c"
+    },
+    {
+      "path": "source/switch/source/deko_backend.cpp",
+      "bytes": 60369,
+      "sha256": "d723dec78d6bbc83deb05ddc1bf00b4a4e1e0d6249af200d68636b7ab9cc2eea"
+    },
+    {
+      "path": "source/switch/source/deko_draw_extent.cpp",
+      "bytes": 3284,
+      "sha256": "28b3ecab2cb2501744bd42a974adccc24f64d0afc60e909a973792e8c11fafbd"
+    },
+    {
+      "path": "source/switch/source/deko_resources.cpp",
+      "bytes": 2090,
+      "sha256": "bad9a1e54b148f6d47ccab9686000aa6fb09d495f8f223135f56e3c0504d42c1"
+    },
+    {
+      "path": "source/switch/source/gl_backend.cpp",
+      "bytes": 187514,
+      "sha256": "823fd36afd6279fba4d9fa3130c38ddb922a83a3f995944cab507a2d3db596c9"
+    },
+    {
+      "path": "source/switch/source/gl_bridge.cc",
+      "bytes": 35110,
+      "sha256": "1e97b3974b4082469889aa91244db0f3fa87c2ff374861c7979c67cb9c14f31a"
+    },
+    {
+      "path": "source/switch/source/gl_geometry.cc",
+      "bytes": 1910,
+      "sha256": "1659c93181a58f902a85b2e66050f4b870b4492096f216c96ba070d1b8cb58ad"
+    },
+    {
+      "path": "source/switch/source/gl_rt.inc",
+      "bytes": 30189,
+      "sha256": "b3d46ed3b898684700e62f53066007af08de55f20435c841773ab52b0de67aba"
+    },
+    {
+      "path": "source/switch/source/linux_shim.cpp",
+      "bytes": 1211,
+      "sha256": "248eaa51a7e55bf664bf48a14b1d9cf1d8af603440f0dedde9f3f294308c2859"
+    },
+    {
+      "path": "source/switch/source/lsw_spirv_glsl.cc",
+      "bytes": 11216,
+      "sha256": "55687cec57186a538cefd613109806cea60f50cda8451940f7ac6a455299a4b1"
+    },
+    {
+      "path": "source/switch/source/m0_main.cpp",
+      "bytes": 1892,
+      "sha256": "85ebc6e82069e27ca651a7109a58657192de859d07918e775e183098144887e9"
+    },
+    {
+      "path": "source/switch/source/mesa_shim.cpp",
+      "bytes": 1235,
+      "sha256": "6f185a9c1d2f0fb83e6afeaf498f1e22d69deab67439f388bb3112e68af2e5bb"
+    },
+    {
+      "path": "source/switch/source/null_backends.cpp",
+      "bytes": 653,
+      "sha256": "ef9b01b0065ac75184be61a60f88337a4ab2064b07f5a7e5203215f20e1c0027"
+    },
+    {
+      "path": "source/switch/source/platform_switch.cpp",
+      "bytes": 21659,
+      "sha256": "71dba9c7c142a741330693c61ef12f22c095e26181cadc2c03b24165efd336f3"
+    },
+    {
+      "path": "source/switch/source/save_switch.cpp",
+      "bytes": 4763,
+      "sha256": "5ec607867831e6684d30fbe7dc439a989b304bd9ddea8736c4a91165a5756f8a"
+    },
+    {
+      "path": "source/switch/source/win32_switch.cpp",
+      "bytes": 28731,
+      "sha256": "96392bc6e050f39819ff857c7dfb1189ef71b18bd33cd73dfa1a06504bc1fbc0"
+    },
+    {
+      "path": "source/switch/source/xe_gpu_stubs.cc",
+      "bytes": 763,
+      "sha256": "318c9e8f78a0eff282409437cf65603282f85fcf7ee656d09781d036aa51f73e"
+    },
+    {
+      "path": "source/switch/source/xe_stubs.cc",
+      "bytes": 659,
+      "sha256": "7ff80ffea72815c98ecb9634bfc88ed6d51245548fdcd81b27b5e973776634b2"
+    },
+    {
+      "path": "source/switch/third_party/rpmalloc/LICENSE",
+      "bytes": 2400,
+      "sha256": "992dc09524f6c215f1ae0ff7d26e8ce548b7212df65a09919dbafc98e2323b41"
+    },
+    {
+      "path": "source/switch/third_party/rpmalloc/rpmalloc.c",
+      "bytes": 130688,
+      "sha256": "5032b36c77ce9968ccf0c16f11ed4bd40424ae60ca0fbe652db0414af622c2bd"
+    },
+    {
+      "path": "source/switch/third_party/rpmalloc/rpmalloc.h",
+      "bytes": 18151,
+      "sha256": "a45bfebb3122146c23b564f510d8605d32e201789e4668ea1a054da1b36f8ab1"
+    },
+    {
+      "path": "source/switch/third_party/rpmalloc/rpmalloc_switch.c",
+      "bytes": 4030,
+      "sha256": "401ac6875b872a7fa428240e861bb2b09cb9230fe270858d0272e781b12e5549"
+    },
+    {
+      "path": "source/switch/third_party/rpmalloc/shim/sys/mman.h",
+      "bytes": 714,
+      "sha256": "6c06775e2262fbf0705d7958a752b3217cfd16a5071367b7ed21d3188b226f89"
+    },
+    {
+      "path": "source/switch/tools/build_mesa.sh",
+      "bytes": 2977,
+      "sha256": "fbe56f458aaa00c68ef1eaea261853027e8ecc59bc8a57842eb63b41f309bbbe"
+    },
+    {
+      "path": "source/switch/tools/compile_check.sh",
+      "bytes": 1176,
+      "sha256": "3893ba0cdc6049377a0087b4ba65aade17d6e8e9d272c2e62789db0ce72dffa0"
+    },
+    {
+      "path": "source/switch/tools/eden_ab.sh",
+      "bytes": 1455,
+      "sha256": "f9b8e0f1df96ebaf2caecd92042726e2c425899bd68c4af18c2cef05a18ac7ed"
+    },
+    {
+      "path": "source/switch/tools/eden_hub.sh",
+      "bytes": 1673,
+      "sha256": "ad1de82ed108e5d4f8074377ac9ce35cde70462591210790d12175d260e5f296"
+    },
+    {
+      "path": "source/switch/tools/eden_run.sh",
+      "bytes": 1073,
+      "sha256": "b715eaa56da5e1a806544076040820f90f493b2b9dee7927474eba616234049e"
+    },
+    {
+      "path": "source/switch/tools/extract_gs_body.cmake",
+      "bytes": 1170,
+      "sha256": "328350bda344ebd60283353e1a0f247f1d4df0cc08f3dc69cbd3085f69c2cb6a"
+    },
+    {
+      "path": "source/switch/tools/fold_recomp_output.py",
+      "bytes": 2144,
+      "sha256": "318e38953932dbcb1869b5a0c416fe2c1732d75848488271ed72f932398e438c"
+    },
+    {
+      "path": "source/switch/tools/glbench.sh",
+      "bytes": 1892,
+      "sha256": "99bd5806202657851ecf9e4323b7949cca6673337448cf6adf016683cf540520"
+    },
+    {
+      "path": "source/switch/tools/hub_to_negotiations.sh",
+      "bytes": 557,
+      "sha256": "b3f0cbd90f84a857c947cc2f2d371c6998f4043e444291aaf06bff55a44a46ba"
+    },
+    {
+      "path": "source/switch/tools/runtime_undef.sh",
+      "bytes": 1888,
+      "sha256": "c8fae8ad633dae60afe47d3259f07e0c75fe64571cfcb65057a986c53e435b77"
+    },
+    {
+      "path": "source/switch/tools/spirv_glsl_test.cc",
+      "bytes": 5495,
+      "sha256": "364188583401c4cd4063a0f7141725f8b4eb1ea2413e5e0373a832141cfa1893"
+    },
+    {
+      "path": "source/switch/tools/spirv_glsl_test.sh",
+      "bytes": 4470,
+      "sha256": "a5d4804fce5391789506b4ced5c629960b70cc1451de9dcd5dc408b1d51dd285"
+    },
+    {
+      "path": "source/switch/tools/tint_round.sh",
+      "bytes": 1376,
+      "sha256": "4c87dc84ca5a58096ac3aa99ec22a3e1d5ca1a416a02ec976847f96cffea8b3a"
+    },
+    {
+      "path": "source/tools/cdb_watch_changes_example.txt",
+      "bytes": 894,
+      "sha256": "2f6935c374c198fd757a6dea58b0c40fdf311300716a8daee28a2bb2c3ced659"
+    },
+    {
+      "path": "source/tools/check_edit_anchors.py",
+      "bytes": 3184,
+      "sha256": "b8f6d6e241a178c28ff3f388454cb6ec375a33085ce57dd5a927e131325d0201"
+    },
+    {
+      "path": "source/tools/fix_byte_switch_829CB7A8.py",
+      "bytes": 3977,
+      "sha256": "8a677d0c5876ce45f92fc0038e45bdd1750949081147c42559562f634c915342"
+    },
+    {
+      "path": "source/tools/fix_data_prefix_loads.py",
+      "bytes": 3838,
+      "sha256": "bfd429359a389d3af1eba11185048aa58954a092ad2623130f7f464c4491472a"
+    },
+    {
+      "path": "source/tools/fix_entry_edits.py",
+      "bytes": 2940,
+      "sha256": "f2f86d89636d9346e1ec643501fa37224c5bc3a8c44fc489b32bb15ee7adb21e"
+    },
+    {
+      "path": "source/tools/fix_ftfloor_sites.py",
+      "bytes": 3534,
+      "sha256": "5994b28e910d014a0b66b5043b3ee8913efc885f28dee9b7a98237d3355ef2e1"
+    },
+    {
+      "path": "source/tools/fix_io_wake.py",
+      "bytes": 3477,
+      "sha256": "472fd48e415a20c880470b9911840dc270e39345b589a988f296f610666307bb"
+    },
+    {
+      "path": "source/tools/fix_switch_error_returns.py",
+      "bytes": 5354,
+      "sha256": "84067becda5487b57bb6a5df819f25a668107f636f3bdefb6a231ca3d501e4a0"
+    },
+    {
+      "path": "source/tools/fix_switch_gate.py",
+      "bytes": 1749,
+      "sha256": "52f1aa7e5f5d79fad31fe7d6f98e9b9bb8c176216638819a4d40bc8637d41061"
+    },
+    {
+      "path": "source/tools/fix_switch_midjumps.py",
+      "bytes": 11342,
+      "sha256": "bee435c52019e46dbe58d3f30bd8cb10a8aca5421a31767d3977490fc62b0634"
+    },
+    {
+      "path": "source/tools/gen_native_reverb.py",
+      "bytes": 10482,
+      "sha256": "e645eff5955defb49a44c129020a0bb1df12bd9b269732acc79f99a2f9b98252"
+    },
+    {
+      "path": "source/tools/pass_arg_locals.py",
+      "bytes": 13119,
+      "sha256": "ac9df4ee0d34573040438cbcd931ce001c419d959228d5650e0f04754752e55b"
+    },
+    {
+      "path": "source/tools/pass_livein_regs.py",
+      "bytes": 13626,
+      "sha256": "6a8a682f5c53440342177413eb13784e3122caeda3cc644d20672926e9ab6247"
+    },
+    {
+      "path": "source/tools/pass_vec_locals.py",
+      "bytes": 7739,
+      "sha256": "79c0e25bf29cb9a6bfd22031d9774317f6d85c8507a6dbaf03239c1a9cf0520a"
+    },
+    {
+      "path": "source/tools/png_tint.py",
+      "bytes": 1024,
+      "sha256": "93bb83d077eadcf79f9b85e2502fe703086f4a833849525668c5f825de02371e"
+    },
+    {
+      "path": "source/tools/port_edits.py",
+      "bytes": 2024,
+      "sha256": "c3adcf1e737841127053a427c2bde9e1394327ebdfd11def976dc0d5dec26fbb"
+    },
+    {
+      "path": "source/tools/ppc_fields.py",
+      "bytes": 1120,
+      "sha256": "1d845fcc21b1174a1ffae6f60eefffcc42edc5b0e4bb0048f61d3b8cc66e9c7c"
+    },
+    {
+      "path": "source/tools/rdoc/rd_bisect_pixel.py",
+      "bytes": 1683,
+      "sha256": "6954a8129469e08576f9a632a4779fc96112df6d311765991e61d90f98de95fd"
+    },
+    {
+      "path": "source/tools/rdoc/rd_disasm_vs.py",
+      "bytes": 835,
+      "sha256": "88cfa16b140ea27c6abb768edfb4178b9197e6322955334d5fb90ebada48dd58"
+    },
+    {
+      "path": "source/tools/rdoc/rd_draw_constants.py",
+      "bytes": 2463,
+      "sha256": "257fec2f30c6dd28d9c9d41f15efff7bb506e9d87d50ef9db1f76dc63cfee19b"
+    },
+    {
+      "path": "source/tools/rdoc/rd_explode.py",
+      "bytes": 2606,
+      "sha256": "de6b3438464bcab13331f014292d9b6be21a7e8f2526fbc94d8264126dce9550"
+    },
+    {
+      "path": "source/tools/rdoc/rd_find_fetch.py",
+      "bytes": 1732,
+      "sha256": "944cd783362b3c45e9ae952de6db1566de8d879563247dd1305a0ece17f5de7e"
+    },
+    {
+      "path": "source/tools/rdoc/rd_pixhistory.py",
+      "bytes": 1532,
+      "sha256": "0b98cf5e4996365615640a98f232a8f5dbe20583c6188396747509d66ebd9210"
+    },
+    {
+      "path": "source/tools/rdoc/rd_shm_read.py",
+      "bytes": 1344,
+      "sha256": "d5da285468e1bc133a0c373933ddac534f2e6b2eae7fe6f948d4170ffafe4737"
+    },
+    {
+      "path": "source/tools/rdoc/README.md",
+      "bytes": 1551,
+      "sha256": "e569de74656d1f38f4a9126d7a9150312c1947e1a7b3e554c925c6b243512f2e"
+    },
+    {
+      "path": "source/tools/scan_livein_locals.py",
+      "bytes": 3142,
+      "sha256": "ef9addceaeade3be9eb7bd954225f0476198c39ffa8efbf69e2f29f32d5796e4"
+    },
+    {
+      "path": "source/tools/symppc.py",
+      "bytes": 9075,
+      "sha256": "1e4042d082dbbf12ed9f46c5bbcf142f08b8ce19706c0b1c7c0740e39dac8f20"
+    },
+    {
+      "path": "tests/fixtures/gl_backend_mesa011.cpp",
+      "bytes": 185527,
+      "sha256": "6230593d72c619e175e0a3b1107d3f38a8a33e6f5435ffeed4c0de7cb1979570"
+    },
+    {
+      "path": "tests/fixtures/spirv_shader_translator.h",
+      "bytes": 52343,
+      "sha256": "382f09a892ef8fe66325b48b56dee5e6ce0ab0c14a1c7ac9d6971379c98989bf"
+    },
+    {
+      "path": "tests/fixtures/xxhash.h",
+      "bytes": 268319,
+      "sha256": "17973c0dc49d9854ca26caa191f0e12f7a424b68858d9a78de3860d959d85e4b"
+    },
+    {
+      "path": "tests/run_draw_identity.py",
+      "bytes": 9816,
+      "sha256": "6ea44266d6d35c3125c7e0430c9f0dd9d0a659825712274f774e43d4ebafb0f2"
+    },
+    {
+      "path": "tools/generated_output.py",
+      "bytes": 3556,
+      "sha256": "5e7ec7234afb4b99ae29671ed5fbb0ea0d457ab1ab41647d05a0e0a1f11dd673"
+    },
+    {
+      "path": "tools/verify_handoff.py",
+      "bytes": 2426,
+      "sha256": "1f31e5d2a947dde24c5773512d7f44fb155837d04ca533f3ca1145fbde02a4fe"
+    },
+    {
+      "path": "verification/dependency-patches.json",
+      "bytes": 308,
+      "sha256": "0aa5eebe30a4057534e7734c79267faff6fc29db320e873447827f2dbb52d2b3"
+    },
+    {
+      "path": "verification/game-patch.json",
+      "bytes": 318,
+      "sha256": "7418f68883c4faa7258a4e1cf7616820c4f9c0a5e19abc070631df30b3ef9bdf"
+    },
+    {
+      "path": "verification/generated-helper.json",
+      "bytes": 280,
+      "sha256": "95ccfbea79a05efe15f49f1a7d35ac6f8d3eb31eb75ef6ce4dce077669c8dc7f"
+    },
+    {
+      "path": "verification/portable-tests.json",
+      "bytes": 2583,
+      "sha256": "94e21111dd209fcf6804a6e690c3aa8552c1fb095d898d5e8895463803dd5edb"
+    },
+    {
+      "path": "verification/privacy-summary.json",
+      "bytes": 466,
+      "sha256": "2ec84561219c4dc46263a4ffe7292b3964fc2d27ce3b91bdce3335355b764d8d"
+    },
+    {
+      "path": "verification/source-coverage.json",
+      "bytes": 438,
+      "sha256": "95e1453345c40517a079389cdf4b34b43511ccea9e8d101a4ab3967a8ded2fc8"
+    },
+    {
+      "path": "workspace-tools/build_tcs360_mesa.sh",
+      "bytes": 1755,
+      "sha256": "d805bbdc1fb1a353ed1ca1179c59a922b289d5b3fc6c39b4c4438551feb8b969"
+    },
+    {
+      "path": "workspace-tools/capture_tcs360_reference.ps1",
+      "bytes": 3408,
+      "sha256": "d72e89a4d8150951f27e947844348e5e0c2a0fd538b61c4cc4075a44b67d7717"
+    },
+    {
+      "path": "workspace-tools/patch_tcs360_movie_cr.py",
+      "bytes": 1378,
+      "sha256": "b5618c492803adca7dd0875760e903b226db4ca3e10f74e68438851bdd1207e0"
+    },
+    {
+      "path": "workspace-tools/patch_tcs360_movie_vmx.py",
+      "bytes": 4142,
+      "sha256": "5107f0997d07b92f40f921a14848a8fb57f50aa6471f8e2599c0a100abde312a"
+    },
+    {
+      "path": "workspace-tools/prepare_tcs360_header.py",
+      "bytes": 870,
+      "sha256": "f3ce2c7ccf7f3b627ff20dee59b98f12ce65ce5488e093abfd2541a4c50a0265"
+    },
+    {
+      "path": "workspace-tools/tcs360_codegen_audit.py",
+      "bytes": 2686,
+      "sha256": "67f202bc049fad90aa40530362c4bc5af28b2170ce991290a52ab085b9b0e350"
+    },
+    {
+      "path": "workspace-tools/validate_tcs360_switch.py",
+      "bytes": 5428,
+      "sha256": "b245b3a098b7db056c18a33bbcee9bd3d18e88325b4b4f28ad2ab1f1d0453ac7"
+    },
+    {
+      "path": "workspace-tools/verify_tcs360_sd.py",
+      "bytes": 1385,
+      "sha256": "c75e5461ab5e429bfd47e71210e323e867905c66ca505cfc18a93bbfb8f6a249"
+    },
+    {
+      "path": "workspace-tools/xenon-image/CMakeLists.txt",
+      "bytes": 548,
+      "sha256": "8da72bcf7739a491277445d4b4adaf42363b13224bdb3640f33821bab0a995a6"
+    },
+    {
+      "path": "workspace-tools/xenon-image/image_export.cpp",
+      "bytes": 1817,
+      "sha256": "783bfe6a19dc71e862218b2a705b928f9e4b8f63da0706d06c5177a443b67cea"
+    }
+  ]
+}

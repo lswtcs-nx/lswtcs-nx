@@ -1,0 +1,17 @@
+[
+  {
+    "dependency": "XenonRecomp",
+    "changed_files": 2,
+    "patch_roundtrip_passed": true
+  },
+  {
+    "dependency": "xenia-canary",
+    "changed_files": 14,
+    "patch_roundtrip_passed": true
+  },
+  {
+    "dependency": "SPIRV-Cross",
+    "changed_files": 0,
+    "patch_roundtrip_passed": true
+  }
+]

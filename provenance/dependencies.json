@@ -1,0 +1,74 @@
+[
+  {
+    "name": "XenonRecomp",
+    "url": "https://github.com/hedge-dev/XenonRecomp.git",
+    "commit": "ddd128bcca99fe8bfbb99bea583c972351fa6ace",
+    "checkout_location": "XenonRecomp",
+    "patch": "source/patches/XenonRecomp.patch",
+    "patch_changed_files": [
+      "XenonRecomp/recompiler.cpp",
+      "XenonUtils/symbol_table.h"
+    ],
+    "licenses": [
+      "notices/XenonRecomp/LICENSE.md"
+    ]
+  },
+  {
+    "name": "xenia-canary",
+    "url": "https://github.com/xenia-canary/xenia-canary.git",
+    "commit": "09dbe2cd3605dbbb51a4ab38b5c40df4f7d968a8",
+    "checkout_location": "source/xenia-canary",
+    "patch": "source/patches/xenia-canary.patch",
+    "patch_changed_files": [
+      "src/xenia/apu/xma_context.h",
+      "src/xenia/apu/xma_context_new.cc",
+      "src/xenia/base/ring_buffer.cc",
+      "src/xenia/gpu/dxbc_shader_translator.cc",
+      "src/xenia/gpu/dxbc_shader_translator_fetch.cc",
+      "src/xenia/gpu/shader_interpreter.cc",
+      "src/xenia/gpu/spirv_compatibility.h",
+      "src/xenia/gpu/spirv_shader_translator.cc",
+      "src/xenia/gpu/spirv_shader_translator.h",
+      "src/xenia/gpu/spirv_shader_translator_alu.cc",
+      "src/xenia/gpu/spirv_shader_translator_fetch.cc",
+      "third_party/ffmpeg-xenia/libavcodec/bsf_list.c",
+      "third_party/ffmpeg-xenia/libavcodec/codec_list.c",
+      "third_party/ffmpeg-xenia/libavcodec/parser_list.c"
+    ],
+    "licenses": [
+      "notices/xenia-canary/LICENSE"
+    ]
+  },
+  {
+    "name": "SPIRV-Cross",
+    "url": "https://github.com/KhronosGroup/SPIRV-Cross.git",
+    "commit": "f11ba9f0b21ba8fc15153d50a2a1ae31ab1cf8f7",
+    "checkout_location": "source/SPIRV-Cross",
+    "patch": null,
+    "patch_changed_files": [],
+    "licenses": [
+      "notices/SPIRV-Cross/LICENSE"
+    ]
+  },
+  {
+    "name": "FFmpeg",
+    "commit": "d980192e175e6ff95bcd287af77e16fcb6597974",
+    "checkout_location": "source/xenia-canary/third_party/FFmpeg",
+    "patch": null,
+    "licenses": [
+      "notices/FFmpeg/COPYING.GPLv2",
+      "notices/FFmpeg/COPYING.GPLv3",
+      "notices/FFmpeg/COPYING.LGPLv2.1",
+      "notices/FFmpeg/COPYING.LGPLv3"
+    ]
+  },
+  {
+    "name": "SIMDe",
+    "commit": "a532a12ca9bbdc5e6547eb602e6256b71a5377d4",
+    "checkout_location": "XenonRecomp/thirdparty/simde",
+    "patch": null,
+    "licenses": [
+      "notices/SIMDe/COPYING"
+    ]
+  }
+]

@@ -1,0 +1,17 @@
+[
+  {
+    "url": "https://raw.githubusercontent.com/devkitPro/libdrm_nouveau/v1.0.1/source/nouveau.c",
+    "file": "nouveau.c",
+    "sha256": "ece1e4301d7bdc7b8c32a58727ff4c84dbd4d16bfa2bb2203012913b369cb8a1"
+  },
+  {
+    "url": "https://raw.githubusercontent.com/devkitPro/libdrm_nouveau/v1.0.1/source/pushbuf.c",
+    "file": "pushbuf.c",
+    "sha256": "fd3e827dcb710cb7293f589dc1f24f71b21f487156d2cfbc9a9852e6b70fb871"
+  },
+  {
+    "url": "https://raw.githubusercontent.com/devkitPro/libdrm_nouveau/v1.0.1/source/private.h",
+    "file": "private.h",
+    "sha256": "21db6949da33a887de7cd3b637777326c7926dba990963d0e698f29719a9e372"
+  }
+]

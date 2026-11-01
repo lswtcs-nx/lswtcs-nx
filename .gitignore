@@ -1,0 +1,32 @@
+_work/
+private/
+*.exe
+*.elf
+*.nro
+*.nacp
+*.o
+*.gch
+*.pyc
+__pycache__/
+*.keys
+*.iso
+*.xex
+*.xci
+*.nsp
+*.nca
+*.DAT
+*.dat
+image.bin
+pristine.bin
+xex_header.bin
+source/Convert 360/LSWTCS/output*/
+source/Convert 360/LSWTCS/audio/
+source/Convert 360/LSWTCS/Movies/
+source/switch/build*/
+source/switch/mesa/build/
+source/LSWTCSRuntime/build*/
+source/LSWTCSRuntime/source/native_reverb_gen.inc
+source/xenia-canary/
+source/SPIRV-Cross/
+source/simde/
+XenonRecomp/

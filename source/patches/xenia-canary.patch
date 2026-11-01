@@ -1,0 +1,1293 @@
+diff --git a/src/xenia/apu/xma_context.h b/src/xenia/apu/xma_context.h
+index 2351e706f..fb413bf25 100644
+--- a/src/xenia/apu/xma_context.h
++++ b/src/xenia/apu/xma_context.h
+@@ -1,3 +1,4 @@
++#include "lsw_guest_host_lock.h"
+ /**
+  ******************************************************************************
+  * Xenia : Xbox 360 Emulator Research Project                                 *
+@@ -10,6 +11,7 @@
+ #ifndef XENIA_APU_XMA_CONTEXT_H_
+ #define XENIA_APU_XMA_CONTEXT_H_
+ 
++#include "lsw_guest_memory_access.h"
+ #include <array>
+ #include <atomic>
+ #include <mutex>
+@@ -115,12 +117,14 @@ struct XMA_CONTEXT_DATA {
+   uint32_t unk_dwords_10_15[6];  // reserved?
+ 
+   explicit XMA_CONTEXT_DATA(const void* ptr) {
++    lsw_guest::ReadScope access(ptr, sizeof(XMA_CONTEXT_DATA));
+     xe::copy_and_swap(reinterpret_cast<uint32_t*>(this),
+                       reinterpret_cast<const uint32_t*>(ptr),
+                       sizeof(XMA_CONTEXT_DATA) / 4);
+   }
+ 
+   void Store(void* ptr) {
++    lsw_guest::WriteScope access(ptr, sizeof(XMA_CONTEXT_DATA));
+     xe::copy_and_swap(reinterpret_cast<uint32_t*>(ptr),
+                       reinterpret_cast<const uint32_t*>(this),
+                       sizeof(XMA_CONTEXT_DATA) / 4);
+@@ -209,7 +213,7 @@ class XmaContext {
+       if (poll) {
+         return false;
+       }
+-      lock.lock();
++      lsw_guest::lock_host(lock);
+     }
+     return true;
+   }
+diff --git a/src/xenia/apu/xma_context_new.cc b/src/xenia/apu/xma_context_new.cc
+index 3480bd563..095ba8b3e 100644
+--- a/src/xenia/apu/xma_context_new.cc
++++ b/src/xenia/apu/xma_context_new.cc
+@@ -1,3 +1,4 @@
++#include "lsw_guest_memory_access.h"
+ /**
+ ******************************************************************************
+ * Xenia : Xbox 360 Emulator Research Project                                 *
+@@ -115,12 +116,19 @@ bool XmaContextNew::Work() {
+     return false;
+   }
+ 
+-  std::lock_guard<xe_mutex> lock(lock_);
++  std::unique_lock<xe_mutex> lock(lock_, std::defer_lock);
++    lsw_guest::lock_host(lock);
+   set_is_enabled(false);
+ 
+   auto context_ptr = memory()->TranslateVirtual(guest_ptr());
+   XMA_CONTEXT_DATA data(context_ptr);
+   const XMA_CONTEXT_DATA initial_data = data;
++  // Both packets can be consumed/swapped during Work(), including raw header
++  // reads which are not memcpy. Context data is a host copy at this point.
++  lsw_guest::ReadScope input0_access(memory()->TranslatePhysical(data.input_buffer_0_ptr),
++      data.input_buffer_0_valid ? size_t(data.GetInputBufferPacketCount(0)) * kBytesPerPacket : 0);
++  lsw_guest::ReadScope input1_access(memory()->TranslatePhysical(data.input_buffer_1_ptr),
++      data.input_buffer_1_valid ? size_t(data.GetInputBufferPacketCount(1)) * kBytesPerPacket : 0);
+ 
+   if (!data.output_buffer_valid) {
+     return true;
+@@ -236,7 +244,8 @@ bool XmaContextNew::Work() {
+ void XmaContextNew::Enable() { set_is_enabled(true); }
+ 
+ void XmaContextNew::Clear() {
+-  std::lock_guard<xe_mutex> lock(lock_);
++  std::unique_lock<xe_mutex> lock(lock_, std::defer_lock);
++    lsw_guest::lock_host(lock);
+ 
+   auto context_ptr = memory()->TranslateVirtual(guest_ptr());
+   XMA_CONTEXT_DATA data(context_ptr);
+@@ -264,12 +273,13 @@ void XmaContextNew::Disable() { set_is_enabled(false); }
+ 
+ void XmaContextNew::Release() {
+   // Lock it in case the decoder thread is working on it now.
+-  std::lock_guard<xe_mutex> lock(lock_);
++  std::unique_lock<xe_mutex> lock(lock_, std::defer_lock);
++    lsw_guest::lock_host(lock);
+   assert_true(is_allocated());
+ 
+   set_is_allocated(false);
+   auto context_ptr = memory()->TranslateVirtual(guest_ptr());
+-  std::memset(context_ptr, 0, sizeof(XMA_CONTEXT_DATA));  // Zero it.
++  lsw_guest::fill(context_ptr, 0, sizeof(XMA_CONTEXT_DATA));  // Zero it.
+ }
+ 
+ int XmaContextNew::GetSampleRate(int id) {
+@@ -501,9 +511,9 @@ void XmaContextNew::Decode(XMA_CONTEXT_DATA* data) {
+       SwapInputBuffer(data);
+       return;
+     }
+-    std::memcpy(input_buffer_.data(), packet + kBytesPerPacketHeader,
++    lsw_guest::copy(input_buffer_.data(), packet + kBytesPerPacketHeader,
+                 kBytesPerPacketData);
+-    std::memcpy(input_buffer_.data() + kBytesPerPacketData,
++    lsw_guest::copy(input_buffer_.data() + kBytesPerPacketData,
+                 next_packet + kBytesPerPacketHeader, kBytesPerPacketData);
+ 
+     BitStream combined(input_buffer_.data(),
+@@ -550,13 +560,13 @@ void XmaContextNew::Decode(XMA_CONTEXT_DATA* data) {
+         return;
+       }
+       // Copy next packet to buffer
+-      std::memcpy(input_buffer_.data() + kBytesPerPacketData,
++      lsw_guest::copy(input_buffer_.data() + kBytesPerPacketData,
+                   next_packet + kBytesPerPacketHeader, kBytesPerPacketData);
+     }
+   }
+ 
+   // Copy current packet to buffer
+-  std::memcpy(input_buffer_.data(), packet + kBytesPerPacketHeader,
++  lsw_guest::copy(input_buffer_.data(), packet + kBytesPerPacketHeader,
+               kBytesPerPacketData);
+ 
+   stream = BitStream(input_buffer_.data(),
+diff --git a/src/xenia/base/ring_buffer.cc b/src/xenia/base/ring_buffer.cc
+index cc544497a..3c1113385 100644
+--- a/src/xenia/base/ring_buffer.cc
++++ b/src/xenia/base/ring_buffer.cc
+@@ -1,3 +1,4 @@
++#include "lsw_guest_memory_access.h"
+ /**
+  ******************************************************************************
+  * Xenia : Xbox 360 Emulator Research Project                                 *
+@@ -84,13 +85,13 @@ size_t RingBuffer::Read(uint8_t* buffer, size_t _count) {
+   }
+ 
+   if (read_offset_ + count < capacity_) {
+-    std::memcpy(buffer, buffer_ + read_offset_, count);
++    lsw_guest::copy(buffer, buffer_ + read_offset_, count);
+     read_offset_ += count;
+   } else {
+     ring_size_t left_half = capacity_ - read_offset_;
+     ring_size_t right_half = count - left_half;
+-    std::memcpy(buffer, buffer_ + read_offset_, left_half);
+-    std::memcpy(buffer + left_half, buffer_, right_half);
++    lsw_guest::copy(buffer, buffer_ + read_offset_, left_half);
++    lsw_guest::copy(buffer + left_half, buffer_, right_half);
+     read_offset_ = right_half;
+   }
+ 
+@@ -114,13 +115,13 @@ size_t RingBuffer::Write(const uint8_t* buffer, size_t _count) {
+   }
+ 
+   if (write_offset_ + count < capacity_) {
+-    std::memcpy(buffer_ + write_offset_, buffer, count);
++    lsw_guest::copy(buffer_ + write_offset_, buffer, count);
+     write_offset_ += count;
+   } else {
+     ring_size_t left_half = capacity_ - write_offset_;
+     ring_size_t right_half = count - left_half;
+-    std::memcpy(buffer_ + write_offset_, buffer, left_half);
+-    std::memcpy(buffer_, buffer + left_half, right_half);
++    lsw_guest::copy(buffer_ + write_offset_, buffer, left_half);
++    lsw_guest::copy(buffer_, buffer + left_half, right_half);
+     write_offset_ = right_half;
+   }
+ 
+diff --git a/src/xenia/gpu/dxbc_shader_translator.cc b/src/xenia/gpu/dxbc_shader_translator.cc
+index 7af15bc95..3094eeec4 100644
+--- a/src/xenia/gpu/dxbc_shader_translator.cc
++++ b/src/xenia/gpu/dxbc_shader_translator.cc
+@@ -3431,7 +3431,12 @@ void DxbcShaderTranslator::WriteShaderCode() {
+         dxbc::Src::CB(dxbc::Src::Dcl, cbuffer_index_float_constants_,
+                       uint32_t(CbufferRegister::kFloatConstants),
+                       uint32_t(CbufferRegister::kFloatConstants)),
+-        constant_register_map.float_count,
++        // LSWTCS: relative addressing c[a0+N] can reach index 255+255; declare 512 so the
++        // driver reads the runtime's padding (kernel_stubs.cpp put_float) instead of treating
++        // reads past the declared size as undefined (observed: 0/NaN skinned vertices).
++        constant_register_map.float_dynamic_addressing
++            ? std::max(constant_register_map.float_count, uint32_t(512))
++            : constant_register_map.float_count,
+         constant_register_map.float_dynamic_addressing
+             ? dxbc::ConstantBufferAccessPattern::kDynamicIndexed
+             : dxbc::ConstantBufferAccessPattern::kImmediateIndexed);
+diff --git a/src/xenia/gpu/dxbc_shader_translator_fetch.cc b/src/xenia/gpu/dxbc_shader_translator_fetch.cc
+index 493b22a14..5bed72a89 100644
+--- a/src/xenia/gpu/dxbc_shader_translator_fetch.cc
++++ b/src/xenia/gpu/dxbc_shader_translator_fetch.cc
+@@ -8,6 +8,7 @@
+  */
+ 
+ #include <cmath>
++#include <cstdlib>
+ 
+ #include "third_party/fmt/include/fmt/format.h"
+ #include "xenia/base/assert.h"
+@@ -147,6 +148,34 @@ void DxbcShaderTranslator::ProcessVertexFetchInstruction(
+     address_src = address_temp_src;
+   }
+ 
++  // LSWTCS: bounds check against the fetch constant's size (vf1 bits 2..25, in
++  // dwords, so `vf1 & 0x03FFFFFC` is the size in bytes): an element whose first
++  // needed word lies at or past the end reads as 0, as the FIXME below
++  // describes for Adreno 200. LEGO Star Wars' morph blend reads Yoda's morph
++  // stream at element `vertex + 8061` of a 16122-dword buffer during gameplay;
++  // without the check it read whatever an earlier draw left in shared memory
++  // and flung his vertices across the screen (2026-10-12). bounds_temp.x = mask
++  // (all ones inside), applied after the load. LSWTCS_VFETCHCLAMP=0 disables.
++  static const bool vfetch_clamp = [] {
++    const char* e = std::getenv("LSWTCS_VFETCHCLAMP");
++    return !(e && e[0] == '0');
++  }();
++  uint32_t bounds_temp = UINT32_MAX;
++  if (vfetch_clamp) {
++    bounds_temp = PushSystemTemp();
++    a_.OpAnd(dxbc::Dest::R(bounds_temp, 0b0001),
++             fetch_constant_src.SelectFromSwizzled(0),
++             dxbc::Src::LU(~uint32_t(3)));
++    a_.OpIAdd(dxbc::Dest::R(bounds_temp, 0b0001), address_src,
++              -dxbc::Src::R(bounds_temp, dxbc::Src::kXXXX));
++    a_.OpAnd(dxbc::Dest::R(bounds_temp, 0b0010),
++             fetch_constant_src.SelectFromSwizzled(1),
++             dxbc::Src::LU(0x03FFFFFCu));
++    a_.OpULT(dxbc::Dest::R(bounds_temp, 0b0001),
++             dxbc::Src::R(bounds_temp, dxbc::Src::kXXXX),
++             dxbc::Src::R(bounds_temp, dxbc::Src::kYYYY));
++  }
++
+   // - Load needed words to system_temp_result_, words 0, 1, 2, 3 to X, Y, Z, W
+   //   respectively.
+ 
+@@ -226,6 +255,12 @@ void DxbcShaderTranslator::ProcessVertexFetchInstruction(
+ 
+   dxbc::Src result_src(dxbc::Src::R(system_temp_result_));
+ 
++  if (bounds_temp != UINT32_MAX) {   // LSWTCS: zero an out-of-bounds element
++    a_.OpAnd(dxbc::Dest::R(system_temp_result_, needed_words), result_src,
++             dxbc::Src::R(bounds_temp, dxbc::Src::kXXXX));
++    PopSystemTemp();
++  }
++
+   // - Endian swap the words.
+ 
+   {
+diff --git a/src/xenia/gpu/shader_interpreter.cc b/src/xenia/gpu/shader_interpreter.cc
+index ec7cf9a02..0c44786e7 100644
+--- a/src/xenia/gpu/shader_interpreter.cc
++++ b/src/xenia/gpu/shader_interpreter.cc
+@@ -1038,8 +1038,12 @@ void ShaderInterpreter::ExecuteVertexFetchInstruction(
+           trace_writer_->WriteMemoryRead(
+               sizeof(uint32_t) * dword_address_dwords, sizeof(uint32_t));
+         }
+-        dword_value = xenos::GpuSwap(memory_dwords[dword_address_dwords],
++#ifdef LSW_XENIA_SNAPSHOT_READS
++        dword_value = xenos::GpuSwap(memory_.ReadPhysical32((dword_address_dwords & 0x07FFFFFFu)*4),fetch_constant.endian);
++#else
++        dword_value = xenos::GpuSwap(memory_dwords[dword_address_dwords & 0x07FFFFFFu],  /* LSWTCS: 29-bit phys mask (512MB membase) */
+                                      fetch_constant.endian);
++#endif
+       }
+       data[i] = dword_value;
+     }
+diff --git a/src/xenia/gpu/spirv_compatibility.h b/src/xenia/gpu/spirv_compatibility.h
+index fe8127509..7974ee3e9 100644
+--- a/src/xenia/gpu/spirv_compatibility.h
++++ b/src/xenia/gpu/spirv_compatibility.h
+@@ -353,6 +353,7 @@ namespace spv {
+ 
+ // Backward compatibility for ImageOperands
+ #define ImageOperandsGradMask ImageOperandsMask::Grad
++#define ImageOperandsBiasMask ImageOperandsMask::Bias  // LSWTCS: lsw_implicit_lod_bias
+ #define ImageOperandsLodMask ImageOperandsMask::Lod
+ #define ImageOperandsMaskNone ImageOperandsMask::MaskNone
+ 
+diff --git a/src/xenia/gpu/spirv_shader_translator.cc b/src/xenia/gpu/spirv_shader_translator.cc
+index 83ba94461..4e459abc0 100644
+--- a/src/xenia/gpu/spirv_shader_translator.cc
++++ b/src/xenia/gpu/spirv_shader_translator.cc
+@@ -150,6 +150,11 @@ void SpirvShaderTranslator::Reset() {
+ 
+   main_switch_op_.reset();
+   main_switch_next_pc_phi_operands_.clear();
++  lsw_forward_cf_ = false;
++  var_lsw_skip_ = spv::NoResult;
++  lsw_skip_guard_merge_ = nullptr;
++  lsw_loops_.clear();
++  lsw_dowhile_heads_.clear();
+ 
+   cf_exec_conditional_merge_ = nullptr;
+   cf_instruction_predicate_merge_ = nullptr;
+@@ -283,12 +288,13 @@ void SpirvShaderTranslator::StartTranslation() {
+        type_uint_},
+       {"alpha_test_reference", offsetof(SystemConstants, alpha_test_reference),
+        type_float_},
+-      {"alpha_to_mask", offsetof(SystemConstants, alpha_to_mask), type_uint_},
+       {"edram_32bpp_tile_pitch_dwords_scaled",
+        offsetof(SystemConstants, edram_32bpp_tile_pitch_dwords_scaled),
+        type_uint_},
+       {"edram_depth_base_dwords_scaled",
+        offsetof(SystemConstants, edram_depth_base_dwords_scaled), type_uint_},
++      // LSW: declared in memory order (GLSL cannot express out-of-order offsets).
++      {"alpha_to_mask", offsetof(SystemConstants, alpha_to_mask), type_uint_},
+       {"color_exp_bias", offsetof(SystemConstants, color_exp_bias),
+        type_float4_},
+       {"edram_poly_offset_front_scale",
+@@ -350,6 +356,15 @@ void SpirvShaderTranslator::StartTranslation() {
+     // Common uniform buffer - float constants.
+     uint32_t float_constant_count =
+         current_shader().constant_register_map().float_count;
++    // LSWTCS: relative addressing c[a0+N] can reach index 255+255 (the game's
++    // skinning reads c[a0+112..115] with a0 = 255 for an unused bone slot);
++    // declare 512 so the read lands in the runtime's padding (kernel_stubs.cpp
++    // put_float, bound in full by gl_backend.cpp) instead of past the array,
++    // which is undefined: a skinned vertex flung across the screen (Yoda spike,
++    // Switch 2026-10-11). Same edit as dxbc_shader_translator.cc (PC).
++    if (current_shader().constant_register_map().float_dynamic_addressing) {
++      float_constant_count = std::max(float_constant_count, uint32_t(512));
++    }
+     if (float_constant_count) {
+       id_vector_temp_.clear();
+       id_vector_temp_.push_back(builder_->makeArrayType(
+@@ -591,9 +606,16 @@ void SpirvShaderTranslator::StartTranslation() {
+   main_loop_merge_ = new spv::Block(builder_->getUniqueId(), *function_main_);
+   builder_->createBranch(main_loop_header_);
+ 
++  // LSWTCS: forward-jump-only shaders use a skip variable instead of the switch.
++  lsw_forward_cf_ = lsw_forward_jumps && LswForwardOnlyControlFlow();
++  if (lsw_forward_cf_) {
++    var_lsw_skip_ = builder_->createVariable(
++        spv::NoPrecision, spv::StorageClassFunction, type_int_, "xe_var_skip",
++        const_int_0_);
++  }
+   // If no jumps, don't create a switch, but still create a loop so exece can
+   // break.
+-  bool has_main_switch = !current_shader().label_addresses().empty();
++  bool has_main_switch = HasMainSwitch();
+ 
+   // Main loop header - based on whether it's the first iteration (entered from
+   // the function or from the continuation), choose the program counter.
+@@ -648,7 +670,8 @@ std::vector<uint8_t> SpirvShaderTranslator::CompleteTranslation() {
+   if (!is_depth_only_fragment_shader_) {
+     // Close flow control within the last switch case.
+     CloseExecConditionals();
+-    bool has_main_switch = !current_shader().label_addresses().empty();
++    LswCloseSkipGuard();
++    bool has_main_switch = HasMainSwitch();
+     // After the final exec (if it happened to be not exece, which would already
+     // have a break branch), break from the switch if it exists, or from the
+     // loop it doesn't.
+@@ -882,6 +905,39 @@ void SpirvShaderTranslator::ProcessLabel(uint32_t cf_index) {
+   // Close flow control within the previous switch case.
+   CloseExecConditionals();
+ 
++  if (lsw_forward_cf_) {
++    // A pending jump to this label is done: skip = (skip == label) ? 0 : skip.
++    LswCloseSkipGuard();
++    EnsureBuildPointAvailable();
++    spv::Id skip = builder_->createLoad(var_lsw_skip_, spv::NoPrecision);
++    builder_->createStore(
++        builder_->createTriOp(
++            spv::OpSelect, type_int_,
++            builder_->createBinOp(spv::OpIEqual, type_bool_, skip,
++                                  builder_->makeIntConstant(int(cf_index))),
++            const_int_0_, skip),
++        var_lsw_skip_);
++    if (std::find(lsw_dowhile_heads_.begin(), lsw_dowhile_heads_.end(),
++                  cf_index) != lsw_dowhile_heads_.end()) {
++      // do { ... } while (backward jump condition): loop header here.
++      LswLoop lsw_loop;
++      lsw_loop.header = &builder_->makeNewBlock();
++      builder_->createBranch(lsw_loop.header);
++      builder_->setBuildPoint(lsw_loop.header);
++      lsw_loop.cont = new spv::Block(builder_->getUniqueId(), *function_main_);
++      lsw_loop.merge = new spv::Block(builder_->getUniqueId(), *function_main_);
++      uint_vector_temp_.clear();
++      builder_->createLoopMerge(lsw_loop.merge, lsw_loop.cont,
++                                spv::LoopControlDontUnrollMask,
++                                uint_vector_temp_);
++      spv::Block& body_block = builder_->makeNewBlock();
++      builder_->createBranch(&body_block);
++      builder_->setBuildPoint(&body_block);
++      lsw_loops_.push_back(lsw_loop);
++    }
++    return;
++  }
++
+   spv::Function& function = builder_->getBuildPoint()->getParent();
+   // Create the next switch case and fallthrough to it.
+   spv::Block* new_case = new spv::Block(builder_->getUniqueId(), function);
+@@ -900,21 +956,193 @@ void SpirvShaderTranslator::ProcessLabel(uint32_t cf_index) {
+ 
+ void SpirvShaderTranslator::ProcessExecInstructionBegin(
+     const ParsedExecInstruction& instr) {
++  if (lsw_forward_cf_) {
++    LswOpenSkipGuard();
++  }
+   UpdateExecConditionals(instr.type, instr.bool_constant_index,
+                          instr.condition);
+ }
+ 
++bool SpirvShaderTranslator::LswForwardOnlyControlFlow() {
++  const Shader& shader = current_shader();
++  if (shader.label_addresses().empty()) {
++    return false;
++  }
++  const uint32_t* dwords = shader.ucode_dwords();
++  struct Region { uint32_t start, end; };   // loop start / loop end cf index
++  std::vector<Region> regions, stack;
++  std::vector<std::pair<uint32_t, uint32_t>> jumps;   // (cf index, target)
++  std::vector<uint32_t> ends, starts;
++  std::vector<uint32_t> start_skip;   // loop start skip addresses (by stack)
++  for (uint32_t i = 0; i < shader.cf_pair_index_bound(); ++i) {
++    ucode::ControlFlowInstruction cf_ab[2];
++    ucode::UnpackControlFlowInstructions(dwords + i * 3, cf_ab);
++    for (uint32_t j = 0; j < 2; ++j) {
++      const uint32_t cf_index = i * 2 + j;
++      switch (cf_ab[j].opcode()) {
++        case ucode::ControlFlowOpcode::kCondCall:
++        case ucode::ControlFlowOpcode::kReturn:
++          return false;
++        case ucode::ControlFlowOpcode::kLoopStart:
++          stack.push_back({cf_index, 0});
++          start_skip.push_back(cf_ab[j].loop_start.address());
++          starts.push_back(cf_index);
++          break;
++        case ucode::ControlFlowOpcode::kLoopEnd: {
++          if (stack.empty()) {
++            return false;
++          }
++          Region r = stack.back();
++          stack.pop_back();
++          const uint32_t skip = start_skip.back();
++          start_skip.pop_back();
++          // Body right after the start, skip right after the end.
++          if (cf_ab[j].loop_end.address() != r.start + 1 ||
++              skip != cf_index + 1) {
++            return false;
++          }
++          r.end = cf_index;
++          regions.push_back(r);
++        } break;
++        case ucode::ControlFlowOpcode::kCondJmp:
++          jumps.emplace_back(cf_index, cf_ab[j].cond_jmp.address());
++          break;
++        case ucode::ControlFlowOpcode::kExecEnd:
++        case ucode::ControlFlowOpcode::kCondExecEnd:
++        case ucode::ControlFlowOpcode::kCondExecPredEnd:
++        case ucode::ControlFlowOpcode::kCondExecPredCleanEnd:
++          ends.push_back(cf_index);
++          break;
++        default:
++          break;
++      }
++    }
++  }
++  if (!stack.empty()) {
++    return false;
++  }
++  if (!lsw_structured_loops && !regions.empty()) {
++    return false;
++  }
++  // Loop bodies as inclusive cf index ranges [lo, hi]: guest loops (start, end]
++  // and do-while loops [label, backward jump].
++  std::vector<std::pair<uint32_t, uint32_t>> bodies;
++  for (const Region& r : regions) {
++    bodies.emplace_back(r.start + 1, r.end);
++  }
++  std::vector<uint32_t> heads;
++  for (const auto& jump : jumps) {
++    if (jump.second <= jump.first) {
++      if (!lsw_structured_loops) {
++        return false;
++      }
++      for (uint32_t h : heads) {
++        if (h == jump.second) {
++          return false;   // one backward jump per loop head
++        }
++      }
++      heads.push_back(jump.second);
++      bodies.emplace_back(jump.second, jump.first);
++    }
++  }
++  // Properly nested.
++  for (size_t a = 0; a < bodies.size(); ++a) {
++    for (size_t b = a + 1; b < bodies.size(); ++b) {
++      const auto& x = bodies[a];
++      const auto& y = bodies[b];
++      const bool disjoint = x.second < y.first || y.second < x.first;
++      const bool x_in_y = y.first <= x.first && x.second <= y.second;
++      const bool y_in_x = x.first <= y.first && y.second <= x.second;
++      if (!disjoint && !x_in_y && !y_in_x) {
++        return false;
++      }
++      if (x == y) {
++        return false;
++      }
++    }
++  }
++  // Innermost body containing a cf index.
++  auto innermost = [&](uint32_t idx) -> int {
++    int best = -1;
++    for (size_t k = 0; k < bodies.size(); ++k) {
++      if (bodies[k].first <= idx && idx <= bodies[k].second &&
++          (best < 0 || bodies[k].first > bodies[size_t(best)].first ||
++           (bodies[k].first == bodies[size_t(best)].first &&
++            bodies[k].second < bodies[size_t(best)].second))) {
++        best = int(k);
++      }
++    }
++    return best;
++  };
++  for (uint32_t e : ends) {
++    if (innermost(e) >= 0) {
++      return false;   // exece inside a loop: would break out of two loops
++    }
++  }
++  for (const auto& jump : jumps) {
++    if (jump.second <= jump.first) {
++      continue;   // the backward jump closing a do-while
++    }
++    if (innermost(jump.first) != innermost(jump.second)) {
++      return false;
++    }
++    for (const auto& body : bodies) {
++      if (jump.first < body.first && body.first < jump.second) {
++        return false;   // the jump would skip a whole loop
++      }
++    }
++  }
++  lsw_dowhile_heads_ = heads;
++  return true;
++}
++
++void SpirvShaderTranslator::LswOpenSkipGuard() {
++  if (lsw_skip_guard_merge_) {
++    return;
++  }
++  EnsureBuildPointAvailable();
++  spv::Id not_skipping = builder_->createBinOp(
++      spv::OpIEqual, type_bool_,
++      builder_->createLoad(var_lsw_skip_, spv::NoPrecision), const_int_0_);
++  lsw_skip_guard_merge_ = new spv::Block(
++      builder_->getUniqueId(), builder_->getBuildPoint()->getParent());
++  builder_->createSelectionMerge(lsw_skip_guard_merge_,
++                                 spv::SelectionControlMaskNone);
++  spv::Block& inner_block = builder_->makeNewBlock();
++  builder_->createConditionalBranch(not_skipping, &inner_block,
++                                    lsw_skip_guard_merge_);
++  builder_->setBuildPoint(&inner_block);
++}
++
++void SpirvShaderTranslator::LswCloseSkipGuard() {
++  if (!lsw_skip_guard_merge_) {
++    return;
++  }
++  spv::Block& inner_block = *builder_->getBuildPoint();
++  if (!inner_block.isTerminated()) {
++    builder_->createBranch(lsw_skip_guard_merge_);
++  }
++  inner_block.getParent().addBlock(lsw_skip_guard_merge_);
++  builder_->setBuildPoint(lsw_skip_guard_merge_);
++  lsw_skip_guard_merge_ = nullptr;
++}
++
+ void SpirvShaderTranslator::ProcessExecInstructionEnd(
+     const ParsedExecInstruction& instr) {
+   if (instr.is_end) {
+     // Break out of the main switch (if exists) and the main loop.
+     CloseInstructionPredication();
+     if (!builder_->getBuildPoint()->isTerminated()) {
+-      builder_->createBranch(current_shader().label_addresses().empty()
+-                                 ? main_loop_merge_
+-                                 : main_switch_merge_);
++      builder_->createBranch(HasMainSwitch() ? main_switch_merge_
++                                             : main_loop_merge_);
+     }
+   }
++  if (lsw_forward_cf_) {
++    // The exec's own conditionals and the skip guard close with it.
++    CloseExecConditionals();
++    LswCloseSkipGuard();
++    return;
++  }
+   UpdateExecConditionals(instr.type, instr.bool_constant_index,
+                          instr.condition);
+ }
+@@ -925,6 +1153,7 @@ void SpirvShaderTranslator::ProcessLoopStartInstruction(
+ 
+   // Loop control is outside execs - actually close the last exec.
+   CloseExecConditionals();
++  LswCloseSkipGuard();
+ 
+   EnsureBuildPointAvailable();
+ 
+@@ -988,6 +1217,33 @@ void SpirvShaderTranslator::ProcessLoopStartInstruction(
+       builder_->createCompositeConstruct(type_int4_, id_vector_temp_),
+       var_main_loop_address_);
+ 
++  if (lsw_forward_cf_) {
++    // if (count != 0) { loop { body (until the matching loop end) ...
++    LswLoop lsw_loop;
++    lsw_loop.if_merge = new spv::Block(builder_->getUniqueId(), *function_main_);
++    builder_->createSelectionMerge(lsw_loop.if_merge,
++                                   spv::SelectionControlMaskNone);
++    spv::Block& pre_block = builder_->makeNewBlock();
++    builder_->createConditionalBranch(
++        builder_->createBinOp(spv::OpINotEqual, type_bool_, loop_count_new,
++                              const_uint_0_),
++        &pre_block, lsw_loop.if_merge);
++    builder_->setBuildPoint(&pre_block);
++    lsw_loop.header = &builder_->makeNewBlock();
++    builder_->createBranch(lsw_loop.header);
++    builder_->setBuildPoint(lsw_loop.header);
++    lsw_loop.cont = new spv::Block(builder_->getUniqueId(), *function_main_);
++    lsw_loop.merge = new spv::Block(builder_->getUniqueId(), *function_main_);
++    uint_vector_temp_.clear();
++    builder_->createLoopMerge(lsw_loop.merge, lsw_loop.cont,
++                              spv::LoopControlDontUnrollMask, uint_vector_temp_);
++    spv::Block& lsw_body_block = builder_->makeNewBlock();
++    builder_->createBranch(&lsw_body_block);
++    builder_->setBuildPoint(&lsw_body_block);
++    lsw_loops_.push_back(lsw_loop);
++    return;
++  }
++
+   // Break (jump to the skip label) if the loop counter is 0 (since the
+   // condition is checked in the end).
+   spv::Block& head_block = *builder_->getBuildPoint();
+@@ -1024,6 +1280,7 @@ void SpirvShaderTranslator::ProcessLoopEndInstruction(
+ 
+   // Loop control is outside execs - actually close the last exec.
+   CloseExecConditionals();
++  LswCloseSkipGuard();
+ 
+   EnsureBuildPointAvailable();
+ 
+@@ -1055,9 +1312,21 @@ void SpirvShaderTranslator::ProcessLoopEndInstruction(
+   }
+ 
+   spv::Block& body_block = *builder_->getBuildPoint();
+-  spv::Block& continue_block = builder_->makeNewBlock();
+-  spv::Block& break_block = builder_->makeNewBlock();
+-  builder_->createSelectionMerge(&break_block, spv::SelectionControlMaskNone);
++  // LSWTCS forward-jump mode: continue = the loop's continue target, break =
++  // its merge (no selection merge: both targets belong to the loop).
++  const bool lsw_structured = lsw_forward_cf_ && !lsw_loops_.empty();
++  LswLoop lsw_loop;
++  if (lsw_structured) {
++    lsw_loop = lsw_loops_.back();
++    lsw_loops_.pop_back();
++  }
++  spv::Block& continue_block =
++      lsw_structured ? *lsw_loop.cont : builder_->makeNewBlock();
++  spv::Block& break_block =
++      lsw_structured ? *lsw_loop.merge : builder_->makeNewBlock();
++  if (!lsw_structured) {
++    builder_->createSelectionMerge(&break_block, spv::SelectionControlMaskNone);
++  }
+   {
+     std::unique_ptr<spv::Instruction> branch_conditional_op =
+         std::make_unique<spv::Instruction>(spv::OpBranchConditional);
+@@ -1080,6 +1349,9 @@ void SpirvShaderTranslator::ProcessLoopEndInstruction(
+   break_block.addPredecessor(&body_block);
+ 
+   // Continue case.
++  if (lsw_structured) {
++    body_block.getParent().addBlock(&continue_block);
++  }
+   builder_->setBuildPoint(&continue_block);
+   // Store the loop count with 1 subtracted.
+   builder_->createStore(builder_->createCompositeInsert(
+@@ -1115,11 +1387,16 @@ void SpirvShaderTranslator::ProcessLoopEndInstruction(
+           address_relative_stack_old, type_int4_, 0),
+       var_main_loop_address_);
+   // Jump back to the beginning of the loop body.
+-  main_switch_next_pc_phi_operands_.push_back(
+-      builder_->makeIntConstant(int(instr.loop_body_address)));
+-  main_switch_next_pc_phi_operands_.push_back(
+-      builder_->getBuildPoint()->getId());
+-  builder_->createBranch(main_loop_continue_);
++  if (lsw_structured) {
++    builder_->createBranch(lsw_loop.header);
++    body_block.getParent().addBlock(&break_block);
++  } else {
++    main_switch_next_pc_phi_operands_.push_back(
++        builder_->makeIntConstant(int(instr.loop_body_address)));
++    main_switch_next_pc_phi_operands_.push_back(
++        builder_->getBuildPoint()->getId());
++    builder_->createBranch(main_loop_continue_);
++  }
+ 
+   // Break case.
+   builder_->setBuildPoint(&break_block);
+@@ -1143,11 +1420,77 @@ void SpirvShaderTranslator::ProcessLoopEndInstruction(
+   builder_->createStore(
+       builder_->createCompositeConstruct(type_int4_, id_vector_temp_),
+       var_main_loop_address_);
++  if (lsw_structured) {
++    builder_->createBranch(lsw_loop.if_merge);
++    body_block.getParent().addBlock(lsw_loop.if_merge);
++    builder_->setBuildPoint(lsw_loop.if_merge);
++  }
+   // Now going to fall through to the next control flow instruction.
+ }
+ 
+ void SpirvShaderTranslator::ProcessJumpInstruction(
+     const ParsedJumpInstruction& instr) {
++  if (lsw_forward_cf_) {
++    // skip = (skip == 0 && condition) ? target : skip
++    CloseExecConditionals();
++    LswCloseSkipGuard();
++    EnsureBuildPointAvailable();
++    spv::Id skip = builder_->createLoad(var_lsw_skip_, spv::NoPrecision);
++    spv::Id take = builder_->createBinOp(spv::OpIEqual, type_bool_, skip,
++                                         const_int_0_);
++    spv::Id condition_id = spv::NoResult;
++    if (instr.type == ParsedJumpInstruction::Type::kConditional) {
++      id_vector_temp_.clear();
++      id_vector_temp_.push_back(const_int_0_);
++      id_vector_temp_.push_back(
++          builder_->makeIntConstant(int(instr.bool_constant_index >> 7)));
++      id_vector_temp_.push_back(builder_->makeIntConstant(
++          int((instr.bool_constant_index >> 5) & 3)));
++      spv::Id bool_constant_scalar = builder_->createLoad(
++          builder_->createAccessChain(spv::StorageClassUniform,
++                                      uniform_bool_loop_constants_,
++                                      id_vector_temp_),
++          spv::NoPrecision);
++      condition_id = builder_->createBinOp(
++          spv::OpINotEqual, type_bool_,
++          builder_->createBinOp(
++              spv::OpBitwiseAnd, type_uint_, bool_constant_scalar,
++              builder_->makeUintConstant(
++                  uint32_t(1) << (instr.bool_constant_index & 31))),
++          const_uint_0_);
++    } else if (instr.type == ParsedJumpInstruction::Type::kPredicated) {
++      condition_id = builder_->createLoad(var_main_predicate_, spv::NoPrecision);
++    }
++    if (condition_id != spv::NoResult) {
++      if (!instr.condition) {
++        condition_id =
++            builder_->createUnaryOp(spv::OpLogicalNot, type_bool_, condition_id);
++      }
++      take = builder_->createBinOp(spv::OpLogicalAnd, type_bool_, take,
++                                   condition_id);
++    }
++    if (instr.target_address <= instr.dword_index && !lsw_loops_.empty() &&
++        !lsw_loops_.back().if_merge) {
++      // Backward jump closing a do-while: continue if taken, else break.
++      LswLoop lsw_loop = lsw_loops_.back();
++      lsw_loops_.pop_back();
++      spv::Function& function = builder_->getBuildPoint()->getParent();
++      builder_->createConditionalBranch(take, lsw_loop.cont, lsw_loop.merge);
++      function.addBlock(lsw_loop.cont);
++      builder_->setBuildPoint(lsw_loop.cont);
++      builder_->createBranch(lsw_loop.header);
++      function.addBlock(lsw_loop.merge);
++      builder_->setBuildPoint(lsw_loop.merge);
++      return;
++    }
++    builder_->createStore(
++        builder_->createTriOp(spv::OpSelect, type_int_, take,
++                              builder_->makeIntConstant(
++                                  int(instr.target_address)),
++                              skip),
++        var_lsw_skip_);
++    return;
++  }
+   // Treat like exec, merge with execs if possible, since it's an if too.
+   ParsedExecInstruction::Type type;
+   if (instr.type == ParsedJumpInstruction::Type::kConditional) {
+@@ -3320,11 +3663,27 @@ spv::Id SpirvShaderTranslator::EndianSwap32Uint(spv::Id value, spv::Id endian) {
+           static_cast<unsigned int>(xenos::Endian::k8in32)));
+   spv::Id is_8in16_or_8in32 =
+       builder_->createBinOp(spv::OpLogicalOr, type_bool_, is_8in16, is_8in32);
+-  SpirvBuilder::IfBuilder if_8in16(is_8in16_or_8in32,
+-                                   spv::SelectionControlMaskNone, *builder_);
+-  spv::Id swapped_8in16;
++  // LSWTCS: branch-free (select a mask, then merge with XOR) instead of an if
++  // per swap - every vertex fetch dword had two if blocks, a large share of
++  // the GLSL Mesa has to compile on the Switch.
++  auto select_merge = [&](spv::Id condition, spv::Id swapped) {
++    spv::Id mask = builder_->createTriOp(
++        spv::OpSelect, type_uint_, condition,
++        builder_->makeUintConstant(UINT32_MAX), const_uint_0_);
++    if (num_components > 1) {
++      id_vector_temp_.clear();
++      id_vector_temp_.insert(id_vector_temp_.cend(), num_components, mask);
++      mask = builder_->createCompositeConstruct(type, id_vector_temp_);
++    }
++    return builder_->createBinOp(
++        spv::OpBitwiseXor, type, value,
++        builder_->createBinOp(
++            spv::OpBitwiseAnd, type,
++            builder_->createBinOp(spv::OpBitwiseXor, type, swapped, value),
++            mask));
++  };
+   {
+-    swapped_8in16 = builder_->createBinOp(
++    spv::Id swapped_8in16 = builder_->createBinOp(
+         spv::OpBitwiseOr, type,
+         builder_->createBinOp(
+             spv::OpBitwiseAnd, type,
+@@ -3336,9 +3695,8 @@ spv::Id SpirvShaderTranslator::EndianSwap32Uint(spv::Id value, spv::Id endian) {
+             builder_->createBinOp(spv::OpBitwiseAnd, type, value,
+                                   const_uint_00ff00ff_typed),
+             const_uint_8_typed));
++    value = select_merge(is_8in16_or_8in32, swapped_8in16);
+   }
+-  if_8in16.makeEndIf();
+-  value = if_8in16.createMergePhi(swapped_8in16, value);
+ 
+   // 16-in-32 or another half of 8-in-32 (doing 16-in-32 swap).
+   spv::Id is_16in32 = builder_->createBinOp(
+@@ -3347,18 +3705,14 @@ spv::Id SpirvShaderTranslator::EndianSwap32Uint(spv::Id value, spv::Id endian) {
+           static_cast<unsigned int>(xenos::Endian::k16in32)));
+   spv::Id is_8in32_or_16in32 =
+       builder_->createBinOp(spv::OpLogicalOr, type_bool_, is_8in32, is_16in32);
+-  SpirvBuilder::IfBuilder if_16in32(is_8in32_or_16in32,
+-                                    spv::SelectionControlMaskNone, *builder_);
+-  spv::Id swapped_16in32;
+   {
+-    swapped_16in32 = builder_->createQuadOp(
++    spv::Id swapped_16in32 = builder_->createQuadOp(
+         spv::OpBitFieldInsert, type,
+         builder_->createBinOp(spv::OpShiftRightLogical, type, value,
+                               const_uint_16_typed),
+         value, builder_->makeIntConstant(16), builder_->makeIntConstant(16));
++    value = select_merge(is_8in32_or_16in32, swapped_16in32);
+   }
+-  if_16in32.makeEndIf();
+-  value = if_16in32.createMergePhi(swapped_16in32, value);
+ 
+   return value;
+ }
+diff --git a/src/xenia/gpu/spirv_shader_translator.h b/src/xenia/gpu/spirv_shader_translator.h
+index db7365389..ece214a17 100644
+--- a/src/xenia/gpu/spirv_shader_translator.h
++++ b/src/xenia/gpu/spirv_shader_translator.h
+@@ -27,6 +27,27 @@ namespace gpu {
+ 
+ class SpirvShaderTranslator : public ShaderTranslator {
+  public:
++  // LSWTCS (Switch, LSWTCS_GLTEXBIAS): pixel-shader 1D / 2D / cube fetches with
++  // a computed LOD and no register gradients sample with an implicit LOD plus a
++  // bias of `lod` instead of explicit gradients (coarse derivatives scaled by
++  // exp2(lod)): the same LOD, but full-rate sampling on Maxwell instead of its
++  // slow explicit-gradient path, and fewer instructions to compile.
++  static inline bool lsw_implicit_lod_bias = true;
++  // LSWTCS (Switch, LSWTCS_GLFWDCF): shaders whose control flow is forward jumps
++  // and properly nested guest loops (no calls or returns; every jump target
++  // after the jump and inside the same loop body; no exece inside a loop) are
++  // translated without the program-counter switch: a `skip` variable holds the
++  // pending jump target, every exec is wrapped in `if (skip == 0)`, a jump sets
++  // it, and its label clears it. Structured, straight-line code for the GLSL
++  // compiler instead of a for(;;){switch(pc)} dispatcher (one hub pixel shader
++  // was 193 KB of GLSL and 3 ms of GPU time per draw on the Switch).
++  static inline bool lsw_forward_jumps = true;
++  // LSWTCS_GLFWDLOOPS: also structure guest loops (loop/endloop and predicated
++  // backward-jump do-whiles) in forward-jump mode. Off by default: the build with
++  // it showed vertices snapping into place one by one on the Switch (2026-10-08,
++  // suspected; the 4 hub vertex shaders with loops then keep the dispatcher).
++  static inline bool lsw_structured_loops = false;
++
+   union Modification {
+     // If anything in this is structure is changed in a way not compatible with
+     // the previous layout, invalidate the pipeline storages by increasing this
+@@ -36,6 +57,15 @@ class SpirvShaderTranslator : public ShaderTranslator {
+     // incremental counter).
+     static constexpr uint32_t kVersion = 8;
+ 
++    // LSWTCS: bit 63 (unused by both the vertex and the pixel layout) = every
++    // texture this draw fetches has all components unsigned
++    // (TextureSign::kUnsigned), as the host checked at draw time. Texture
++    // fetches then sample only the unsigned binding and skip the per-component
++    // sign selection and the biased / gamma conversion: far less code for the
++    // Switch's GLSL compiler. Draws with other signs use the generic
++    // translation.
++    static constexpr uint64_t kLswTexturesUnsigned = UINT64_C(1) << 63;
++
+     enum class DepthStencilMode : uint32_t {
+       kNoModifiers,
+       // Early fragment tests - enable if alpha test and alpha to coverage are
+@@ -224,6 +254,8 @@ class SpirvShaderTranslator : public ShaderTranslator {
+     // If alpha to mask is enabled, bits 0:7 are sample offsets, and bit 8 must
+     // be 1.
+     uint32_t alpha_to_mask;
++    // LSW: std140 for OpenGL - vec4 color_exp_bias must start on a 16-byte boundary.
++    uint32_t lsw_padding_std140[3];
+ 
+     float color_exp_bias[4];
+ 
+@@ -384,6 +416,12 @@ class SpirvShaderTranslator : public ShaderTranslator {
+     bool fragment_shader_sample_interlock;
+ 
+     bool demote_to_helper_invocation;
++
++    // LSWTCS: the host compiler makes every float multiplication follow the
++    // Xenos rule 0 * anything = 0 (switch-mesa with the nouveau FMZ multiply,
++    // switch/mesa/mesa_fmz_edits.py), so the translator emits plain
++    // multiplications instead of ZeroIfAnyOperandIsZero selects.
++    bool lsw_host_mul_zero_wins = false;
+   };
+ 
+   SpirvShaderTranslator(const Features& features,
+@@ -516,6 +554,12 @@ class SpirvShaderTranslator : public ShaderTranslator {
+     return Modification(current_translation().modification());
+   }
+ 
++  // LSWTCS: see Modification::kLswTexturesUnsigned.
++  bool LswTexturesUnsigned() const {
++    return (current_translation().modification() &
++            Modification::kLswTexturesUnsigned) != 0;
++  }
++
+   bool IsSpirvVertexShader() const {
+     return is_vertex_shader() &&
+            !Shader::IsHostVertexShaderTypeDomain(
+@@ -878,9 +922,9 @@ class SpirvShaderTranslator : public ShaderTranslator {
+     kSystemConstantTextureSwizzles,
+     kSystemConstantTexturesResolved,
+     kSystemConstantAlphaTestReference,
+-    kSystemConstantAlphaToMask,
+     kSystemConstantEdram32bppTilePitchDwordsScaled,
+     kSystemConstantEdramDepthBaseDwordsScaled,
++    kSystemConstantAlphaToMask,
+     kSystemConstantColorExpBias,
+     kSystemConstantEdramPolyOffsetFrontScale,
+     kSystemConstantEdramPolyOffsetBackScale,
+@@ -1063,6 +1107,29 @@ class SpirvShaderTranslator : public ShaderTranslator {
+   std::unique_ptr<spv::Instruction> main_switch_op_;
+   spv::Block* main_switch_merge_;
+   std::vector<spv::Id> main_switch_next_pc_phi_operands_;
++  // LSWTCS forward-jump mode (lsw_forward_jumps): enabled for this translation,
++  // the pending jump target variable, and the open `if (skip == 0)` around the
++  // current exec (merge block not added to the function yet).
++  bool lsw_forward_cf_ = false;
++  spv::Id var_lsw_skip_ = spv::NoResult;
++  spv::Block* lsw_skip_guard_merge_ = nullptr;
++  // Guest loops as structured SPIR-V loops in forward-jump mode:
++  // if (count != 0) { loop { body; continue: ... } merge: pop } if_merge:
++  struct LswLoop {
++    spv::Block* header = nullptr;
++    spv::Block* cont = nullptr;
++    spv::Block* merge = nullptr;
++    spv::Block* if_merge = nullptr;   // null for a do-while (backward jump)
++  };
++  std::vector<LswLoop> lsw_loops_;
++  // Labels that start a do-while loop closed by a predicated backward jump.
++  std::vector<uint32_t> lsw_dowhile_heads_;
++  bool LswForwardOnlyControlFlow();
++  bool HasMainSwitch() const {
++    return !current_shader().label_addresses().empty() && !lsw_forward_cf_;
++  }
++  void LswOpenSkipGuard();
++  void LswCloseSkipGuard();
+ 
+   // If the exec bool constant / predicate conditional is open, block after it
+   // (not added to the function yet).
+diff --git a/src/xenia/gpu/spirv_shader_translator_alu.cc b/src/xenia/gpu/spirv_shader_translator_alu.cc
+index ad8414e0f..ad8d92b4e 100644
+--- a/src/xenia/gpu/spirv_shader_translator_alu.cc
++++ b/src/xenia/gpu/spirv_shader_translator_alu.cc
+@@ -25,6 +25,9 @@ spv::Id SpirvShaderTranslator::ZeroIfAnyOperandIsZero(spv::Id value,
+                                                       spv::Id operand_0_abs,
+                                                       spv::Id operand_1_abs) {
+   EnsureBuildPointAvailable();
++  if (features_.lsw_host_mul_zero_wins) {
++    return value;
++  }
+   int num_components = builder_->getNumComponents(value);
+   assert_true(builder_->getNumComponents(operand_0_abs) == num_components);
+   assert_true(builder_->getNumComponents(operand_1_abs) == num_components);
+@@ -200,7 +203,7 @@ spv::Id SpirvShaderTranslator::ProcessVectorAluOperation(
+           used_result_components &
+           ~instr.vector_operands[0].GetIdenticalComponents(
+               instr.vector_operands[1]);
+-      if (multiplicands_different) {
++      if (multiplicands_different && !features_.lsw_host_mul_zero_wins) {
+         // Shader Model 3: +0 or denormal * anything = +-0.
+         spv::Id different_operands[2] = {multiplicands[0], multiplicands[1]};
+         spv::Id different_result = result;
+diff --git a/src/xenia/gpu/spirv_shader_translator_fetch.cc b/src/xenia/gpu/spirv_shader_translator_fetch.cc
+index e0f519275..9fd4850c3 100644
+--- a/src/xenia/gpu/spirv_shader_translator_fetch.cc
++++ b/src/xenia/gpu/spirv_shader_translator_fetch.cc
+@@ -10,6 +10,7 @@
+ #include "xenia/gpu/spirv_shader_translator.h"
+ 
+ #include <climits>
++#include <cstdlib>
+ #include <cmath>
+ 
+ #include "third_party/fmt/include/fmt/format.h"
+@@ -166,6 +167,63 @@ void SpirvShaderTranslator::ProcessVertexFetchInstruction(
+       builder_->createAccessChain(spv::StorageClassUniform,
+                                   uniform_fetch_constants_, id_vector_temp_),
+       spv::NoPrecision);
++
++  // LSWTCS: bounds check against the fetch constant's size (bits 2:25 of the
++  // second word, in dwords): an element whose first needed word lies at or past
++  // the end reads as 0 (Adreno 200 behaviour, see the FIXME above). LEGO Star
++  // Wars' morph blend reads Yoda's morph stream at element `vertex + 8061` of a
++  // 16122-dword buffer during gameplay; unchecked, it read whatever an earlier
++  // draw left in shared memory (Yoda spike, 2026-10-12). Same check as the
++  // DXBC translator. LSWTCS_VFETCHCLAMP=0 disables.
++  static const bool vfetch_clamp = [] {
++    const char* e = std::getenv("LSWTCS_VFETCHCLAMP");
++    return !(e && e[0] == '0');
++  }();
++  if (vfetch_clamp) {
++    id_vector_temp_.clear();
++    id_vector_temp_.push_back(const_int_0_);
++    id_vector_temp_.push_back(
++        builder_->makeIntConstant(int(fetch_constant_word_0_index >> 2)));
++    id_vector_temp_.push_back(
++        builder_->makeIntConstant(int(fetch_constant_word_0_index & 3)));
++    spv::Id base_dwords = builder_->createBinOp(
++        spv::OpShiftRightLogical, type_uint_,
++        builder_->createLoad(
++            builder_->createAccessChain(spv::StorageClassUniform,
++                                        uniform_fetch_constants_,
++                                        id_vector_temp_),
++            spv::NoPrecision),
++        builder_->makeUintConstant(2));
++    uint32_t first_word_index;
++    xe::bit_scan_forward(needed_words, &first_word_index);
++    spv::Id first_address = builder_->createBinOp(
++        spv::OpIAdd, type_int_, address,
++        builder_->makeIntConstant(
++            int(instr.attributes.offset + int32_t(first_word_index))));
++    spv::Id relative = builder_->createBinOp(
++        spv::OpISub, type_uint_,
++        builder_->createUnaryOp(spv::OpBitcast, type_uint_, first_address),
++        base_dwords);
++    spv::Id size_dwords = builder_->createBinOp(
++        spv::OpBitwiseAnd, type_uint_,
++        builder_->createBinOp(spv::OpShiftRightLogical, type_uint_,
++                              fetch_constant_word_1,
++                              builder_->makeUintConstant(2)),
++        builder_->makeUintConstant(0xFFFFFF));
++    spv::Id mask = builder_->createTriOp(
++        spv::OpSelect, type_uint_,
++        builder_->createBinOp(spv::OpULessThan, type_bool_, relative,
++                              size_dwords),
++        builder_->makeUintConstant(UINT32_MAX), builder_->makeUintConstant(0));
++    if (word_count > 1) {
++      id_vector_temp_.clear();
++      id_vector_temp_.insert(id_vector_temp_.cend(), word_count, mask);
++      mask = builder_->createCompositeConstruct(
++          type_uint_vectors_[word_count - 1], id_vector_temp_);
++    }
++    words = builder_->createBinOp(spv::OpBitwiseAnd,
++                                  builder_->getTypeId(words), words, mask);
++  }
+   words = EndianSwap32Uint(
+       words, builder_->createBinOp(spv::OpBitwiseAnd, type_uint_,
+                                    fetch_constant_word_1,
+@@ -694,11 +752,15 @@ void SpirvShaderTranslator::ProcessTextureFetchInstruction(
+               : instr.dimension;
+       size_t image_2d_array_or_cube_unsigned_index = FindOrAddTextureBinding(
+           fetch_constant_index, dimension_2d_array_or_cube, false);
+-      size_t image_2d_array_or_cube_signed_index = FindOrAddTextureBinding(
+-          fetch_constant_index, dimension_2d_array_or_cube, true);
++      size_t image_2d_array_or_cube_signed_index =
++          LswTexturesUnsigned()
++              ? SIZE_MAX
++              : FindOrAddTextureBinding(fetch_constant_index,
++                                        dimension_2d_array_or_cube, true);
+       if (sampler_index == SIZE_MAX ||
+           image_2d_array_or_cube_unsigned_index == SIZE_MAX ||
+-          image_2d_array_or_cube_signed_index == SIZE_MAX) {
++          (image_2d_array_or_cube_signed_index == SIZE_MAX &&
++           !LswTexturesUnsigned())) {
+         bindings_set_up = false;
+       }
+       size_t image_3d_unsigned_index = SIZE_MAX;
+@@ -706,10 +768,13 @@ void SpirvShaderTranslator::ProcessTextureFetchInstruction(
+       if (instr.dimension == xenos::FetchOpDimension::k3DOrStacked) {
+         image_3d_unsigned_index = FindOrAddTextureBinding(
+             fetch_constant_index, xenos::FetchOpDimension::k3DOrStacked, false);
+-        image_3d_signed_index = FindOrAddTextureBinding(
+-            fetch_constant_index, xenos::FetchOpDimension::k3DOrStacked, true);
++        if (!LswTexturesUnsigned()) {
++          image_3d_signed_index = FindOrAddTextureBinding(
++              fetch_constant_index, xenos::FetchOpDimension::k3DOrStacked,
++              true);
++        }
+         if (image_3d_unsigned_index == SIZE_MAX ||
+-            image_3d_signed_index == SIZE_MAX) {
++            (image_3d_signed_index == SIZE_MAX && !LswTexturesUnsigned())) {
+           bindings_set_up = false;
+         }
+       }
+@@ -725,10 +790,12 @@ void SpirvShaderTranslator::ProcessTextureFetchInstruction(
+           texture_bindings_[image_2d_array_or_cube_unsigned_index];
+       image_2d_array_or_cube_unsigned = builder_->createLoad(
+           image_2d_array_or_cube_unsigned_binding.variable, spv::NoPrecision);
+-      const TextureBinding& image_2d_array_or_cube_signed_binding =
+-          texture_bindings_[image_2d_array_or_cube_signed_index];
+-      image_2d_array_or_cube_signed = builder_->createLoad(
+-          image_2d_array_or_cube_signed_binding.variable, spv::NoPrecision);
++      if (image_2d_array_or_cube_signed_index != SIZE_MAX) {
++        const TextureBinding& image_2d_array_or_cube_signed_binding =
++            texture_bindings_[image_2d_array_or_cube_signed_index];
++        image_2d_array_or_cube_signed = builder_->createLoad(
++            image_2d_array_or_cube_signed_binding.variable, spv::NoPrecision);
++      }
+       if (image_3d_unsigned_index != SIZE_MAX) {
+         const TextureBinding& image_3d_unsigned_binding =
+             texture_bindings_[image_3d_unsigned_index];
+@@ -1540,7 +1607,8 @@ void SpirvShaderTranslator::ProcessTextureFetchInstruction(
+         spv::Id const_uint_sign_signed =
+             builder_->makeUintConstant(uint32_t(xenos::TextureSign::kSigned));
+         {
+-          uint32_t result_remaining_components = used_result_nonzero_components;
++          uint32_t result_remaining_components =
++              LswTexturesUnsigned() ? 0 : used_result_nonzero_components;
+           uint32_t result_component_index;
+           while (xe::bit_scan_forward(result_remaining_components,
+                                       &result_component_index)) {
+@@ -1572,8 +1640,11 @@ void SpirvShaderTranslator::ProcessTextureFetchInstruction(
+             }
+           }
+         }
+-        spv::Id is_any_unsigned = builder_->createUnaryOp(
+-            spv::OpLogicalNot, type_bool_, is_all_signed);
++        spv::Id is_any_unsigned =
++            LswTexturesUnsigned()
++                ? spv::NoResult
++                : builder_->createUnaryOp(spv::OpLogicalNot, type_bool_,
++                                          is_all_signed);
+ 
+         // Load the fetch constant word 3, needed for result exponent biasing.
+         // exp_adjust is in word 3, bits 13:18 (6-bit signed).
+@@ -1638,7 +1709,14 @@ void SpirvShaderTranslator::ProcessTextureFetchInstruction(
+         // k2D.
+         // 3D vectors for k3DOrStacked, kCube.
+         spv::Id gradients_h = spv::NoResult, gradients_v = spv::NoResult;
+-        if (use_computed_lod) {
++        // LSWTCS: implicit LOD + bias instead of explicit gradients (see
++        // lsw_implicit_lod_bias). Not for 3D / stacked: those need the
++        // gradients for the layer filtering decision.
++        const bool lsw_bias =
++            use_computed_lod && lsw_implicit_lod_bias && is_pixel_shader() &&
++            !instr.attributes.use_register_gradients &&
++            instr.dimension != xenos::FetchOpDimension::k3DOrStacked;
++        if (use_computed_lod && !lsw_bias) {
+           // TODO(Triang3l): Gradient exponent adjustment is currently not done
+           // in getCompTexLOD, so not doing it here too for now. Apply the
+           // gradient exponent biases from the word 4 of the fetch constant in
+@@ -1829,10 +1907,13 @@ void SpirvShaderTranslator::ProcessTextureFetchInstruction(
+ 
+         // Sample the texture.
+         spv::ImageOperandsMask image_operands_mask =
+-            use_computed_lod ? spv::ImageOperandsGradMask
+-                             : spv::ImageOperandsLodMask;
++            lsw_bias ? spv::ImageOperandsBiasMask
++                     : (use_computed_lod ? spv::ImageOperandsGradMask
++                                         : spv::ImageOperandsLodMask);
+         spv::Id sample_result_unsigned, sample_result_signed;
+-        if (!use_computed_lod) {
++        if (lsw_bias) {
++          texture_parameters.bias = lod;
++        } else if (!use_computed_lod) {
+           texture_parameters.lod = lod;
+         }
+         if (instr.dimension == xenos::FetchOpDimension::k3DOrStacked) {
+@@ -2083,7 +2164,7 @@ void SpirvShaderTranslator::ProcessTextureFetchInstruction(
+           sample_result_signed = if_data_is_3d.createMergePhi(
+               sample_result_signed_3d, sample_result_signed_stacked);
+         } else {
+-          if (use_computed_lod) {
++          if (use_computed_lod && !lsw_bias) {
+             texture_parameters.gradX = gradients_h;
+             texture_parameters.gradY = gradients_v;
+           }
+@@ -2161,12 +2242,16 @@ void SpirvShaderTranslator::ProcessTextureFetchInstruction(
+               // Fetched components.
+               // Select whether the result is signed or unsigned (or biased or
+               // gamma-corrected) based on the post-swizzle signedness.
+-              spv::Id swizzle_sample_result = builder_->createTriOp(
+-                  spv::OpSelect, type_float4_,
+-                  builder_->smearScalar(
+-                      spv::NoPrecision,
+-                      result_is_signed[result_component_index], type_bool4_),
+-                  sample_result_signed, sample_result_unsigned);
++              spv::Id swizzle_sample_result =
++                  LswTexturesUnsigned()
++                      ? sample_result_unsigned
++                      : builder_->createTriOp(
++                            spv::OpSelect, type_float4_,
++                            builder_->smearScalar(
++                                spv::NoPrecision,
++                                result_is_signed[result_component_index],
++                                type_bool4_),
++                            sample_result_signed, sample_result_unsigned);
+               // Bit 0 - X or Y, Z or W, 0 or 1.
+               spv::Id swizzle_x_or_y = builder_->createTriOp(
+                   spv::OpSelect, type_float_, swizzle_bit_0,
+@@ -2211,6 +2296,15 @@ void SpirvShaderTranslator::ProcessTextureFetchInstruction(
+                                       &result_component_index)) {
+             result_remaining_components &=
+                 ~(UINT32_C(1) << result_component_index);
++            if (LswTexturesUnsigned()) {
++              if (features_.image_view_format_swizzle) {
++                result[result_component_index] =
++                    builder_->createCompositeExtract(sample_result_unsigned,
++                                                     type_float_,
++                                                     result_component_index);
++              }
++              continue;
++            }
+             spv::Id sample_result_component_unsigned =
+                 features_.image_view_format_swizzle
+                     ? builder_->createCompositeExtract(sample_result_unsigned,
+@@ -2477,6 +2571,29 @@ void SpirvShaderTranslator::SampleTexture(
+     spv::Id is_any_signed, spv::Id& result_unsigned_out,
+     spv::Id& result_signed_out, spv::Id lerp_factor,
+     spv::Id lerp_first_unsigned, spv::Id lerp_first_signed) {
++  if (LswTexturesUnsigned()) {
++    texture_parameters.sampler = builder_->createBinOp(
++        spv::OpSampledImage,
++        builder_->makeSampledImageType(builder_->getTypeId(image_unsigned)),
++        image_unsigned, sampler);
++    spv::Id result = builder_->createTextureCall(
++        spv::NoPrecision, type_float4_, false, false, false, false, false,
++        texture_parameters, image_operands_mask);
++    if (lerp_factor != spv::NoResult && lerp_first_unsigned != spv::NoResult) {
++      spv::Id lerp_difference = builder_->createNoContractionBinOp(
++          spv::OpVectorTimesScalar, type_float4_,
++          builder_->createNoContractionBinOp(spv::OpFSub, type_float4_, result,
++                                             lerp_first_unsigned),
++          lerp_factor);
++      result = builder_->createNoContractionBinOp(spv::OpFAdd, type_float4_,
++                                                  result, lerp_difference);
++    }
++    // The signed result is never selected; the same value keeps the callers'
++    // phis valid.
++    result_unsigned_out = result;
++    result_signed_out = result;
++    return;
++  }
+   for (uint32_t i = 0; i < 2; ++i) {
+     SpirvBuilder::IfBuilder sign_if(i ? is_any_signed : is_any_unsigned,
+                                     spv::SelectionControlDontFlattenMask,
+@@ -2516,6 +2633,16 @@ void SpirvShaderTranslator::SampleTexture(
+ spv::Id SpirvShaderTranslator::QueryTextureLod(
+     spv::Builder::TextureParameters& texture_parameters, spv::Id image_unsigned,
+     spv::Id image_signed, spv::Id sampler, spv::Id is_all_signed) {
++  if (LswTexturesUnsigned()) {
++    texture_parameters.sampler = builder_->createBinOp(
++        spv::OpSampledImage,
++        builder_->makeSampledImageType(builder_->getTypeId(image_unsigned)),
++        image_unsigned, sampler);
++    return builder_->createCompositeExtract(
++        builder_->createTextureQueryCall(spv::OpImageQueryLod,
++                                         texture_parameters, false),
++        type_float_, 1);
++  }
+   // OpSampledImage must be in the same block as where its result is used.
+   SpirvBuilder::IfBuilder if_signed(
+       is_all_signed, spv::SelectionControlDontFlattenMask, *builder_);
+diff --git a/third_party/ffmpeg-xenia/libavcodec/bsf_list.c b/third_party/ffmpeg-xenia/libavcodec/bsf_list.c
+index d31ece942..d8e432c18 100644
+--- a/third_party/ffmpeg-xenia/libavcodec/bsf_list.c
++++ b/third_party/ffmpeg-xenia/libavcodec/bsf_list.c
+@@ -1,3 +1,3 @@
+-static const AVBitStreamFilter * const bitstream_filters[] = {
++static const FFBitStreamFilter * const bitstream_filters[] = {
+     &ff_null_bsf,
+     NULL };
+diff --git a/third_party/ffmpeg-xenia/libavcodec/codec_list.c b/third_party/ffmpeg-xenia/libavcodec/codec_list.c
+index c77643c83..ed8c5900e 100644
+--- a/third_party/ffmpeg-xenia/libavcodec/codec_list.c
++++ b/third_party/ffmpeg-xenia/libavcodec/codec_list.c
+@@ -1,4 +1,4 @@
+-static const AVCodec * const codec_list[] = {
++static const FFCodec * const codec_list[] = {
+     &ff_mp3float_decoder,
+     &ff_mp3_decoder,
+     &ff_wmapro_decoder,
+diff --git a/third_party/ffmpeg-xenia/libavcodec/parser_list.c b/third_party/ffmpeg-xenia/libavcodec/parser_list.c
+index f0dc7f295..cea9c54ed 100644
+--- a/third_party/ffmpeg-xenia/libavcodec/parser_list.c
++++ b/third_party/ffmpeg-xenia/libavcodec/parser_list.c
+@@ -1,3 +1,3 @@
+-static const AVCodecParser * const parser_list[] = {
++static const FFCodecParser * const parser_list[] = {
+     &ff_mpegaudio_parser,
+     NULL };

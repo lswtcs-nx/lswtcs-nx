@@ -1,0 +1,15 @@
+{
+  "review_question": "Does the011 negative diagnostic close any remaining lifetime gap at the exact009 final-release failure?",
+  "answer": "No first invalidator captured; no BO repair or added probe justified by this run.",
+  "source_basis": [
+    "Existing wrapper checks recognized identity before the real nouveau_bo_ref call; the driver executes outside the ledger mutex.",
+    "nouveau_bo_del loads bo->device and unmaps before calling free; the allocator hook is after that failing-use boundary.",
+    "A write/race after the precheck and before the driver field load is not excluded by sampled equality.",
+    "A stale owner after address reuse can see a new valid generation at the same pointer; identity alone does not distinguish it.",
+    "Observer locking/timing can perturb the race; internal submission increments are sampled, not individually journaled."
+  ],
+  "action": "Keep bounded observer available but off without marker. Preserve BO fault separately; do not add generalized write watching or repeat identical tests without a discriminator.",
+  "unrelated_evidence_selected": "Proven recorded draw-key counterexamples have a local producer/reproducer and justify a small existing-key repair independently of the unreproduced native crash.",
+  "bo_observer_sha256": "9e57ae86cac6b0e42b0d25280264768cbce9474b4d528b26337c92fe095b4f8c",
+  "bo_ledger_sha256": "193edd09a676ee55ced6bcd815ca966bc4ef32e533e5519ca809ce3acf48f3cb"
+}

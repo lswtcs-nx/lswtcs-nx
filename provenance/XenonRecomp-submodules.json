@@ -1,0 +1,26 @@
+[
+  {
+    "path": "thirdparty/fmt",
+    "commit": "873670ba3f9e7bc77ec2c1c94b04f1f8bef77e9f"
+  },
+  {
+    "path": "thirdparty/libmspack",
+    "commit": "305907723a4e7ab2018e58040059ffb5e77db837"
+  },
+  {
+    "path": "thirdparty/simde",
+    "commit": "a532a12ca9bbdc5e6547eb602e6256b71a5377d4"
+  },
+  {
+    "path": "thirdparty/tiny-AES-c",
+    "commit": "23856752fbd139da0b8ca6e471a13d5bcc99a08d"
+  },
+  {
+    "path": "thirdparty/tomlplusplus",
+    "commit": "c4369ae1d8955cae20c4ab40b9813ef4b60e48be"
+  },
+  {
+    "path": "thirdparty/xxHash",
+    "commit": "2bf8313b934633b2a5b7e8fd239645b85e10c852"
+  }
+]

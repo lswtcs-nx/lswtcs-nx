@@ -1,0 +1,66 @@
+{
+  "version": "0.0.12",
+  "scope": "Shared recorded draw identity/tile merge eligibility correction; no new recorder/BO/resource framework",
+  "nro": {
+    "bytes": 115026117,
+    "sha256": "b1d58d5d04fa950f65ca0e0a026d922d46749bbd7c18810ff9e2205eb62ecce5",
+    "image_bytes": 115003392,
+    "bss_bytes": 32604160,
+    "build_id": "58772274a0243d2ae0df3ba464f6e80caec667b4000000000000000000000000",
+    "segments": [
+      {
+        "name": "text",
+        "offset": 0,
+        "bytes": 81375232
+      },
+      {
+        "name": "rodata",
+        "offset": 81375232,
+        "bytes": 20193280
+      },
+      {
+        "name": "data",
+        "offset": 101568512,
+        "bytes": 13434880
+      }
+    ]
+  },
+  "elf": {
+    "bytes": 434108552,
+    "sha256": "cfff4a1255a9a8daf40851891f3dd1d041d6b506914ad379bd93e7e6ae046c4d",
+    "machine": "AArch64",
+    "load_segments": [
+      {
+        "virtual_address": 0,
+        "file_bytes": 81374816,
+        "memory_bytes": 81374816,
+        "flags": 5,
+        "alignment": 65536
+      },
+      {
+        "virtual_address": 81375232,
+        "file_bytes": 20191436,
+        "memory_bytes": 20191436,
+        "flags": 4,
+        "alignment": 65536
+      },
+      {
+        "virtual_address": 101568512,
+        "file_bytes": 13432216,
+        "memory_bytes": 46035464,
+        "flags": 6,
+        "alignment": 65536
+      }
+    ]
+  },
+  "map_sha256": "af19d21081414b30256b82d4174b7478558873e9b43afdbae5b77525b9089789",
+  "compiler_inputs": 4996,
+  "local_cases": 337,
+  "formerly_wrong_cases_rejected": 26,
+  "hardware_executed": false,
+  "hardware_passed": false,
+  "checklist_passed": 4,
+  "checklist_total": 5,
+  "checklist_basis": "Reproducer/owning-boundary audit; shared existing-key/schema implementation; actual-function old/new regression and controls; integrated ARM/static/source/preservation/staging; physical affected visual route remains",
+  "limits": "Recorded uploads are deltas, not full resident vertices. Walk-time copying, texture pixels/resolve dependencies and unobserved writers remain outside this key. No GPU pixel correctness or frame-rate guarantee."
+}

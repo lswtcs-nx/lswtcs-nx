@@ -1,0 +1,13 @@
+{
+  "passed": true,
+  "case_groups": {
+    "changed_inputs": 27,
+    "formerly_accepted_unequal_cases": 26,
+    "allowed_tile_cases": 3,
+    "unsupported_inputs": 7,
+    "legitimate_equivalent_plans": 300
+  },
+  "output": "changed=vertex old_skipped=8 new_skipped=0\r\nchanged=topology old_skipped=8 new_skipped=0\r\nchanged=fifth-upload old_skipped=8 new_skipped=0\r\nchanged=fifth-address old_skipped=8 new_skipped=0\r\nchanged=index-width old_skipped=8 new_skipped=0\r\nchanged=color-mask old_skipped=8 new_skipped=0\r\nchanged=stencil old_skipped=8 new_skipped=0\r\nchanged=mrt old_skipped=8 new_skipped=0\r\nchanged=mrt-blend old_skipped=8 new_skipped=0\r\nchanged=mode old_skipped=8 new_skipped=0\r\nchanged=raster old_skipped=8 new_skipped=0\r\nchanged=output-mask old_skipped=8 new_skipped=0\r\nchanged=writes-depth old_skipped=8 new_skipped=0\r\nchanged=gs old_skipped=8 new_skipped=0\r\nchanged=viewport-x old_skipped=8 new_skipped=0\r\nchanged=viewport-width old_skipped=8 new_skipped=0\r\nchanged=viewport-depth old_skipped=8 new_skipped=0\r\nchanged=sampler old_skipped=8 new_skipped=0\r\nchanged=binding old_skipped=8 new_skipped=0\r\nchanged=system-flags old_skipped=8 new_skipped=0\r\nchanged=base-index old_skipped=8 new_skipped=0\r\nchanged=index-endian old_skipped=8 new_skipped=0\r\nchanged=alpha-test old_skipped=8 new_skipped=0\r\nchanged=clip-plane old_skipped=8 new_skipped=0\r\nchanged=point-diameter old_skipped=8 new_skipped=0\r\nchanged=ordinary-point-radius old_skipped=8 new_skipped=0\r\nchanged=inline-index old_skipped=0 new_skipped=0\r\npreserved=identical groups=1 skipped=8\r\npreserved=tile-system groups=1 skipped=8\r\npreserved=point-tile-system groups=1 skipped=8\r\nunsupported=0 fallback=all-records\r\nunsupported=1 fallback=all-records\r\nunsupported=2 fallback=all-records\r\nunsupported=3 fallback=all-records\r\nunsupported=4 fallback=all-records\r\nunsupported=5 fallback=all-records\r\nunsupported=6 fallback=all-records\r\nsummary changed=27 old_bad=26 supported=3 unsupported=7 equivalent_plans=300 host_warm_3000draw_us=90264\r\n",
+  "scope": "Actual before/after draw keys/planners and new system-key helper. SystemConstants declaration extracted verbatim from installed project schema; Endian mocked with uint32 enum, env/default and MSAA helpers mocked. Actual record/frame/XXH3 code. No driver/shader execution, pixel attribution or console performance proof.",
+  "execution": "Delivered test runner and source/fixtures, using an already installed C++20 compiler; no game input, SDK, emulator, external checkout or download."
+}

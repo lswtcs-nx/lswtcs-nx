@@ -1,0 +1,8 @@
+{
+  "passed": true,
+  "known_owner_name_home_paths_removed": true,
+  "git_history_account_config_included": false,
+  "game_files_full_generated_output_saves_keys_binaries_included": false,
+  "required_upstream_notices_preserved": true,
+  "method": "Allowlisted text source export, known owner-name/home-path scan, no links/Git metadata, filename and content checks via verify_handoff --share-scan. This is not an anonymity guarantee for every public attribution."
+}

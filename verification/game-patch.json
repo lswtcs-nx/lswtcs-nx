@@ -1,0 +1,9 @@
+{
+  "passed": true,
+  "baseline_files": 3166,
+  "target_files": 3169,
+  "changed_files": 315,
+  "exact_normalized_patch_roundtrip": true,
+  "fresh_generation_or_full_build_run": false,
+  "basis": "Existing preserved folded generator output to current generated sources; does not certify a new generator invocation."
+}

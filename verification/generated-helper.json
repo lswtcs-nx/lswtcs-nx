@@ -1,0 +1,8 @@
+{
+  "passed": true,
+  "cases": [
+    "CRLF normalization + exact patch + added file + target verification",
+    "wrong baseline refuses before source writes"
+  ],
+  "scope": "Tiny controlled helper inputs; actual game patch roundtrip qualified separately; no fresh generation."
+}

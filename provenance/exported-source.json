@@ -1,0 +1,1440 @@
+{
+  "source_base_commit": "92ec175285504455777ccd14d2d0dcf19642694d",
+  "files": [
+    {
+      "file": "docs/NEXT_SESSION.md",
+      "origin": "current-harness/docs/NEXT_SESSION.md current checkpoint only",
+      "upstream_bytes_sha256": "662b832dbe13993d341a69c8582db86f4fc7c3988ec1e4b0bc181d44e8df0653",
+      "export_sha256": "d38fdd793c6470e559aa7fd3edfe290481ce2861a38547e5cb0e1ad2559f282a",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "docs/TCS360_CURRENT_BACKLOG.md",
+      "origin": "current-harness/docs/TCS360_CURRENT_BACKLOG.md",
+      "upstream_bytes_sha256": "da2d1347fda18210710acfa24fbe24e8b4a1752f11326e2501a27ac82b3e49a6",
+      "export_sha256": "da2d1347fda18210710acfa24fbe24e8b4a1752f11326e2501a27ac82b3e49a6",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "docs/TCS360_DEKO_IMPLEMENTATION_PLAN.md",
+      "origin": "current-harness/docs/TCS360_DEKO_IMPLEMENTATION_PLAN.md",
+      "upstream_bytes_sha256": "ce6555b3daa502dd2cdef268ba595a456dfc64e70424c294e5429cac8a7dfd66",
+      "export_sha256": "fda023a5a82f67d177493d9edc5c7cd8c2afb9e869b632cbfcb7bdff83a8f150",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "docs/TCS360_MESA_REFERENCE_REVIEW.md",
+      "origin": "current-harness/docs/TCS360_MESA_REFERENCE_REVIEW.md",
+      "upstream_bytes_sha256": "6a111a5292787ca2d3a91ede9fecc5ed74e4ad1b09540bc6b4ecf0ad2d75d594",
+      "export_sha256": "f29c0868ef541dd46037efc38b43d861e2a50795ac2efca425d357b40d793d62",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "evidence/bo-observation-review.json",
+      "origin": "local BO review",
+      "upstream_bytes_sha256": "7a94842cf6891ecc23a882eef94ea2a821894eca427c453a2e73b39a9f419a0c",
+      "export_sha256": "096871ba419129bc66bf150bca3e5203c0f33cfbd6451b034fab07b8ec150701",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "notices/FFmpeg/COPYING.GPLv2",
+      "origin": "dependency/FFmpeg/COPYING.GPLv2",
+      "upstream_bytes_sha256": "189b1af95d661151e054cea10c91b3d754e4de4d3fecfb074c1fb29476f7167b",
+      "export_sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "notices/FFmpeg/COPYING.GPLv3",
+      "origin": "dependency/FFmpeg/COPYING.GPLv3",
+      "upstream_bytes_sha256": "0b383d5a63da644f628d99c33976ea6487ed89aaa59f0b3257992deac1171e6b",
+      "export_sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "notices/FFmpeg/COPYING.LGPLv2.1",
+      "origin": "dependency/FFmpeg/COPYING.LGPLv2.1",
+      "upstream_bytes_sha256": "37828f96b745455c387a19946bc005b5e0b7c4cef782bbd67e9de5130d7d0bdc",
+      "export_sha256": "246041b6ecf9bc32d718a62c57877c78b5eb397b6467e74ed7ae2626ab189c30",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "notices/FFmpeg/COPYING.LGPLv3",
+      "origin": "dependency/FFmpeg/COPYING.LGPLv3",
+      "upstream_bytes_sha256": "ea7d049c7705dc13afc202dd18e1827f3484f8212fd3fa7b82fc4a0c363432c9",
+      "export_sha256": "da7eabb7bafdf7d3ae5e9f223aa5bdc1eece45ac569dc21b3b037520b4464768",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "notices/SIMDe/COPYING",
+      "origin": "dependency/SIMDe/COPYING",
+      "upstream_bytes_sha256": "83e48417dd53d380432ca08c1aabc35af5a8b8d4cac037f066510d0bcda8f2c0",
+      "export_sha256": "75ce0a8c5a7bff42fbd6f8f3b469b518132132c4f4948fb8d02b1ccb5d0df9d8",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "notices/SPIRV-Cross/LICENSE",
+      "origin": "dependency/SPIRV-Cross/LICENSE",
+      "upstream_bytes_sha256": "3ddf9be5c28fe27dad143a5dc76eea25222ad1dd68934a047064e56ed2fa40c5",
+      "export_sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "notices/XenonRecomp/LICENSE.md",
+      "origin": "dependency/XenonRecomp/LICENSE.md",
+      "upstream_bytes_sha256": "7fd801bac4a25e8d8bcdaa5a025f02ea245fd4c039b513ab4fc11cb5a0cfd3f7",
+      "export_sha256": "bcb33ae2cbc6c0f2818712d806112e774e684fce01ce80573f92adf80b7487f4",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "notices/xenia-canary/LICENSE",
+      "origin": "dependency/xenia-canary/LICENSE",
+      "upstream_bytes_sha256": "3d58f25c15634b6ec01d1f133ef798209ae06626ab8d2227b6223d5a9f5113f4",
+      "export_sha256": "369ea6b0f7ba57544067e9d470ca82a927da787fb0a749b11cb55f1fd0ba47ae",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "notices/xxHash/LICENSE",
+      "origin": "xxHash/LICENSE",
+      "upstream_bytes_sha256": "6ffedbc0f7878612d2b23589f1ff2ab15633e1df7963a5d9fc750ec5500c7e7a",
+      "export_sha256": "6ffedbc0f7878612d2b23589f1ff2ab15633e1df7963a5d9fc750ec5500c7e7a",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "profiles/hardware-B.env",
+      "origin": "current hardware profile, no emulator overrides",
+      "upstream_bytes_sha256": "6f1cf4fce359b8d60062eec95c0799e0fdafc72f709082c49d1a1c066efe3f6f",
+      "export_sha256": "6f1cf4fce359b8d60062eec95c0799e0fdafc72f709082c49d1a1c066efe3f6f",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "provenance/UPSTREAM_README.md",
+      "origin": "port/README.md",
+      "upstream_bytes_sha256": "5ae2d4bfd17325e55971d1c789757246bbf58eca3d11ae24aa87a39374c469b7",
+      "export_sha256": "a8420df3993c0d43dd6aec06dc5f1a66c445faf9e3b8257228d90ebbca16d969",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "provenance/XenonRecomp-gitmodules.txt",
+      "origin": "dependency/XenonRecomp/.gitmodules",
+      "upstream_bytes_sha256": "499aa3f43cfd56dd694ca9b813886bd38235aef4c2caccc455068b58c1860482",
+      "export_sha256": "0db42edac2c53638497f65f4b522e5b42b6b91fa9d8739bfdaf53752f51c02c9",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "provenance/generator-reference.patch",
+      "origin": "port/patches/XenonRecomp.patch used for original reference generation",
+      "upstream_bytes_sha256": "d43db9172d67a16acf536003c1b4d7df9364fac56793e23410461bac40320ae5",
+      "export_sha256": "d2562d33b726e48aece83f48c44dd9d8ce07566344a82178e3bb4d41da6b371a",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "provenance/xenia-canary-gitmodules.txt",
+      "origin": "dependency/xenia-canary/.gitmodules",
+      "upstream_bytes_sha256": "969096a18e46b80e03eb2c45ee75c5f8f524a5aa7b1cd9d5298acaaf0423029f",
+      "export_sha256": "e42348a5c028d23de541b29a9de597b391b70548cfd1e0231a845d6890eff073",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "reference-source/libdrm-nouveau/nouveau.c",
+      "origin": "public libdrm_nouveau v1.0.1 reference/nouveau.c",
+      "upstream_bytes_sha256": "ece1e4301d7bdc7b8c32a58727ff4c84dbd4d16bfa2bb2203012913b369cb8a1",
+      "export_sha256": "ece1e4301d7bdc7b8c32a58727ff4c84dbd4d16bfa2bb2203012913b369cb8a1",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "reference-source/libdrm-nouveau/nouveau.h",
+      "origin": "installed public libdrm_nouveau header",
+      "upstream_bytes_sha256": "ebb8682e9333f20789860e37cac57b52e0b0b9c4d74c063598ad1c91ef80d7ec",
+      "export_sha256": "ebb8682e9333f20789860e37cac57b52e0b0b9c4d74c063598ad1c91ef80d7ec",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "reference-source/libdrm-nouveau/private.h",
+      "origin": "public libdrm_nouveau v1.0.1 reference/private.h",
+      "upstream_bytes_sha256": "21db6949da33a887de7cd3b637777326c7926dba990963d0e698f29719a9e372",
+      "export_sha256": "21db6949da33a887de7cd3b637777326c7926dba990963d0e698f29719a9e372",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "reference-source/libdrm-nouveau/pushbuf.c",
+      "origin": "public libdrm_nouveau v1.0.1 reference/pushbuf.c",
+      "upstream_bytes_sha256": "fd3e827dcb710cb7293f589dc1f24f71b21f487156d2cfbc9a9852e6b70fb871",
+      "export_sha256": "fd3e827dcb710cb7293f589dc1f24f71b21f487156d2cfbc9a9852e6b70fb871",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "reference-source/libdrm-nouveau/sources.json",
+      "origin": "public libdrm_nouveau v1.0.1 reference/sources.json",
+      "upstream_bytes_sha256": "25202b77a94647e2f0750df07bbae7c6f8ef5350b1b224d5c012ce557fcf2716",
+      "export_sha256": "4c7d60c58c5d022d175dfb54aeb9937d652a22bd6a37e46601a67cdc0018343e",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/Convert 360/LSWTCS/GUARD_sub_826937F8_emptylist.patch.txt",
+      "origin": "port/Convert 360/LSWTCS/GUARD_sub_826937F8_emptylist.patch.txt",
+      "upstream_bytes_sha256": "c548996b4312fc302b9dfbb009d9e8676b295a4aa478e702556905edda487471",
+      "export_sha256": "a5857fcf171ff64f5d8bded20e36f0dba248feace90fbad6d68500c7c02f42f6",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/Convert 360/LSWTCS/lswtcs.toml",
+      "origin": "port/Convert 360/LSWTCS/lswtcs.toml",
+      "upstream_bytes_sha256": "00d8c91325e62a9a5f85b47a20c14216260804d768d101920341de143d1e9f9c",
+      "export_sha256": "c360d189566d867ecb1cb0a1c2a8b762e268fdbb7f4bd13acec6cdf093ece9e2",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/Convert 360/LSWTCS/lswtcs_baseline.toml",
+      "origin": "port/Convert 360/LSWTCS/lswtcs_baseline.toml",
+      "upstream_bytes_sha256": "3338127505bc9a831334913f85664fe87143f8d857758cfe364dd0267a835de2",
+      "export_sha256": "b85e49a49cf637cf29b4862957af560c3d844eb961ba916e8bf48a1b0263fd68",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/Convert 360/LSWTCS/lswtcs_locals.toml",
+      "origin": "port/Convert 360/LSWTCS/lswtcs_locals.toml",
+      "upstream_bytes_sha256": "0e3335488f0aa0c34c7c975dfae611bdc4f14487b44b4e9680c6f0846946eaf6",
+      "export_sha256": "7e41de336e8c8396582c34b177ef33c90854f74835e7f7f9dd45e869ef8a5554",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/Convert 360/LSWTCS/lswtcs_ref.toml",
+      "origin": "port/Convert 360/LSWTCS/lswtcs_ref.toml",
+      "upstream_bytes_sha256": "83f6056522463d183208e9e9c1ae1d650f9227f8b465da040ed1de83ac2eb373",
+      "export_sha256": "b4d8ffd0a6ebb1737867c79e077903ca592a65b2fce3c0c46ca4a026204e8227",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/Convert 360/LSWTCS/switches.toml",
+      "origin": "port/Convert 360/LSWTCS/switches.toml",
+      "upstream_bytes_sha256": "2801e1f4f0e67e26e720a4142d6fc4009c4595b8f08d02159556aae6ca80c552",
+      "export_sha256": "8135105f751597011b4133c6bd675c0638b6e11a041bd4f6240521b2cc33cc91",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/LICENSE",
+      "origin": "port/LICENSE",
+      "upstream_bytes_sha256": "f9c44b5fc74da7430d11f31445e06e3f2a7472c025bec4608448de0e3199956d",
+      "export_sha256": "0956db52d8d3ce2633eadb0aaa29918f3245d69f6056d4a8fd7d61cb8f639c78",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/LSWTCSRuntime/CMakeLists.txt",
+      "origin": "port/LSWTCSRuntime/CMakeLists.txt",
+      "upstream_bytes_sha256": "4680a6f0b6c0c19ce2fb08fc520edc49fbcff41638d71208ae07daf0b3be6607",
+      "export_sha256": "182e04730f5efcb518ab65cab6bd7681b7ee566b973c2632d6549a8cefa02b74",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/LSWTCSRuntime/ffmpeg_sources.cmake",
+      "origin": "port/LSWTCSRuntime/ffmpeg_sources.cmake",
+      "upstream_bytes_sha256": "3333c973670cdf78e4ff5280a4cc6d9ac6b5d26aa50e0038e9f47b5f4113c373",
+      "export_sha256": "a676a2f313e2908f7c2343274a39b24b626f1fc3832e2204e2ac67bb856e322e",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/LSWTCSRuntime/include/lsw_frame_capture.h",
+      "origin": "port/LSWTCSRuntime/include/lsw_frame_capture.h",
+      "upstream_bytes_sha256": "96addb5734eadd58fbe83f433500dfe9be014445f94890571873c36769a6a762",
+      "export_sha256": "96addb5734eadd58fbe83f433500dfe9be014445f94890571873c36769a6a762",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/LSWTCSRuntime/include/lsw_frame_capture_fragments.inc",
+      "origin": "port/LSWTCSRuntime/include/lsw_frame_capture_fragments.inc",
+      "upstream_bytes_sha256": "9484b0416dfb35d74d30722b11a1411ba7c00ac47c9d5f8d70ec6b74e981a8bc",
+      "export_sha256": "9484b0416dfb35d74d30722b11a1411ba7c00ac47c9d5f8d70ec6b74e981a8bc",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/LSWTCSRuntime/include/lsw_frame_capture_gpu.inc",
+      "origin": "port/LSWTCSRuntime/include/lsw_frame_capture_gpu.inc",
+      "upstream_bytes_sha256": "42589075ffbe870fb7bd759385eff04e2b52b7e4e2df11caf2dc3e69aa2343c8",
+      "export_sha256": "42589075ffbe870fb7bd759385eff04e2b52b7e4e2df11caf2dc3e69aa2343c8",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/LSWTCSRuntime/include/lsw_frame_capture_vertices.inc",
+      "origin": "port/LSWTCSRuntime/include/lsw_frame_capture_vertices.inc",
+      "upstream_bytes_sha256": "296c0b9231c1e79eb869dd01225164db2848a17c93cfe99fa6ab5a3f0ad50f3c",
+      "export_sha256": "296c0b9231c1e79eb869dd01225164db2848a17c93cfe99fa6ab5a3f0ad50f3c",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/LSWTCSRuntime/include/lsw_frame_capture_writer.inc",
+      "origin": "port/LSWTCSRuntime/include/lsw_frame_capture_writer.inc",
+      "upstream_bytes_sha256": "d2cbafa31e7e662ae42a9ef4405ab2a4c8674fe8d311b8c46e788fc0f3b4174a",
+      "export_sha256": "d2cbafa31e7e662ae42a9ef4405ab2a4c8674fe8d311b8c46e788fc0f3b4174a",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/LSWTCSRuntime/include/lsw_gpu_bridge.h",
+      "origin": "port/LSWTCSRuntime/include/lsw_gpu_bridge.h",
+      "upstream_bytes_sha256": "74ab6287577bb76bf36c4cbf801e9ea16d0195e28a518901bfc1f00f7b67857f",
+      "export_sha256": "70dcef690611262843891220d1e690abe5357d8a5861de541ba73968cb0c722d",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/LSWTCSRuntime/include/lsw_gpu_frame.h",
+      "origin": "port/LSWTCSRuntime/include/lsw_gpu_frame.h",
+      "upstream_bytes_sha256": "2dc1b3b932488c327c9df3fb5ec64f7bc3f73d70112d5eb58356a6e938ba774a",
+      "export_sha256": "2dc1b3b932488c327c9df3fb5ec64f7bc3f73d70112d5eb58356a6e938ba774a",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/LSWTCSRuntime/include/lsw_gpu_input_check.h",
+      "origin": "port/LSWTCSRuntime/include/lsw_gpu_input_check.h",
+      "upstream_bytes_sha256": "4049cdf592b1922e8c99b74c7f7a834a58f54017db5c12490f1443e6098e9e33",
+      "export_sha256": "4049cdf592b1922e8c99b74c7f7a834a58f54017db5c12490f1443e6098e9e33",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/LSWTCSRuntime/include/lsw_gpu_swap.h",
+      "origin": "port/LSWTCSRuntime/include/lsw_gpu_swap.h",
+      "upstream_bytes_sha256": "ac69ce9dd7c8436fc0825c951f1a19a3e2663f499c8129759e0f2c8012df0d0c",
+      "export_sha256": "ac69ce9dd7c8436fc0825c951f1a19a3e2663f499c8129759e0f2c8012df0d0c",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/LSWTCSRuntime/include/lsw_gpu_texture_layout.h",
+      "origin": "port/LSWTCSRuntime/include/lsw_gpu_texture_layout.h",
+      "upstream_bytes_sha256": "f61fc82eb6435dc4175459ba93b4aaab59fd8f0d3706ed7f94ea113377d14f3a",
+      "export_sha256": "f61fc82eb6435dc4175459ba93b4aaab59fd8f0d3706ed7f94ea113377d14f3a",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/LSWTCSRuntime/include/lsw_gpu_texture_layout.inc",
+      "origin": "port/LSWTCSRuntime/include/lsw_gpu_texture_layout.inc",
+      "upstream_bytes_sha256": "9a1c0c145f2f97ef181f7a0445dd1f2e6d50c1ad13aa868410b6f4fb725141b0",
+      "export_sha256": "9a1c0c145f2f97ef181f7a0445dd1f2e6d50c1ad13aa868410b6f4fb725141b0",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/LSWTCSRuntime/include/lsw_guest_host_lock.h",
+      "origin": "port/LSWTCSRuntime/include/lsw_guest_host_lock.h",
+      "upstream_bytes_sha256": "a8a04913bf2a91add92bdefcb7f89d3e75934726aa2834ff3fd229df2e0f9a93",
+      "export_sha256": "a8a04913bf2a91add92bdefcb7f89d3e75934726aa2834ff3fd229df2e0f9a93",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/LSWTCSRuntime/include/lsw_guest_layout.h",
+      "origin": "port/LSWTCSRuntime/include/lsw_guest_layout.h",
+      "upstream_bytes_sha256": "e8a929d1d50ea01d0eb7f3712ac3fabb0e6732755fbfb4f470d6b0f5426bccc5",
+      "export_sha256": "e8a929d1d50ea01d0eb7f3712ac3fabb0e6732755fbfb4f470d6b0f5426bccc5",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/LSWTCSRuntime/include/lsw_guest_memory_access.h",
+      "origin": "port/LSWTCSRuntime/include/lsw_guest_memory_access.h",
+      "upstream_bytes_sha256": "3cfc96f875f0e2fa179de4f0d845acd9adc2760da27d2186c067d09dbf53e28f",
+      "export_sha256": "3cfc96f875f0e2fa179de4f0d845acd9adc2760da27d2186c067d09dbf53e28f",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/LSWTCSRuntime/include/lsw_guest_memory_ppc.h",
+      "origin": "port/LSWTCSRuntime/include/lsw_guest_memory_ppc.h",
+      "upstream_bytes_sha256": "64d1a15e5116bc31b5bee877a051fe8ce10c6fbc0e0001bf686c1b149a22d267",
+      "export_sha256": "64d1a15e5116bc31b5bee877a051fe8ce10c6fbc0e0001bf686c1b149a22d267",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/LSWTCSRuntime/include/lsw_kernel_variables.h",
+      "origin": "port/LSWTCSRuntime/include/lsw_kernel_variables.h",
+      "upstream_bytes_sha256": "cca1384cee7c16da1b3d412713241f8fe2242eaeaa404e6c74ff28d5dc3bbd05",
+      "export_sha256": "cca1384cee7c16da1b3d412713241f8fe2242eaeaa404e6c74ff28d5dc3bbd05",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/LSWTCSRuntime/include/lsw_menu_policy.h",
+      "origin": "port/LSWTCSRuntime/include/lsw_menu_policy.h",
+      "upstream_bytes_sha256": "2909afbea3e77e96b081e304f1c91c4ae011be6320814d75d647ddf4e7c29f23",
+      "export_sha256": "2909afbea3e77e96b081e304f1c91c4ae011be6320814d75d647ddf4e7c29f23",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/LSWTCSRuntime/include/lsw_save_platform.h",
+      "origin": "port/LSWTCSRuntime/include/lsw_save_platform.h",
+      "upstream_bytes_sha256": "8ee14c32c68ef8ef5618a62f83cdbe2306f5f60700be61b614287dfc9e5cde1c",
+      "export_sha256": "8ee14c32c68ef8ef5618a62f83cdbe2306f5f60700be61b614287dfc9e5cde1c",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/LSWTCSRuntime/include/xe_types.h",
+      "origin": "port/LSWTCSRuntime/include/xe_types.h",
+      "upstream_bytes_sha256": "f4b722b5c34f0cab4abca92ec65eeaa5c4817de251fda704d3f5a81fb1114500",
+      "export_sha256": "663649a610f786501288162ab8f3874cc8b9982fcd50ccfbcc3a885b8a2dc7d2",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/LSWTCSRuntime/include/xenos_vs.h",
+      "origin": "port/LSWTCSRuntime/include/xenos_vs.h",
+      "upstream_bytes_sha256": "e4b2317bb3067ef63a6ca743d099b7eb8637057949fd23cd9549c7d3ab947bcf",
+      "export_sha256": "6bdd26a00f8f44665c472a8bb85157a76863fafc4654a5767bfed7fc1126f34f",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/LSWTCSRuntime/source/gpu_d3d12.cpp",
+      "origin": "port/LSWTCSRuntime/source/gpu_d3d12.cpp",
+      "upstream_bytes_sha256": "82a554a5bf5bdb40d420eb9cb16dcea27c614695fe6f9aaeec0cc5cfbed3acab",
+      "export_sha256": "82a554a5bf5bdb40d420eb9cb16dcea27c614695fe6f9aaeec0cc5cfbed3acab",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/LSWTCSRuntime/source/gpu_d3d12.h",
+      "origin": "port/LSWTCSRuntime/source/gpu_d3d12.h",
+      "upstream_bytes_sha256": "e314d6411f1e2fdaa2f110edc4caa6d3545fe78021ea4a9aec30b3927c68be01",
+      "export_sha256": "21573314b7df603aacc988bd7dcd440ed885c6508dbd64eb3cecf6bcaf5ba8ef",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/LSWTCSRuntime/source/gpu_ringbuf.cpp",
+      "origin": "port/LSWTCSRuntime/source/gpu_ringbuf.cpp",
+      "upstream_bytes_sha256": "de1b9a3ee101cfc0b3a8cca585a1211582da857c5a67e4d947a30ff7f2ff7d64",
+      "export_sha256": "03ba274040f1ae8794cc34992a0e076299116247a3e44c5e92b1e93747e3b3df",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/LSWTCSRuntime/source/gpu_ringbuf.h",
+      "origin": "port/LSWTCSRuntime/source/gpu_ringbuf.h",
+      "upstream_bytes_sha256": "025b5150d74e5ded1e70b8224ec9319525dd0bb4943e83d2b2a4bfd684e73ee1",
+      "export_sha256": "47f54fc7da49d66e8a2d19c49334b3c592551bb11c5949963d1726b4c3b4ae74",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/LSWTCSRuntime/source/gpu_xedraw.inc",
+      "origin": "port/LSWTCSRuntime/source/gpu_xedraw.inc",
+      "upstream_bytes_sha256": "8e8857d08ecc7a84a13733a4bd2e75c6c6146aeecefd878c9f3a630aa1095bcd",
+      "export_sha256": "8e8857d08ecc7a84a13733a4bd2e75c6c6146aeecefd878c9f3a630aa1095bcd",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/LSWTCSRuntime/source/host_audio.cpp",
+      "origin": "port/LSWTCSRuntime/source/host_audio.cpp",
+      "upstream_bytes_sha256": "b7192c8b41d08c7b84c4755c64ebe288334adad306b7289429becae36da138f9",
+      "export_sha256": "359a23d896bc7327af0a8f73851ebdab1b2a961ef5aeee8531cc0025521de486",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/LSWTCSRuntime/source/kernel_stubs.cpp",
+      "origin": "port/LSWTCSRuntime/source/kernel_stubs.cpp",
+      "upstream_bytes_sha256": "8aae82e8500938e5428de8ebde299fda0025de35130b920e3559066ad228f2a9",
+      "export_sha256": "8aae82e8500938e5428de8ebde299fda0025de35130b920e3559066ad228f2a9",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/LSWTCSRuntime/source/lsw_net.inc",
+      "origin": "port/LSWTCSRuntime/source/lsw_net.inc",
+      "upstream_bytes_sha256": "94c4d2e0be9787b7efcab1640142833597d4ecf8b761dd55ef72f35b9f9ecccc",
+      "export_sha256": "1cd08c1fa65eb763b29d69f0841c565304675fdde3f5a7a6a153ed43f357abd2",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/LSWTCSRuntime/source/lsw_net_host.cpp",
+      "origin": "port/LSWTCSRuntime/source/lsw_net_host.cpp",
+      "upstream_bytes_sha256": "77688b010bad2351b953834d8a55b5a0eb8691e3420a74eaf818c89b43fd4b6b",
+      "export_sha256": "680315b19934e0f8aa68ed2497f9f7084f9384f8e807c68febdb35458aee4307",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/LSWTCSRuntime/source/lsw_save_regression.inc",
+      "origin": "port/LSWTCSRuntime/source/lsw_save_regression.inc",
+      "upstream_bytes_sha256": "1f12dbce9a8929a4fc1dfff84ada69137c77d7d42234f307c569dfd47e440bc7",
+      "export_sha256": "1f12dbce9a8929a4fc1dfff84ada69137c77d7d42234f307c569dfd47e440bc7",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/LSWTCSRuntime/source/main.cpp",
+      "origin": "port/LSWTCSRuntime/source/main.cpp",
+      "upstream_bytes_sha256": "c73f4767adac824d177dc184eed8dcccebf804b832eeedace7ff29938210bb0e",
+      "export_sha256": "c73f4767adac824d177dc184eed8dcccebf804b832eeedace7ff29938210bb0e",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/LSWTCSRuntime/source/menu_switch.cpp",
+      "origin": "port/LSWTCSRuntime/source/menu_switch.cpp",
+      "upstream_bytes_sha256": "64e7b1bec029ebe372b921b994e449fa3b36fe85fad2f7b4fab0b659da985fc9",
+      "export_sha256": "64e7b1bec029ebe372b921b994e449fa3b36fe85fad2f7b4fab0b659da985fc9",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/LSWTCSRuntime/source/native_crt.cpp",
+      "origin": "port/LSWTCSRuntime/source/native_crt.cpp",
+      "upstream_bytes_sha256": "f5b85c4ad8733cd2bef90ec920ad39dfaeed01590262e628b7c54f43dc72114a",
+      "export_sha256": "3ac9a655fce9a8b0b5f5870fbde408c9887bd4f4434a9dc41a1ee0740df41d26",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/LSWTCSRuntime/source/native_lz2k.cpp",
+      "origin": "port/LSWTCSRuntime/source/native_lz2k.cpp",
+      "upstream_bytes_sha256": "827af394b0f675d84dd71bf030639901b74374e09bc7968c145ef82c22a4178f",
+      "export_sha256": "b9b9e009d5a4a8cd680ffcd2ac2d911786c0f8c20d471df6cad14e83b437781d",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/LSWTCSRuntime/source/native_reverb.cpp",
+      "origin": "port/LSWTCSRuntime/source/native_reverb.cpp",
+      "upstream_bytes_sha256": "b27983e4f6e3c375af0f6cafc1add091a40d3031200856921f50df9c05b98b9a",
+      "export_sha256": "808e4802b503327fe6b14903c053b90463d794e70d9eef7461ca2a70e2e45701",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/LSWTCSRuntime/source/renderdoc_app.h",
+      "origin": "port/LSWTCSRuntime/source/renderdoc_app.h",
+      "upstream_bytes_sha256": "9d24aa6ade1194e56ab295cc1443dd547ea09a6e67e5000ff5dcc8f65cb1c3f0",
+      "export_sha256": "b7005e7dc34c3635046868bbd76d81b9b055aede0f56daa0bd39fedee0639ffb",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/LSWTCSRuntime/xenos/shim/lsw_xenia_compat.h",
+      "origin": "port/LSWTCSRuntime/xenos/shim/lsw_xenia_compat.h",
+      "upstream_bytes_sha256": "bf83289787a932c3905eb88cecde1522cbb0b4bfd4b38cdde34d8f5dfea636f5",
+      "export_sha256": "39e5f3c29d363805097e2bdea505dca6817e5a2a153a9972c70bf8278feda798",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/LSWTCSRuntime/xenos/shim/xenia/gpu/shader.h",
+      "origin": "port/LSWTCSRuntime/xenos/shim/xenia/gpu/shader.h",
+      "upstream_bytes_sha256": "08ead32546fada760eda3e1446ff9201a09538cbd226023ccc5c1061fb31bd10",
+      "export_sha256": "79ded3a21734afdbd750c44616c3978cc4b1e3c628da59505325987de987df6a",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/LSWTCSRuntime/xenos/shim/xenia/gpu/trace_writer.h",
+      "origin": "port/LSWTCSRuntime/xenos/shim/xenia/gpu/trace_writer.h",
+      "upstream_bytes_sha256": "c057c83be821dc8274a8facef8e5adfd3598fcb0b81752b77877d67ae33efb90",
+      "export_sha256": "3b8fc656289f4c79719fdd3be72b10197df999bc0ecd8b38c66d1ff342bea192",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/LSWTCSRuntime/xenos/shim/xenia/memory.h",
+      "origin": "port/LSWTCSRuntime/xenos/shim/xenia/memory.h",
+      "upstream_bytes_sha256": "1e0a9f485936f3c560291a118ae85b0734bc3ecad7c6d93eb54776176fcc2abb",
+      "export_sha256": "1e0a9f485936f3c560291a118ae85b0734bc3ecad7c6d93eb54776176fcc2abb",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/LSWTCSRuntime/xenos/xenos_glue.cpp",
+      "origin": "port/LSWTCSRuntime/xenos/xenos_glue.cpp",
+      "upstream_bytes_sha256": "4bba84a626ae43c9bd67782154b80db3c75d42f5eb342836dd23dd7e51a56c6a",
+      "export_sha256": "6e62b25ef0755a43111c704e9740b96a0a07e9c805ab3625c1f9a69a837e2831",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/LSWTCSRuntime/xenos_dxbc/lsw_dxbc_stubs.cc",
+      "origin": "port/LSWTCSRuntime/xenos_dxbc/lsw_dxbc_stubs.cc",
+      "upstream_bytes_sha256": "7614c912192f3cf12c219db8162f951df1fac3e9f20b3f3953a8d1cb33038dc1",
+      "export_sha256": "e9bd809f66cfe4794457c766f9ca7cd74238776588ff601f7b03c58c360cf3c5",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/LSWTCSRuntime/xenos_dxbc/lsw_gpu_bridge.cc",
+      "origin": "port/LSWTCSRuntime/xenos_dxbc/lsw_gpu_bridge.cc",
+      "upstream_bytes_sha256": "47bf6cf70c30751e57b26afce89b7b91fef9b0a1a5a3efb2b71495e828d530ae",
+      "export_sha256": "47e5fc0cc290234f50dc1898f767c932f981ceb9c64bcd07e27b8f089fa40742",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/LSWTCSRuntime/xenos_dxbc/lsw_gpu_gs.cc",
+      "origin": "port/LSWTCSRuntime/xenos_dxbc/lsw_gpu_gs.cc",
+      "upstream_bytes_sha256": "e5095def176c3ec3c24a6a8a96a63504cd5672bcc9f109b79baed61ad3e2fbc0",
+      "export_sha256": "161b599e023aea7779907b861ac9d32d9ae6dbc9c302543a7c63eb9759345ed6",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/LSWTCSRuntime/xenos_dxbc/lsw_gpu_texture.cc",
+      "origin": "port/LSWTCSRuntime/xenos_dxbc/lsw_gpu_texture.cc",
+      "upstream_bytes_sha256": "7bbd4586579c42cf136f2845c54d9b0013c7576dca27ddd07387ab29947d111b",
+      "export_sha256": "487c600ac7e0827b51e1ee13352761c70df30e514c306aa0f5f84d673b19dfe1",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/LSWTCSRuntime/xenos_dxbc/shim/lsw_dxbc_compat.h",
+      "origin": "port/LSWTCSRuntime/xenos_dxbc/shim/lsw_dxbc_compat.h",
+      "upstream_bytes_sha256": "8cf9aa31ad6e5d2065862453dadca5efab9d18489c278ab4ec8691487df5e53c",
+      "export_sha256": "1cf28e5e9186ab23c90a95d44d9618c4ede26ff285753052c54859e1ecf515ab",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/LSWTCSRuntime/xenos_dxbc/test/xlate_test.cc",
+      "origin": "port/LSWTCSRuntime/xenos_dxbc/test/xlate_test.cc",
+      "upstream_bytes_sha256": "6164f56353b2cec6f0a13bfe3ee26eb0ed9ef698d6e77044bd56a8490d3f8629",
+      "export_sha256": "6871bc591aae17ead1ea57ce53525dd4df6e10075df65272e992a056c4181d2b",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/LSWTCSRuntime/xma/lsw_xma.cc",
+      "origin": "port/LSWTCSRuntime/xma/lsw_xma.cc",
+      "upstream_bytes_sha256": "371fd726e649794542b06e9791f36e25d83d7190bbd75371916e033d72a5c39f",
+      "export_sha256": "96c74c71ec3215addee593495e4151f9a93612c7dd76e1231f5eaa3b9ce1808d",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/LSWTCSRuntime/xma/shim/xenia/apu/xma_decoder.h",
+      "origin": "port/LSWTCSRuntime/xma/shim/xenia/apu/xma_decoder.h",
+      "upstream_bytes_sha256": "bcd620719745de4a52fae0017d82a29d6a4dee36b072688e850e5c157ba1e4c3",
+      "export_sha256": "1d12e2812b34cc67f6b99c2b8135345a4877d7dd025061a06f3954c81cd3c449",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/LSWTCSRuntime/xma/shim/xenia/base/threading.h",
+      "origin": "port/LSWTCSRuntime/xma/shim/xenia/base/threading.h",
+      "upstream_bytes_sha256": "827c62f05291939fb610f37339c7608a5ee0eab8978011c279192f10e91c594e",
+      "export_sha256": "47d2a88f253e6e056e9b4c743af7bab521fe78cbe042f792a9e547cebec0d36a",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/LSWTCSRuntime/xma/shim/xenia/memory.h",
+      "origin": "port/LSWTCSRuntime/xma/shim/xenia/memory.h",
+      "upstream_bytes_sha256": "546fce36fd7b6b1ec19c0186be950ee671e095e5b83d651ca16ab4f20b29c5f0",
+      "export_sha256": "7974fcfb612e6df4bbe3dc7ea110b2cebfa8336e68fb65e586145f1a848ee6b5",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/patches/SPIRV-Cross.base",
+      "origin": "port/patches/SPIRV-Cross.base",
+      "upstream_bytes_sha256": "6fba8efec5935b533cc7ba0318f8217371e8b193ebe6c5be3ad809922a8a0987",
+      "export_sha256": "47ec82aec9b9cceb9b07c7b672da4d2f43426dd0f37009965526e82e08426eb7",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/patches/XenonRecomp.base",
+      "origin": "port/patches/XenonRecomp.base",
+      "upstream_bytes_sha256": "086af4038a1e8e42542468c2f9b677f78b1b7f74ad1a24460449106d407bc0ca",
+      "export_sha256": "4cf2bd2f1a83e5d9776c1af13604d583b7304c151837a149b12ef2abf32899d0",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/patches/XenonRecomp.patch",
+      "origin": "dependency/XenonRecomp/cumulative-diff",
+      "upstream_bytes_sha256": "c0adaf7f6901b85c9cdddb4f87f8cffda824449e017602e92d9b513d8fd3a7db",
+      "export_sha256": "c0adaf7f6901b85c9cdddb4f87f8cffda824449e017602e92d9b513d8fd3a7db",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/patches/recomp_output_edits.patch",
+      "origin": "cumulative game-output hand edits against preserved folded baseline",
+      "upstream_bytes_sha256": "a0f8a33df47675cca92c95b9a33dcac30a2857fbca82163705f6cbbc977bc889",
+      "export_sha256": "a0f8a33df47675cca92c95b9a33dcac30a2857fbca82163705f6cbbc977bc889",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/patches/xenia-canary.base",
+      "origin": "port/patches/xenia-canary.base",
+      "upstream_bytes_sha256": "fd0847ec0f40bef0b0974635f2700c4fade6716bc7bcf81aedd928030096f708",
+      "export_sha256": "7cf8f2b412a089bd8ac0f0c3d1d81f2f2ec5d1bb75847db7f223093c14a198aa",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/patches/xenia-canary.patch",
+      "origin": "dependency/xenia-canary/cumulative-diff",
+      "upstream_bytes_sha256": "627aceab5d6ce42f6b8603ca578d10261aab0d1c1df8bde2787fe331c6c7cfa0",
+      "export_sha256": "627aceab5d6ce42f6b8603ca578d10261aab0d1c1df8bde2787fe331c6c7cfa0",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/switch/CMakeLists.txt",
+      "origin": "port/switch/CMakeLists.txt",
+      "upstream_bytes_sha256": "67bddde73775998ffb0b3565b53884ff555e116c16dfecd7173423522d9f1750",
+      "export_sha256": "67bddde73775998ffb0b3565b53884ff555e116c16dfecd7173423522d9f1750",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/switch/include/ffmpeg/config.h",
+      "origin": "port/switch/include/ffmpeg/config.h",
+      "upstream_bytes_sha256": "4b135ea4583d4b315410e3de9a00502646db78c2c62ea709ecdfafa2bdac54e5",
+      "export_sha256": "e176cfd3344d80c82aed39de92f5f98d12fc71e65989c972c98b5acdec27bdb1",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/switch/include/linuxshim/linux/futex.h",
+      "origin": "port/switch/include/linuxshim/linux/futex.h",
+      "upstream_bytes_sha256": "0baee1eb0ee53e7aff9ffe6f67df76c5441f2bc68ea97958a35ac155d3d862c6",
+      "export_sha256": "60b0fd3b6e477868bee9a5f33a66cbe38108a86b70f9c5d5481840abc7d914cc",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/switch/include/linuxshim/sys/syscall.h",
+      "origin": "port/switch/include/linuxshim/sys/syscall.h",
+      "upstream_bytes_sha256": "932a7f987ca7db5c5b48516286f0e328f1a185bba3879b6b89adbbb166dc7e78",
+      "export_sha256": "051908a8652644c66d17e409e483108279305be14ab510f5168ef9103f948254",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/switch/include/lsw_bo_check.h",
+      "origin": "port/switch/include/lsw_bo_check.h",
+      "upstream_bytes_sha256": "193edd09a676ee55ced6bcd815ca966bc4ef32e533e5519ca809ce3acf48f3cb",
+      "export_sha256": "193edd09a676ee55ced6bcd815ca966bc4ef32e533e5519ca809ce3acf48f3cb",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/switch/include/lsw_deko_draw.inc",
+      "origin": "port/switch/include/lsw_deko_draw.inc",
+      "upstream_bytes_sha256": "e889a8f39590e7d4f86def35d2edce59537cd3353f4744987a030000d5354513",
+      "export_sha256": "e889a8f39590e7d4f86def35d2edce59537cd3353f4744987a030000d5354513",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/switch/include/lsw_deko_draw_extent.h",
+      "origin": "port/switch/include/lsw_deko_draw_extent.h",
+      "upstream_bytes_sha256": "9a269d76b1ad7118445970dd69e76dad512a0a395a4477ef33f819d8f02833c8",
+      "export_sha256": "9a269d76b1ad7118445970dd69e76dad512a0a395a4477ef33f819d8f02833c8",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/switch/include/lsw_deko_edram.h",
+      "origin": "port/switch/include/lsw_deko_edram.h",
+      "upstream_bytes_sha256": "139b00e24fe07c3167a458152ea8d63386e9559fed8eadc6c6ff617df59b31d1",
+      "export_sha256": "139b00e24fe07c3167a458152ea8d63386e9559fed8eadc6c6ff617df59b31d1",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/switch/include/lsw_deko_executor.h",
+      "origin": "port/switch/include/lsw_deko_executor.h",
+      "upstream_bytes_sha256": "1cf509011ee07b4f066ee0e2870fccca8a541f02eb817948b3ddeb66c5f9c422",
+      "export_sha256": "1cf509011ee07b4f066ee0e2870fccca8a541f02eb817948b3ddeb66c5f9c422",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/switch/include/lsw_deko_frame_data.h",
+      "origin": "port/switch/include/lsw_deko_frame_data.h",
+      "upstream_bytes_sha256": "ab0937fa1014085e99535e1207f2f42a76ab06f222529452e135ee6d437a237c",
+      "export_sha256": "ab0937fa1014085e99535e1207f2f42a76ab06f222529452e135ee6d437a237c",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/switch/include/lsw_deko_frame_plan.h",
+      "origin": "port/switch/include/lsw_deko_frame_plan.h",
+      "upstream_bytes_sha256": "5c3709660e7f7161fcce90525188200fe810602ad478fded29f8e04ebc29de1e",
+      "export_sha256": "5c3709660e7f7161fcce90525188200fe810602ad478fded29f8e04ebc29de1e",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/switch/include/lsw_deko_image_view.h",
+      "origin": "port/switch/include/lsw_deko_image_view.h",
+      "upstream_bytes_sha256": "87dfa5ab57bbfd58aeb343da3fbf25f8e1d8fb66c47d8a65a781b534100dabec",
+      "export_sha256": "87dfa5ab57bbfd58aeb343da3fbf25f8e1d8fb66c47d8a65a781b534100dabec",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/switch/include/lsw_deko_present.inc",
+      "origin": "port/switch/include/lsw_deko_present.inc",
+      "upstream_bytes_sha256": "42c8269d1e85b60a7cd6b6fd4fa9d28bb6ba63bf883a13d2dc6406f183f0e3ef",
+      "export_sha256": "42c8269d1e85b60a7cd6b6fd4fa9d28bb6ba63bf883a13d2dc6406f183f0e3ef",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/switch/include/lsw_deko_record_textures.h",
+      "origin": "port/switch/include/lsw_deko_record_textures.h",
+      "upstream_bytes_sha256": "c81b86d72f4e5d4d233546b41d473b26f46b1c29a22b2b2dc8e9fc080451bff9",
+      "export_sha256": "c81b86d72f4e5d4d233546b41d473b26f46b1c29a22b2b2dc8e9fc080451bff9",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/switch/include/lsw_deko_resolve_memory.h",
+      "origin": "port/switch/include/lsw_deko_resolve_memory.h",
+      "upstream_bytes_sha256": "60b8dfb98557661e6d93801533d0574d8b54a83b1bca1454ed706c4af76d78eb",
+      "export_sha256": "60b8dfb98557661e6d93801533d0574d8b54a83b1bca1454ed706c4af76d78eb",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/switch/include/lsw_deko_resolve_plan.h",
+      "origin": "port/switch/include/lsw_deko_resolve_plan.h",
+      "upstream_bytes_sha256": "08107d289d0041fee95dc8d81e1df15b536290da7c5b62bfbcf93909b90e70f5",
+      "export_sha256": "08107d289d0041fee95dc8d81e1df15b536290da7c5b62bfbcf93909b90e70f5",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/switch/include/lsw_deko_resource_owner.h",
+      "origin": "port/switch/include/lsw_deko_resource_owner.h",
+      "upstream_bytes_sha256": "877ec3bcd7cad3787d9be4b456e4b9db1fc80ca5d2ab08e7ed9079192d6535e1",
+      "export_sha256": "877ec3bcd7cad3787d9be4b456e4b9db1fc80ca5d2ab08e7ed9079192d6535e1",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/switch/include/lsw_deko_resources.h",
+      "origin": "port/switch/include/lsw_deko_resources.h",
+      "upstream_bytes_sha256": "72fc2183202a502d511695fc2dc6efc0a1342cfcaa1b059decb04e734f370dd7",
+      "export_sha256": "72fc2183202a502d511695fc2dc6efc0a1342cfcaa1b059decb04e734f370dd7",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/switch/include/lsw_deko_shader_cache.h",
+      "origin": "port/switch/include/lsw_deko_shader_cache.h",
+      "upstream_bytes_sha256": "2bbcd5abfd500956601970b774bafcf1ab55582939ac3355d5e75de9691cc41a",
+      "export_sha256": "2bbcd5abfd500956601970b774bafcf1ab55582939ac3355d5e75de9691cc41a",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/switch/include/lsw_deko_shader_cache_id.h",
+      "origin": "port/switch/include/lsw_deko_shader_cache_id.h",
+      "upstream_bytes_sha256": "3a207f663a2882ce7b443d47faf08b0e8e98c919a13c0daa9005679895edf2eb",
+      "export_sha256": "3a207f663a2882ce7b443d47faf08b0e8e98c919a13c0daa9005679895edf2eb",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/switch/include/lsw_deko_submission.h",
+      "origin": "port/switch/include/lsw_deko_submission.h",
+      "upstream_bytes_sha256": "6ee956fc3974dc399bdf0294f2221ff542ed74fd1f02a32ffaee5713ddcb7378",
+      "export_sha256": "6ee956fc3974dc399bdf0294f2221ff542ed74fd1f02a32ffaee5713ddcb7378",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/switch/include/lsw_deko_texture_sources.h",
+      "origin": "port/switch/include/lsw_deko_texture_sources.h",
+      "upstream_bytes_sha256": "ed36ae72eac8d2435f1d922e34e38a946d2ca3973a1fd87031791ba471378f2f",
+      "export_sha256": "ed36ae72eac8d2435f1d922e34e38a946d2ca3973a1fd87031791ba471378f2f",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/switch/include/lsw_deko_writeback_check.inc",
+      "origin": "port/switch/include/lsw_deko_writeback_check.inc",
+      "upstream_bytes_sha256": "79909a46448c6cdcfbc42f75ddf8f1412d871008c773df8c3fa719a9abd53d96",
+      "export_sha256": "79909a46448c6cdcfbc42f75ddf8f1412d871008c773df8c3fa719a9abd53d96",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/switch/include/lsw_gl_shader.h",
+      "origin": "port/switch/include/lsw_gl_shader.h",
+      "upstream_bytes_sha256": "d7066ab8ac529d97f26b123b61f3b29b14100216753284c0ee2cd17a85791466",
+      "export_sha256": "c41d7e85fc911e582f21a8097dc66172da6f5a22a19997b655afed101d998428",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/switch/include/lsw_spirv_glsl.h",
+      "origin": "port/switch/include/lsw_spirv_glsl.h",
+      "upstream_bytes_sha256": "de0f17de92e91d40197bd8780b3d51592fab35c09104eb5e02bd239e45986a03",
+      "export_sha256": "110cfb1492e3d0f9d990871ca36bf4b6efe1aa3459c488126f5a320c6e800d4e",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/switch/include/lsw_switch_compat.h",
+      "origin": "port/switch/include/lsw_switch_compat.h",
+      "upstream_bytes_sha256": "48cea37f647c48f6d1f26d0e02e86fec2b48918f157cdb012324a9ae178de5c9",
+      "export_sha256": "4151a2ef210aa44b8e803e79eae9f53d890a26b0a92af728c81bbeb1458bac5b",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/switch/include/spirvshim/xenia/ui/vulkan/vulkan_device.h",
+      "origin": "port/switch/include/spirvshim/xenia/ui/vulkan/vulkan_device.h",
+      "upstream_bytes_sha256": "0b204014a3808789a3c9509dbb383976277a20fb9c5ab876971ef74fcfe44907",
+      "export_sha256": "ef17eb66922b6d6e55fda8b40eb95217fa071f52b6641ae36f36783359371ce6",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/switch/include/win32/windows.h",
+      "origin": "port/switch/include/win32/windows.h",
+      "upstream_bytes_sha256": "3094fd097f744f979668a12172132ef03db214e29c973ee24730c6f0424c770d",
+      "export_sha256": "4194dc1b4a86b3944cebd3b5d9b02046995675c21ce951bea5bf400ee152a16d",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/switch/mesa/mesa_cache_edits.py",
+      "origin": "port/switch/mesa/mesa_cache_edits.py",
+      "upstream_bytes_sha256": "1c4a650c09498a36aedf15d1a6b408f1ae6cf33a79e15e5b5344e35aad105e17",
+      "export_sha256": "d6f62bc4c91bb3db0706f9fbddb5a4d5fab9e5bb76ea68193696f1b9e86e5405",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/switch/mesa/mesa_cache_race_edits.py",
+      "origin": "port/switch/mesa/mesa_cache_race_edits.py",
+      "upstream_bytes_sha256": "2f096331b3475d4a6eb07b0ded05bc50709422e693e9744b6bbb43f4602cf745",
+      "export_sha256": "9837f82ecb65bfd7c5b7466387629ec6b03ffdf72bb533f70c89f3ec4bad1043",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/switch/mesa/mesa_cbflush_edits.py",
+      "origin": "port/switch/mesa/mesa_cbflush_edits.py",
+      "upstream_bytes_sha256": "e1bdc55c6cebed9f6cfdfe09fac5f6e4ac718b9927ee59a6f3288dd2a1bc5e52",
+      "export_sha256": "67ceb034a9d6e5edc293df610fb4b8fe956b0018bfc8d4295c35164dd64435c6",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/switch/mesa/mesa_egl_share_edits.py",
+      "origin": "port/switch/mesa/mesa_egl_share_edits.py",
+      "upstream_bytes_sha256": "5e37f1d390e17fd20908433a3a32e3f5ecdf60e463da3b63c31ce3e68e6eaa2a",
+      "export_sha256": "522ddad73aa140d84d0188d51e166a163ca8db1cdacbf4df0485192a881fb265",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/switch/mesa/mesa_fmz_edits.py",
+      "origin": "port/switch/mesa/mesa_fmz_edits.py",
+      "upstream_bytes_sha256": "115d69eb6d9b0204d58bd5301ebc772fa17874ee1bfae9ad58fb9bf6ab479cfd",
+      "export_sha256": "b7c94cd74f951ed7ba2822f8e4266451e4364a7490ac361618fc3d74794019bc",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/switch/mesa/mesa_glthread_edits.py",
+      "origin": "port/switch/mesa/mesa_glthread_edits.py",
+      "upstream_bytes_sha256": "f55ce641b931ae397c75610eccef91a36382cc0b2a9b39f6c31c9b8a68de815c",
+      "export_sha256": "216585dce9406adc26369660bb966ab308e993d28527b47a533a275edb1f970f",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/switch/mesa/mesa_nir_edits.py",
+      "origin": "port/switch/mesa/mesa_nir_edits.py",
+      "upstream_bytes_sha256": "f6d4bf3c57d358532907b29e97bf16e8632d6a5f93f746f5d78518ee51072bd8",
+      "export_sha256": "4623073a2c297c34e10b9c19bc028cb756641813bfdb76869fc6ce106248e7a5",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/switch/mesa/mesa_pushbuf_edits.py",
+      "origin": "port/switch/mesa/mesa_pushbuf_edits.py",
+      "upstream_bytes_sha256": "05b5ded16d40254b6633f4246cc4437c49417866e37acdcde7c69330ce94f9cc",
+      "export_sha256": "f102d094657bb00738727223f7ad86881a21b12b01086a70d85cd5cfb2dadb8e",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/switch/source/audio_switch.cpp",
+      "origin": "port/switch/source/audio_switch.cpp",
+      "upstream_bytes_sha256": "ee22932e1de4d6c6a84ee7260680cce12c70fb570dee79a9ca3f4b66af68d055",
+      "export_sha256": "5df4c3d1e3f21643368397b3973903ebab05d99229a1a20e2810c06464c7c941",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/switch/source/bo_check.cpp",
+      "origin": "port/switch/source/bo_check.cpp",
+      "upstream_bytes_sha256": "9e57ae86cac6b0e42b0d25280264768cbce9474b4d528b26337c92fe095b4f8c",
+      "export_sha256": "9e57ae86cac6b0e42b0d25280264768cbce9474b4d528b26337c92fe095b4f8c",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/switch/source/deko_backend.cpp",
+      "origin": "port/switch/source/deko_backend.cpp",
+      "upstream_bytes_sha256": "d723dec78d6bbc83deb05ddc1bf00b4a4e1e0d6249af200d68636b7ab9cc2eea",
+      "export_sha256": "d723dec78d6bbc83deb05ddc1bf00b4a4e1e0d6249af200d68636b7ab9cc2eea",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/switch/source/deko_draw_extent.cpp",
+      "origin": "port/switch/source/deko_draw_extent.cpp",
+      "upstream_bytes_sha256": "28b3ecab2cb2501744bd42a974adccc24f64d0afc60e909a973792e8c11fafbd",
+      "export_sha256": "28b3ecab2cb2501744bd42a974adccc24f64d0afc60e909a973792e8c11fafbd",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/switch/source/deko_resources.cpp",
+      "origin": "port/switch/source/deko_resources.cpp",
+      "upstream_bytes_sha256": "bad9a1e54b148f6d47ccab9686000aa6fb09d495f8f223135f56e3c0504d42c1",
+      "export_sha256": "bad9a1e54b148f6d47ccab9686000aa6fb09d495f8f223135f56e3c0504d42c1",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/switch/source/gl_backend.cpp",
+      "origin": "port/switch/source/gl_backend.cpp",
+      "upstream_bytes_sha256": "bb036a2f69e49fd3eb9970be4b8f2fcd0368154ef447927711b81d145b317c08",
+      "export_sha256": "823fd36afd6279fba4d9fa3130c38ddb922a83a3f995944cab507a2d3db596c9",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/switch/source/gl_bridge.cc",
+      "origin": "port/switch/source/gl_bridge.cc",
+      "upstream_bytes_sha256": "990394cc6a52702876775b1de66f0f9fee8e2f55ed3766756ed4a2b496a738d2",
+      "export_sha256": "1e97b3974b4082469889aa91244db0f3fa87c2ff374861c7979c67cb9c14f31a",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/switch/source/gl_geometry.cc",
+      "origin": "port/switch/source/gl_geometry.cc",
+      "upstream_bytes_sha256": "9f07be128965d6bc770bedce0cf352126e68919bfd9f00e4419485a6366116a0",
+      "export_sha256": "1659c93181a58f902a85b2e66050f4b870b4492096f216c96ba070d1b8cb58ad",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/switch/source/gl_rt.inc",
+      "origin": "port/switch/source/gl_rt.inc",
+      "upstream_bytes_sha256": "bacc0d0364755662115ebe9374c94bdb6f797c4190b4131ae6b3727b0292a428",
+      "export_sha256": "b3d46ed3b898684700e62f53066007af08de55f20435c841773ab52b0de67aba",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/switch/source/linux_shim.cpp",
+      "origin": "port/switch/source/linux_shim.cpp",
+      "upstream_bytes_sha256": "6ebfe0ed3f6835110e203883139c9a948019ae05236018740ecbf2faf35bda68",
+      "export_sha256": "248eaa51a7e55bf664bf48a14b1d9cf1d8af603440f0dedde9f3f294308c2859",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/switch/source/lsw_spirv_glsl.cc",
+      "origin": "port/switch/source/lsw_spirv_glsl.cc",
+      "upstream_bytes_sha256": "82d3ebb6ff48a8d7f0af6b02a7f6c832f93451761048c380cf060adceb492723",
+      "export_sha256": "55687cec57186a538cefd613109806cea60f50cda8451940f7ac6a455299a4b1",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/switch/source/m0_main.cpp",
+      "origin": "port/switch/source/m0_main.cpp",
+      "upstream_bytes_sha256": "406b69adc940b57c94e1882374eee3b89c936ceb00ef8e25e823f2d7c11dd27c",
+      "export_sha256": "85ebc6e82069e27ca651a7109a58657192de859d07918e775e183098144887e9",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/switch/source/mesa_shim.cpp",
+      "origin": "port/switch/source/mesa_shim.cpp",
+      "upstream_bytes_sha256": "5dbe50c10573f5d937aaac23ad07f520ff4ac7b9b04a7e964d5497903ae9fc3d",
+      "export_sha256": "6f185a9c1d2f0fb83e6afeaf498f1e22d69deab67439f388bb3112e68af2e5bb",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/switch/source/null_backends.cpp",
+      "origin": "port/switch/source/null_backends.cpp",
+      "upstream_bytes_sha256": "3deea7a6f13677c9ca06465f78e722563ed41a5246e21de2dbb316f40d93e707",
+      "export_sha256": "ef9b01b0065ac75184be61a60f88337a4ab2064b07f5a7e5203215f20e1c0027",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/switch/source/platform_switch.cpp",
+      "origin": "port/switch/source/platform_switch.cpp",
+      "upstream_bytes_sha256": "68e150314df875f4d9195c33035481ebfb0f9a592ac5c3205f3020aeaf498697",
+      "export_sha256": "71dba9c7c142a741330693c61ef12f22c095e26181cadc2c03b24165efd336f3",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/switch/source/save_switch.cpp",
+      "origin": "port/switch/source/save_switch.cpp",
+      "upstream_bytes_sha256": "5ec607867831e6684d30fbe7dc439a989b304bd9ddea8736c4a91165a5756f8a",
+      "export_sha256": "5ec607867831e6684d30fbe7dc439a989b304bd9ddea8736c4a91165a5756f8a",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/switch/source/win32_switch.cpp",
+      "origin": "port/switch/source/win32_switch.cpp",
+      "upstream_bytes_sha256": "06f164667475d18d3e661bc4f015fc4664184ad15c5281e7ef6a06a5b3a63685",
+      "export_sha256": "96392bc6e050f39819ff857c7dfb1189ef71b18bd33cd73dfa1a06504bc1fbc0",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/switch/source/xe_gpu_stubs.cc",
+      "origin": "port/switch/source/xe_gpu_stubs.cc",
+      "upstream_bytes_sha256": "05dec83403c12ab47641cee7ab50fdfe9ce3ec1e5c8f38c630110a1e74f2bdfa",
+      "export_sha256": "318c9e8f78a0eff282409437cf65603282f85fcf7ee656d09781d036aa51f73e",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/switch/source/xe_stubs.cc",
+      "origin": "port/switch/source/xe_stubs.cc",
+      "upstream_bytes_sha256": "0d3e0d222c79fcffc3567a561a8edb69a3d602a9b9cbab3efb3aeb14afa30edd",
+      "export_sha256": "7ff80ffea72815c98ecb9634bfc88ed6d51245548fdcd81b27b5e973776634b2",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/switch/third_party/rpmalloc/LICENSE",
+      "origin": "port/switch/third_party/rpmalloc/LICENSE",
+      "upstream_bytes_sha256": "de6559d6ead86312f7c815ee2506d937220343fb64ca5101159755952644b591",
+      "export_sha256": "992dc09524f6c215f1ae0ff7d26e8ce548b7212df65a09919dbafc98e2323b41",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/switch/third_party/rpmalloc/rpmalloc.c",
+      "origin": "port/switch/third_party/rpmalloc/rpmalloc.c",
+      "upstream_bytes_sha256": "4f2f21570bdcc572743bf522fe35046656ba9d23eb5aad71279732f0a2d1ec97",
+      "export_sha256": "5032b36c77ce9968ccf0c16f11ed4bd40424ae60ca0fbe652db0414af622c2bd",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/switch/third_party/rpmalloc/rpmalloc.h",
+      "origin": "port/switch/third_party/rpmalloc/rpmalloc.h",
+      "upstream_bytes_sha256": "b5c4b5216eac5e682df29ff3233ae675b471e7ad960852353851aff597334e16",
+      "export_sha256": "a45bfebb3122146c23b564f510d8605d32e201789e4668ea1a054da1b36f8ab1",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/switch/third_party/rpmalloc/rpmalloc_switch.c",
+      "origin": "port/switch/third_party/rpmalloc/rpmalloc_switch.c",
+      "upstream_bytes_sha256": "278503fa0b5515171c09a80b697fb93318ea0216fdc60292045cd612e3f33ca6",
+      "export_sha256": "401ac6875b872a7fa428240e861bb2b09cb9230fe270858d0272e781b12e5549",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/switch/third_party/rpmalloc/shim/sys/mman.h",
+      "origin": "port/switch/third_party/rpmalloc/shim/sys/mman.h",
+      "upstream_bytes_sha256": "e5f9af3df2ac3c93b83f4e8770a57d6db1b1c07e575269bd4c72d5f684e191ac",
+      "export_sha256": "6c06775e2262fbf0705d7958a752b3217cfd16a5071367b7ed21d3188b226f89",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/switch/tools/build_mesa.sh",
+      "origin": "port/switch/tools/build_mesa.sh",
+      "upstream_bytes_sha256": "e3b76c8b49289bb733f9e4dcb809f612c4585e4cda7a0c1dea974b74581275e6",
+      "export_sha256": "fbe56f458aaa00c68ef1eaea261853027e8ecc59bc8a57842eb63b41f309bbbe",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/switch/tools/compile_check.sh",
+      "origin": "port/switch/tools/compile_check.sh",
+      "upstream_bytes_sha256": "9b49c78780ce330a61a0f8270f2403fd07b01b37244de0517f1c6d7d3062a053",
+      "export_sha256": "3893ba0cdc6049377a0087b4ba65aade17d6e8e9d272c2e62789db0ce72dffa0",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/switch/tools/eden_ab.sh",
+      "origin": "port/switch/tools/eden_ab.sh",
+      "upstream_bytes_sha256": "06b74e2d754d4e5cde5dfb1ccce484cf1bd608a284b53ba4023d10c6eab2dd8e",
+      "export_sha256": "f9b8e0f1df96ebaf2caecd92042726e2c425899bd68c4af18c2cef05a18ac7ed",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/switch/tools/eden_hub.sh",
+      "origin": "port/switch/tools/eden_hub.sh",
+      "upstream_bytes_sha256": "555f7287572e3e069bff76df7597af12205a346c13a6f31a1e8e6d45aedc70a0",
+      "export_sha256": "ad1de82ed108e5d4f8074377ac9ce35cde70462591210790d12175d260e5f296",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/switch/tools/eden_run.sh",
+      "origin": "port/switch/tools/eden_run.sh",
+      "upstream_bytes_sha256": "192a045090307fb4673353994ffeb9a12b60b07bd19d5958f19e82aecccc7f9e",
+      "export_sha256": "b715eaa56da5e1a806544076040820f90f493b2b9dee7927474eba616234049e",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/switch/tools/extract_gs_body.cmake",
+      "origin": "port/switch/tools/extract_gs_body.cmake",
+      "upstream_bytes_sha256": "5f171fafa2657cc97a37592a1528d15faa6a20747960c97bbaa11a7b4104bc95",
+      "export_sha256": "328350bda344ebd60283353e1a0f247f1d4df0cc08f3dc69cbd3085f69c2cb6a",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/switch/tools/fold_recomp_output.py",
+      "origin": "port/switch/tools/fold_recomp_output.py",
+      "upstream_bytes_sha256": "8169b6d5049bdec05059794251a2213af787b621bc11259e0e000c11ef6d10c0",
+      "export_sha256": "318e38953932dbcb1869b5a0c416fe2c1732d75848488271ed72f932398e438c",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/switch/tools/glbench.sh",
+      "origin": "port/switch/tools/glbench.sh",
+      "upstream_bytes_sha256": "f4359d7e2d447059e9018e497a7fab699aeb2b42b1c371af820d3fc2b1da0f1e",
+      "export_sha256": "99bd5806202657851ecf9e4323b7949cca6673337448cf6adf016683cf540520",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/switch/tools/hub_to_negotiations.sh",
+      "origin": "port/switch/tools/hub_to_negotiations.sh",
+      "upstream_bytes_sha256": "e24e5fa65e89e2b44297d7c844ef04fd8ff7fe5e350eb8abb07a476a11a093a6",
+      "export_sha256": "b3f0cbd90f84a857c947cc2f2d371c6998f4043e444291aaf06bff55a44a46ba",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/switch/tools/runtime_undef.sh",
+      "origin": "port/switch/tools/runtime_undef.sh",
+      "upstream_bytes_sha256": "97dcbf45436e6128f0684ad1359686c842e634e17a98cae77c58e3df62ac9ae1",
+      "export_sha256": "c8fae8ad633dae60afe47d3259f07e0c75fe64571cfcb65057a986c53e435b77",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/switch/tools/spirv_glsl_test.cc",
+      "origin": "port/switch/tools/spirv_glsl_test.cc",
+      "upstream_bytes_sha256": "4ad06b809e705c3fa6aff306a74e49997f7d858b501f95ea3735c5ceb32a4c29",
+      "export_sha256": "364188583401c4cd4063a0f7141725f8b4eb1ea2413e5e0373a832141cfa1893",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/switch/tools/spirv_glsl_test.sh",
+      "origin": "port/switch/tools/spirv_glsl_test.sh",
+      "upstream_bytes_sha256": "a38a3a2eb74dba09770c88387d7f735f858121e7e1491cb85cf844c1bb466b42",
+      "export_sha256": "a5d4804fce5391789506b4ced5c629960b70cc1451de9dcd5dc408b1d51dd285",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/switch/tools/tint_round.sh",
+      "origin": "port/switch/tools/tint_round.sh",
+      "upstream_bytes_sha256": "26716a6b8608619d8b6ec3610168e650134f72c10e04621154d552f31eb2e400",
+      "export_sha256": "4c87dc84ca5a58096ac3aa99ec22a3e1d5ca1a416a02ec976847f96cffea8b3a",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/tools/cdb_watch_changes_example.txt",
+      "origin": "port/tools/cdb_watch_changes_example.txt",
+      "upstream_bytes_sha256": "367a3052505b2daf7abd5017dde0000fac86b009f0bd7a25011b0555fc1c4740",
+      "export_sha256": "2f6935c374c198fd757a6dea58b0c40fdf311300716a8daee28a2bb2c3ced659",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/tools/check_edit_anchors.py",
+      "origin": "port/tools/check_edit_anchors.py",
+      "upstream_bytes_sha256": "d1b6de7c7b8f0877b26d904d148d394211180238ec156be065d8c3f83bac337d",
+      "export_sha256": "b8f6d6e241a178c28ff3f388454cb6ec375a33085ce57dd5a927e131325d0201",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/tools/fix_byte_switch_829CB7A8.py",
+      "origin": "port/tools/fix_byte_switch_829CB7A8.py",
+      "upstream_bytes_sha256": "022995607750d857efdc61ea032a6f5930e535e2984edac649c0245f758e7758",
+      "export_sha256": "8a677d0c5876ce45f92fc0038e45bdd1750949081147c42559562f634c915342",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/tools/fix_data_prefix_loads.py",
+      "origin": "port/tools/fix_data_prefix_loads.py",
+      "upstream_bytes_sha256": "d5a5942562f5eca2efb83484a2297107d254d2a9e8eb883651f3e73aa1cea39b",
+      "export_sha256": "bfd429359a389d3af1eba11185048aa58954a092ad2623130f7f464c4491472a",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/tools/fix_entry_edits.py",
+      "origin": "port/tools/fix_entry_edits.py",
+      "upstream_bytes_sha256": "67459a7a9d5362ce3ecf9e5103bb0d65abe001d77f28b23eea54e225f6bb3b6a",
+      "export_sha256": "f2f86d89636d9346e1ec643501fa37224c5bc3a8c44fc489b32bb15ee7adb21e",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/tools/fix_ftfloor_sites.py",
+      "origin": "port/tools/fix_ftfloor_sites.py",
+      "upstream_bytes_sha256": "f5a84c12ee8f4aea4b7649b4caeb0925402ca99c33c8aa0946c0ad8157cbd31f",
+      "export_sha256": "5994b28e910d014a0b66b5043b3ee8913efc885f28dee9b7a98237d3355ef2e1",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/tools/fix_io_wake.py",
+      "origin": "port/tools/fix_io_wake.py",
+      "upstream_bytes_sha256": "eb8354edcb5852cb979e6a3d710b1ca5fa0eab91d122a514252e579699aa3972",
+      "export_sha256": "472fd48e415a20c880470b9911840dc270e39345b589a988f296f610666307bb",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/tools/fix_switch_error_returns.py",
+      "origin": "port/tools/fix_switch_error_returns.py",
+      "upstream_bytes_sha256": "d2cd37670a16b7aa4b88b45612c1897e1a80341896ff0e6ebb17f62ab685593b",
+      "export_sha256": "84067becda5487b57bb6a5df819f25a668107f636f3bdefb6a231ca3d501e4a0",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/tools/fix_switch_gate.py",
+      "origin": "port/tools/fix_switch_gate.py",
+      "upstream_bytes_sha256": "8b86b62a348883aa46fd14acac3d6ea86528b7e1b0a2719f207148c8c07e74e2",
+      "export_sha256": "52f1aa7e5f5d79fad31fe7d6f98e9b9bb8c176216638819a4d40bc8637d41061",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/tools/fix_switch_midjumps.py",
+      "origin": "port/tools/fix_switch_midjumps.py",
+      "upstream_bytes_sha256": "a8dcd737331dc5dee86cae3138706246de2ede57af3736a4b907c0693da1228e",
+      "export_sha256": "bee435c52019e46dbe58d3f30bd8cb10a8aca5421a31767d3977490fc62b0634",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/tools/gen_native_reverb.py",
+      "origin": "port/tools/gen_native_reverb.py",
+      "upstream_bytes_sha256": "07806519f6d211ea54374f1d909ddcc98b1155111981cd6ef66041ec76e105a1",
+      "export_sha256": "e645eff5955defb49a44c129020a0bb1df12bd9b269732acc79f99a2f9b98252",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/tools/pass_arg_locals.py",
+      "origin": "port/tools/pass_arg_locals.py",
+      "upstream_bytes_sha256": "2eadd1228842cef8c339e06f4589c67ab0eca665a40abc391069371b1e7d910c",
+      "export_sha256": "ac9df4ee0d34573040438cbcd931ce001c419d959228d5650e0f04754752e55b",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/tools/pass_livein_regs.py",
+      "origin": "port/tools/pass_livein_regs.py",
+      "upstream_bytes_sha256": "c86c0b3c04b271d7c78fcb35cc4cde4068cda4787ba9aa626438c9f0103ba223",
+      "export_sha256": "6a8a682f5c53440342177413eb13784e3122caeda3cc644d20672926e9ab6247",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/tools/pass_vec_locals.py",
+      "origin": "port/tools/pass_vec_locals.py",
+      "upstream_bytes_sha256": "d48217890e60247f7960cc261446d0276919666f92e3d2d9353e381c23b8b766",
+      "export_sha256": "79c0e25bf29cb9a6bfd22031d9774317f6d85c8507a6dbaf03239c1a9cf0520a",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/tools/png_tint.py",
+      "origin": "port/tools/png_tint.py",
+      "upstream_bytes_sha256": "1180058102ea849b114b322931b66be1da02630e0b65475b09feae50214ad757",
+      "export_sha256": "93bb83d077eadcf79f9b85e2502fe703086f4a833849525668c5f825de02371e",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/tools/port_edits.py",
+      "origin": "port/tools/port_edits.py",
+      "upstream_bytes_sha256": "8a440243d20855275e80d49ad1496d643fccfe8b07f065ef270d0e9aa47030c0",
+      "export_sha256": "c3adcf1e737841127053a427c2bde9e1394327ebdfd11def976dc0d5dec26fbb",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/tools/ppc_fields.py",
+      "origin": "port/tools/ppc_fields.py",
+      "upstream_bytes_sha256": "d1be7d31b4d1f86ba2b52bc8c15e8eb3c6010f2e63d0896f94550ea0f1d4fa67",
+      "export_sha256": "1d845fcc21b1174a1ffae6f60eefffcc42edc5b0e4bb0048f61d3b8cc66e9c7c",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/tools/rdoc/README.md",
+      "origin": "port/tools/rdoc/README.md",
+      "upstream_bytes_sha256": "c302f9d251c5696834a35470da2c2b88a5f38d1f22a11fea6f4bf785f3397a96",
+      "export_sha256": "e569de74656d1f38f4a9126d7a9150312c1947e1a7b3e554c925c6b243512f2e",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/tools/rdoc/rd_bisect_pixel.py",
+      "origin": "port/tools/rdoc/rd_bisect_pixel.py",
+      "upstream_bytes_sha256": "132f1d6fb99b686276ba1a921778fb9a0643e9e4d712ec52fbe30f0975420e9d",
+      "export_sha256": "6954a8129469e08576f9a632a4779fc96112df6d311765991e61d90f98de95fd",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/tools/rdoc/rd_disasm_vs.py",
+      "origin": "port/tools/rdoc/rd_disasm_vs.py",
+      "upstream_bytes_sha256": "911a372d53beab066281b57f25fd458fbbd32b38b4965c5f83a8527c11447ef7",
+      "export_sha256": "88cfa16b140ea27c6abb768edfb4178b9197e6322955334d5fb90ebada48dd58",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/tools/rdoc/rd_draw_constants.py",
+      "origin": "port/tools/rdoc/rd_draw_constants.py",
+      "upstream_bytes_sha256": "b0449221fc03ae62b2ccdf1d8dccf73776060f3933371baf8ca173aad61556d1",
+      "export_sha256": "257fec2f30c6dd28d9c9d41f15efff7bb506e9d87d50ef9db1f76dc63cfee19b",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/tools/rdoc/rd_explode.py",
+      "origin": "port/tools/rdoc/rd_explode.py",
+      "upstream_bytes_sha256": "381e18b7a47c8cb6e697c441179bb59aa0232f772212a53c6753ecdb3bde18ee",
+      "export_sha256": "de6b3438464bcab13331f014292d9b6be21a7e8f2526fbc94d8264126dce9550",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/tools/rdoc/rd_find_fetch.py",
+      "origin": "port/tools/rdoc/rd_find_fetch.py",
+      "upstream_bytes_sha256": "0a3f852fae46e26cca476dd13b71b10dfe8f76a2f8c461699b5671cc2e2eccf0",
+      "export_sha256": "944cd783362b3c45e9ae952de6db1566de8d879563247dd1305a0ece17f5de7e",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/tools/rdoc/rd_pixhistory.py",
+      "origin": "port/tools/rdoc/rd_pixhistory.py",
+      "upstream_bytes_sha256": "3003bba46e90a79979aa189b4a928a6af93c304617853b34a41979e22d11ffee",
+      "export_sha256": "0b98cf5e4996365615640a98f232a8f5dbe20583c6188396747509d66ebd9210",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/tools/rdoc/rd_shm_read.py",
+      "origin": "port/tools/rdoc/rd_shm_read.py",
+      "upstream_bytes_sha256": "9a349fbb2afa5bd00c93b1214b3493d7c8000d852f9ebef2f37f31470996fea5",
+      "export_sha256": "d5da285468e1bc133a0c373933ddac534f2e6b2eae7fe6f948d4170ffafe4737",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/tools/scan_livein_locals.py",
+      "origin": "port/tools/scan_livein_locals.py",
+      "upstream_bytes_sha256": "e1d0d27e70432846a38ecc48eb6b0b007f1a28d22d163729426bc575be0fb1f2",
+      "export_sha256": "ef9addceaeade3be9eb7bd954225f0476198c39ffa8efbf69e2f29f32d5796e4",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "source/tools/symppc.py",
+      "origin": "port/tools/symppc.py",
+      "upstream_bytes_sha256": "57bb3f1b30239ad5515e02642c1e295ad112af0b0153cce326c3c0a2dc9660ae",
+      "export_sha256": "1e4042d082dbbf12ed9f46c5bbcf142f08b8ce19706c0b1c7c0740e39dac8f20",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "tests/fixtures/gl_backend_mesa011.cpp",
+      "origin": "mesa011 preimage",
+      "upstream_bytes_sha256": "2771e535862e41263bc04d7aa4d68ab572443d612c75e662197945d7b999fb78",
+      "export_sha256": "6230593d72c619e175e0a3b1107d3f38a8a33e6f5435ffeed4c0de7cb1979570",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "tests/fixtures/spirv_shader_translator.h",
+      "origin": "xenia-canary patched schema",
+      "upstream_bytes_sha256": "7194e3df04cf6c8a43de927865ed7f100ae7faad7d3ee65775974e12da348697",
+      "export_sha256": "382f09a892ef8fe66325b48b56dee5e6ce0ab0c14a1c7ac9d6971379c98989bf",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "tests/fixtures/xxhash.h",
+      "origin": "xenia-canary/third_party/xxhash/xxhash.h",
+      "upstream_bytes_sha256": "17973c0dc49d9854ca26caa191f0e12f7a424b68858d9a78de3860d959d85e4b",
+      "export_sha256": "17973c0dc49d9854ca26caa191f0e12f7a424b68858d9a78de3860d959d85e4b",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "tests/run_draw_identity.py",
+      "origin": "portable adapter of existing actual-function regression",
+      "upstream_bytes_sha256": "6ea44266d6d35c3125c7e0430c9f0dd9d0a659825712274f774e43d4ebafb0f2",
+      "export_sha256": "6ea44266d6d35c3125c7e0430c9f0dd9d0a659825712274f774e43d4ebafb0f2",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "workspace-tools/build_tcs360_mesa.sh",
+      "origin": "workspace/tools/build_tcs360_mesa.sh",
+      "upstream_bytes_sha256": "d805bbdc1fb1a353ed1ca1179c59a922b289d5b3fc6c39b4c4438551feb8b969",
+      "export_sha256": "d805bbdc1fb1a353ed1ca1179c59a922b289d5b3fc6c39b4c4438551feb8b969",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "workspace-tools/capture_tcs360_reference.ps1",
+      "origin": "workspace/tools/capture_tcs360_reference.ps1",
+      "upstream_bytes_sha256": "d72e89a4d8150951f27e947844348e5e0c2a0fd538b61c4cc4075a44b67d7717",
+      "export_sha256": "d72e89a4d8150951f27e947844348e5e0c2a0fd538b61c4cc4075a44b67d7717",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "workspace-tools/patch_tcs360_movie_cr.py",
+      "origin": "workspace/tools/patch_tcs360_movie_cr.py",
+      "upstream_bytes_sha256": "b5618c492803adca7dd0875760e903b226db4ca3e10f74e68438851bdd1207e0",
+      "export_sha256": "b5618c492803adca7dd0875760e903b226db4ca3e10f74e68438851bdd1207e0",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "workspace-tools/patch_tcs360_movie_vmx.py",
+      "origin": "workspace/tools/patch_tcs360_movie_vmx.py",
+      "upstream_bytes_sha256": "5107f0997d07b92f40f921a14848a8fb57f50aa6471f8e2599c0a100abde312a",
+      "export_sha256": "5107f0997d07b92f40f921a14848a8fb57f50aa6471f8e2599c0a100abde312a",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "workspace-tools/prepare_tcs360_header.py",
+      "origin": "workspace/tools/prepare_tcs360_header.py",
+      "upstream_bytes_sha256": "f3ce2c7ccf7f3b627ff20dee59b98f12ce65ce5488e093abfd2541a4c50a0265",
+      "export_sha256": "f3ce2c7ccf7f3b627ff20dee59b98f12ce65ce5488e093abfd2541a4c50a0265",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "workspace-tools/tcs360_codegen_audit.py",
+      "origin": "workspace/tools/tcs360_codegen_audit.py",
+      "upstream_bytes_sha256": "67f202bc049fad90aa40530362c4bc5af28b2170ce991290a52ab085b9b0e350",
+      "export_sha256": "67f202bc049fad90aa40530362c4bc5af28b2170ce991290a52ab085b9b0e350",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "workspace-tools/validate_tcs360_switch.py",
+      "origin": "workspace/tools/validate_tcs360_switch.py",
+      "upstream_bytes_sha256": "b245b3a098b7db056c18a33bbcee9bd3d18e88325b4b4f28ad2ab1f1d0453ac7",
+      "export_sha256": "b245b3a098b7db056c18a33bbcee9bd3d18e88325b4b4f28ad2ab1f1d0453ac7",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "workspace-tools/verify_tcs360_sd.py",
+      "origin": "workspace/tools/verify_tcs360_sd.py",
+      "upstream_bytes_sha256": "c75e5461ab5e429bfd47e71210e323e867905c66ca505cfc18a93bbfb8f6a249",
+      "export_sha256": "c75e5461ab5e429bfd47e71210e323e867905c66ca505cfc18a93bbfb8f6a249",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "workspace-tools/xenon-image/CMakeLists.txt",
+      "origin": "workspace/tools/xenon-image/CMakeLists.txt",
+      "upstream_bytes_sha256": "8da72bcf7739a491277445d4b4adaf42363b13224bdb3640f33821bab0a995a6",
+      "export_sha256": "8da72bcf7739a491277445d4b4adaf42363b13224bdb3640f33821bab0a995a6",
+      "normalized_utf8_lf": true
+    },
+    {
+      "file": "workspace-tools/xenon-image/image_export.cpp",
+      "origin": "workspace/tools/xenon-image/image_export.cpp",
+      "upstream_bytes_sha256": "783bfe6a19dc71e862218b2a705b928f9e4b8f63da0706d06c5177a443b67cea",
+      "export_sha256": "783bfe6a19dc71e862218b2a705b928f9e4b8f63da0706d06c5177a443b67cea",
+      "normalized_utf8_lf": true
+    }
+  ],
+  "redacted_files": [
+    "docs/TCS360_DEKO_IMPLEMENTATION_PLAN.md",
+    "docs/TCS360_MESA_REFERENCE_REVIEW.md",
+    "docs/NEXT_SESSION.md"
+  ],
+  "normalization": "UTF-8 LF; known local owner names/home paths removed in the export only. Required upstream license/credit notices retained.",
+  "generated_patch_note": "Current cumulative patch supersedes the old port input patch. Full generated source is not shipped; reference-generator versus current-generator states are documented in BUILDING.md."
+}

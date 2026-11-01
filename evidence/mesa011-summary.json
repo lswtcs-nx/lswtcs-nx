@@ -1,0 +1,21 @@
+{
+  "version": "0.0.11 (owner test context)",
+  "last_progress": {
+    "swaps": 9600,
+    "enabled": 1,
+    "used": 788,
+    "live": 693,
+    "events": 1728889,
+    "reason": "none"
+  },
+  "busy_samples": 0,
+  "recognized_stop": false,
+  "incomplete_report": false,
+  "complete_frame_rows": 10119,
+  "frame_elapsed_seconds": 389.304,
+  "save_commit_count": 10,
+  "stderr_bytes": 0,
+  "clean_exit_certified": false,
+  "first_invalidator_known": false,
+  "root_cause_classification": "No recognized invariant violation in the recorded active interval; earlier BO failure not reproduced/captured"
+}

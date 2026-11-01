@@ -1,0 +1,21 @@
+{
+  "edition": "Xbox360 USA/Europe Rev1; multilingual release used by current configuration",
+  "xex_bytes": 17547264,
+  "xex_sha256": "c6152578061348e96500f6b6c07732cb4d3af36b9cb7bf461f900220e03436f0",
+  "entry_point": "0x8229e618",
+  "image_base": "0x82000000",
+  "title_id": "4C4107D7",
+  "media_id": "5E486FF7",
+  "header_bytes": 16384,
+  "header_sha256": "1edd1520b04ddc9394c0bf2ac4c61d7f30ffc56a0760af0593bca1155b9c2af6",
+  "pristine_bytes": 21364736,
+  "pristine_sha256": "51f405c96d0e17ef09bee9fa6f73dad759535fd03bf12d4eeb090f73f9afff8d",
+  "image_bin": "Separate runtime-ready reference snapshot; not the clean loader export. Must be produced from recipient-owned input.",
+  "assets": [
+    "game.DAT",
+    "game1.DAT",
+    "Movies/",
+    "audio/"
+  ],
+  "contents_included": false
+}

@@ -1,0 +1,13 @@
+{
+  "passed": true,
+  "own_compiler_inputs_checked": 59,
+  "missing": [],
+  "changed_since012": [],
+  "intentional_exclusions": [
+    "Full generated GameCode",
+    "Generated native_reverb_gen.inc",
+    "External dependency trees and SDK",
+    "Generated build-directory sources"
+  ],
+  "scope": "Maintained own Mesa compiler inputs included and match the012 compiler-input manifest before export normalization. Not a new full build."
+}

@@ -1057,3 +1057,16 @@ went on. Archived in `private/runs/run27-log26`.
 - **A wait for a spinlock past 200 ms** prints `[SPINLOCK]`: the lock, its word, and whether that word is one of this port's tags
   (and whose) or a raw value the game wrote. It then takes the lock anyway: no exclusion, as before L, but no freeze.
 - States `MAPXSHN`, `MAPXSHNL`, `MAPXSHNRG`, `MAPXSHNRGL`; U is out until a subtree can leave the turn at once.
+
+## Run 28: `0.0.33-log27`, 2 November 2026: the known driver crash
+
+The game crashed while entering `Gungan_A` (state `MAPXSHN`, so L and R off at that moment). Archived in `private/runs/run28-log27`.
+
+- **The crash** is open issue 1 in `docs/ISSUES.md`, the native Mesa/Nouveau crash: `nvAddressSpaceUnmap` < `nouveau_bo_del` <
+  `__wrap_nouveau_bo_ref` (`bo_check.cpp`) < `pushbuf_flush`, on Mesa's glthread worker drawing (`nvc0_constbufs_validate`), with
+  far address 0x58 (a null device). It is the same as exact009.
+- It is the first time in runs 10-28. R (render thread 0x2C, the same priority as Mesa's worker) has been cycling since run 23 and
+  changes how the render thread and that worker interleave. That is a possible influence, not shown. This run cannot tell.
+- **L:** it was on during the menu and the hub (replays 0-807, and 2138-2577 with RG). There was no `[SPINLOCK]` report and no hang,
+  so log27's release looks sound there. `Gungan_B`, where run 27 hung, was not reached.
+- Next run: the same build and profile again. Per `ISSUES.md`, no guard that hides the invalid device.

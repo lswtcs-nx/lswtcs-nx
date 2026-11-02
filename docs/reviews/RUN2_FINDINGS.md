@@ -726,3 +726,20 @@ Handheld at stock clocks, 8,610 frames in 326 s, levels `Map\Map`, `Gungan_A/B/C
 The cache-coherency registers `0x0A29` to `0x0A31` (`COHER_SIZE/BASE/STATUS` for PM4, RT and host, by Xenia's register table) are left out of the tile entry check and of the register hash. A false match now names the field that differed and the level, and the third turns T off instead of the first. Same A/B states as `0.0.19-log13`. Compiled and validated; the draw-identity and PNG tests pass.
 
 Reading it: under T, `stopped by a hash` should now be a small part of the repeats and `draws copied` large; `repeat tiles` and `walk` per frame by state; any `FALSE MATCH` with its field. If differences show up only in vertex constants, indices or vertex ranges during loads, that is guest memory changing between tiles.
+
+## Run 14: `0.0.20-log14`, 2 November 2026
+
+Handheld at stock clocks, 10,290 frames in 403 s, levels `Map\Map`, `Gungan_A/B/C/E`, six full captures for material, no visual fault reported. Archived in `private/runs/run14-log14`.
+
+**T does not pay, and stops here.**
+
+- With the coherency registers out, T copied draws: 8,415 draws were checked in full and 8,412 matched. The hash still stopped 1,182 of 1,296 repeats partway. The entry check's refusals now name real draw state: `RB_ALPHA_REF` (`0x210E`), `SQ_INTERPOLATOR_CNTL` (`0x2182`) and `VGT_EVENT_INITIATOR` (`0x21F9`). These are values left over from the end of the previous tile, which differ at some draws before the IB sets them again. A copy there would be wrong for that draw whenever it reads them, so the hash is right to stop.
+- The three false matches were all "block sizes", for the same shaders (VS `2E84CD15F17C7538`, PS `A57505D45FC84D0D`) in `Gungan_B`. That is a fault of the check, not of the copies: `range_count` counts upload runs of pages not yet uploaded this frame, so a full record of a later tile legitimately has fewer. The check should not have compared it. T switched itself off after the third.
+- Medians of heavy `[GPUPAGES]` lines by state, about 20 samples each: walk 20.1 ms with T against 19.2 without (MAPXST against MAPXS), record 13.7 against 14.0. No gain, and FPS by state shows none either.
+- So in this level the repeated tiles are not where the walk's time goes. Telling which repeats would be safe draw by draw needs to know which registers each draw reads, which is not worth it for what is left.
+
+**H is now the clearest CPU gain.** Same medians: walk 12.4 ms and record 8.4 ms with H (MAPXSH) against 19.2 and 14.0 without, pages hashed 1,080 against 2,550. Sampled misses are 0 again, as in every run since `0.0.16-log10`. The state slices land on different scenes, so the size is an indication. The decision stays the owner's: H trusts a page unchanged for 8 frames, which the source comment rejects as proof, and the sampled misses only bound how often that would be wrong.
+
+**FPS** against run 13 is the same within noise in every band (12.5 against 12.4 at 5000+).
+
+**Next.** Native audio mixers (about 5 % of the turn), then a trial of LTO on the runtime and generated code. Take H to the owner with the measurements from runs 10 to 14.

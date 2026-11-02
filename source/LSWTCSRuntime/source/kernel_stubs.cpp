@@ -1156,7 +1156,8 @@ static std::condition_variable g_walk_cv;
 static std::atomic<uint64_t> g_walk_waits{0}, g_walk_rewaits{0};   // [GPUPAGES]: waits for that walker; waits again after one
 // [WALKOFF] (lsw_walkoff_report): what W does, every 5 s while it walks, and the walker's state when the ring stops being walked.
 static std::atomic<uint64_t> g_wo_ibs{0}, g_wo_off_ns{0}, g_wo_rejoin_ns{0}, g_wo_rejoin_max_ns{0}, g_wo_needturn{0}, g_wo_claims{0},
-                             g_wo_second{0}, g_wo_second_skipped{0}, g_wo_drain_waits{0}, g_wo_drain_busy{0};
+                             g_wo_second{0}, g_wo_second_skipped{0}, g_wo_drain_waits{0}, g_wo_drain_busy{0},
+                             g_isr_lost{0};   // GPU interrupts dropped for want of g_interrupt_ctx
 static std::atomic<int64_t> g_walk_end_ms{0};   // steady clock, end of the last ring walk
 static thread_local std::chrono::steady_clock::time_point t_walk_off_since;
 static void walk_off_enter() {
@@ -4868,6 +4869,18 @@ static bool gpu_record_draw_impl(uint32_t initiator, uint32_t dma_base, uint32_t
     r.ps_writes_depth = d.ps_writes_depth;
     r.stencil_ref = g_xe_regs[0x210D]; r.stencil_ref_bf = g_xe_regs[0x210C];
     r.depthcontrol = g_xe_regs[0x2200]; r.sc_mode_cntl = g_xe_regs[0x2205];
+    {   // PA_SU_SC_MODE_CNTL bits 11-13: offset front, back, points and lines; PA_SU_POLY_OFFSET_* at 0x2380-0x2383 (floats)
+        auto fl = [](uint32_t reg) { float v; memcpy(&v, &g_xe_regs[reg], 4); return v; };
+        const uint32_t m = r.sc_mode_cntl;
+        float scale = 0, offset = 0;
+        if (r.topology >= 4) {   // triangles (D3D topology 4 and up here)
+            if (((m >> 11) & 1) && !(m & 1)) { scale = fl(0x2380); offset = fl(0x2381); }
+            if (((m >> 12) & 1) && !(m & 2) && !scale && !offset) { scale = fl(0x2382); offset = fl(0x2383); }
+        } else if ((m >> 13) & 1) {
+            scale = fl(0x2380); offset = fl(0x2381);
+        }
+        r.poly_scale = scale; r.poly_offset = offset;
+    }
     lsw_guest::copy(r.viewport, d.viewport, sizeof(r.viewport)); lsw_guest::copy(r.scissor, d.scissor, sizeof(r.scissor));
     r.ps_tex_count = d.ps_tex_count; r.ps_smp_count = d.ps_smp_count;
     r.vs_tex_count = d.vs_tex_count; r.vs_smp_count = d.vs_smp_count;
@@ -5601,7 +5614,8 @@ static void pm4_dump_state() {
 // Fire graphics interrupt for each set bit in cpu_mask.
 // g_interrupt_ctx must be set by the caller (VdSwap sets it around pm4_process_ring).
 static void pm4_fire_interrupt(uint32_t cpu_mask) {
-    if (!g_interrupt_ctx || !g_gfx_interrupt_callback) return;
+    if (!g_gfx_interrupt_callback) return;
+    if (!g_interrupt_ctx) { ++g_isr_lost; return; }
     WalkNeedsTurn need_turn;   // runs the guest ISR (and may drain tile lists)
     PPCFunc* fn = PPC_LOOKUP_FUNC(g_base, g_gfx_interrupt_callback);
     if (!fn) return;
@@ -5910,11 +5924,12 @@ static uint32_t pm4_tile_backlog() {
 // the turn, the walker's state and the tile backlog.
 extern "C" void lsw_walkoff_report() {
     if (!gil_on() || !g_rb_base || !g_rb_size) return;
-    static uint64_t last[10] = {};
-    const uint64_t now[10] = {g_wo_ibs.load(), g_wo_off_ns.load(), g_wo_rejoin_ns.load(), g_wo_needturn.load(), g_wo_claims.load(),
-                              g_wo_second.load(), g_walk_waits.load(), g_walk_rewaits.load(), g_wo_drain_busy.load(), g_wo_drain_waits.load()};
-    uint64_t d[10];
-    for (int i = 0; i < 10; ++i) { d[i] = now[i] - last[i]; last[i] = now[i]; }
+    static uint64_t last[11] = {};
+    const uint64_t now[11] = {g_wo_ibs.load(), g_wo_off_ns.load(), g_wo_rejoin_ns.load(), g_wo_needturn.load(), g_wo_claims.load(),
+                              g_wo_second.load(), g_walk_waits.load(), g_walk_rewaits.load(), g_wo_drain_busy.load(), g_wo_drain_waits.load(),
+                              g_isr_lost.load()};
+    uint64_t d[11];
+    for (int i = 0; i < 11; ++i) { d[i] = now[i] - last[i]; last[i] = now[i]; }
     const int64_t ms_now = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
     const int64_t end = g_walk_end_ms.load();
     uint8_t* base = g_base;
@@ -5923,13 +5938,13 @@ extern "C" void lsw_walkoff_report() {
     const bool stuck = end && ms_now - end > 3000 && w != r && g_wo_ibs.load() + g_walk_waits.load() > 0;
     static int stuck_lines = 0;
     if (stuck && stuck_lines >= 20) return;
-    if (!d[0] && !stuck && !d[5] && !d[8]) return;
+    if (!d[0] && !stuck && !d[5] && !d[8] && !d[10]) return;
     const uint64_t rmax = g_wo_rejoin_max_ns.exchange(0);
     printf("[WALKOFF] 5 s: %llu IBs off the turn, %.1f ms off, rejoin %.2f ms avg %.2f max, guest code inside %llu, half-walk claims %llu, "
-           "second walkers %llu (skipped %llu total), waits %llu again %llu, tile drain found a walk %llu (waited %llu)%s\n",
+           "second walkers %llu (skipped %llu total), waits %llu again %llu, tile drain found a walk %llu (waited %llu), GPU interrupts lost %llu%s\n",
            (unsigned long long)d[0], d[1] / 1e6, d[0] ? d[2] / 1e6 / d[0] : 0.0, rmax / 1e6, (unsigned long long)d[3], (unsigned long long)d[4],
            (unsigned long long)d[5], (unsigned long long)g_wo_second_skipped.load(), (unsigned long long)d[6], (unsigned long long)d[7],
-           (unsigned long long)d[8], (unsigned long long)d[9], stuck ? " | NO WALK" : "");
+           (unsigned long long)d[8], (unsigned long long)d[9], (unsigned long long)d[10], stuck ? " | NO WALK" : "");
     if (stuck) {
         ++stuck_lines;
         char b[512]; int k;
@@ -6494,6 +6509,10 @@ PPC_FUNC(__imp__VdSwap) {
     const bool swap_synced = g_geom_swapsync == 1 && g_geom_swaps > 0;
     if (!swap_synced) geom_reset_build();   // GEOM: per-VdSwap window (fallback mode only)
     if (g_rb_base && g_rb_size) {
+        // Run 18's W session: VdSwap set g_interrupt_ctx while the tile worker's walk (pm4_walk_now) was off the turn, and that walk,
+        // ending, put back the null it had saved. VdSwap then walked with no context, so the GPU interrupts in its part of the ring
+        // were dropped, the tile list they queue never reached the worker, and the picture stopped while the game ran. Wait first.
+        walk_wait_other();
         g_interrupt_ctx = &ctx;
         pm4_process_ring_flat();   // self-paces off the ring NOP frontier; fills g_geom_verts
         g_interrupt_ctx = nullptr;

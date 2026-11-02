@@ -1219,6 +1219,53 @@ const GLenum kStencilOp[8] = {GL_KEEP, GL_ZERO, GL_REPLACE, GL_INCR, GL_DECR, GL
 // Render-target geometry of a draw: msx/msy = MSAA sample-space scale, rt_w/rt_h = target size.
 struct DrawTarget { uint32_t nrt = 1, msx = 1, msy = 1, rt_w = kSceneW, rt_h = kSceneH; };
 
+bool g_polyofs_on = false;   // A/B state O
+bool g_sc_invalidate_pending = false;
+// Capture frames (LSWTCS_GLPROBE, default on): after each draw into a scene-wide colour target, the target is shrunk to 32 x 18
+// cells and read back, and the cells whose colour changed are printed ([GLPROBE], a 576-bit mask, row 0 first). It tells which draw
+// last wrote a region of the screenshot, such as the studs drawn over the characters in run 17 and 18. Slow: one GPU wait per draw.
+void capture_probe(uint32_t draw_index, const DrawTarget& dt) {
+    static const bool on = [] { const char* e = getenv("LSWTCS_GLPROBE"); return !(e && e[0] == '0'); }();
+    if (!on || dt.rt_w < 1280) return;
+    constexpr int kW = 32, kH = 18;
+    static GLuint fbo = 0, tex = 0;
+    if (!fbo) {
+        glGenTextures(1, &tex);
+        glBindTexture(GL_TEXTURE_2D, tex);
+        glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA8, kW, kH);
+        glGenFramebuffers(1, &fbo);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fbo);
+        glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex, 0);
+    }
+    GLint cur = 0;
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &cur);
+    static std::unordered_map<GLint, std::vector<uint32_t>> last;
+    glDisable(GL_SCISSOR_TEST);
+    glColorMaski(0, GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, GLuint(cur));
+    glReadBuffer(GL_COLOR_ATTACHMENT0);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fbo);
+    const GLint sw = GLint(kSceneW * dt.msx), sh = GLint(kSceneH * dt.msy);
+    glBlitFramebuffer(0, 0, sw, sh, 0, 0, kW, kH, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo);
+    std::vector<uint32_t> px(kW * kH);
+    glReadPixels(0, 0, kW, kH, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, GLuint(cur));
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, GLuint(cur));
+    g_sc_invalidate_pending = true;   // scissor and colour mask changed behind the state cache
+    std::vector<uint32_t>& prev = last[cur];
+    if (prev.size() != px.size()) prev.assign(px.size(), 0);
+    char hex[kW * kH / 4 + 1];
+    int changed = 0;
+    for (int i = 0; i < kW * kH / 4; ++i) {
+        int nib = 0;
+        for (int b = 0; b < 4; ++b) if (px[i * 4 + b] != prev[i * 4 + b]) { nib |= 8 >> b; ++changed; }
+        hex[i] = "0123456789ABCDEF"[nib];
+    }
+    hex[kW * kH / 4] = 0;
+    prev.swap(px);
+    if (changed) printf("[GLPROBE] #%u fbo %d: %d cells %s\n", draw_index, cur, changed, hex);
+}
 void apply_state(const LswGpuDrawRec& r, const DrawTarget& dt) {
     // Blend and colour mask per render target (RB_BLENDCONTROL0..3, RB_COLOR_MASK nibbles).
     for (uint32_t i = 0; i < 4; ++i) {
@@ -1246,6 +1293,14 @@ void apply_state(const LswGpuDrawRec& r, const DrawTarget& dt) {
         glDisable(GL_DEPTH_TEST);
     }
     glDepthMask(zwr ? GL_TRUE : GL_FALSE);
+    // Polygon offset (A/B state O). Until log19 it was never applied. Units as Xenia's host-render-target path: the scale is in 1/16
+    // subpixels, and the offset in depth units becomes about 2^24 host units, as for the guest's 24-bit depth on a float32 buffer.
+    if (g_polyofs_on && (r.poly_scale != 0 || r.poly_offset != 0)) {
+        glEnable(GL_POLYGON_OFFSET_FILL);
+        glPolygonOffset(r.poly_scale * (1.0f / 16.0f) * float(std::max(dt.msx, dt.msy)), r.poly_offset * 16777215.0f);
+    } else {
+        glDisable(GL_POLYGON_OFFSET_FILL);
+    }
     // Stencil (bit0 enable, bit7 separate back face; front 8-19, back 20-31).
     if (r.depthcontrol & 1) {
         const uint32_t dc = r.depthcontrol;
@@ -1300,6 +1355,7 @@ void apply_state(const LswGpuDrawRec& r, const DrawTarget& dt) {
 // forgotten when g_gl_epoch moves (blits, clears, object creation / deletion). LSWTCS_GLSTATECACHE=0: off.
 struct StateKey {   // every input of apply_state
     uint32_t blend[4], color_mask, has_ps, ps_rt_mask, depthcontrol, stencil_ref, sc_mode_cntl, dbg;
+    float poly_scale, poly_offset;   // zero unless state O
     float viewport[6];
     uint32_t scissor[4];
     DrawTarget dt;
@@ -2054,6 +2110,8 @@ void ab_cycle_tick() {
     lsw_tile_relaxed_set(has('T'));
     lsw_native_mix_set(has('N'));
     lsw_quantum_div_set(has('Q') ? 4 : 0);
+    g_polyofs_on = has('O');
+    g_sc.key_valid = false;
     stitch_set(has('S'));
     ++g_ab_changes;
     printf("[ABCYCLE] state %s from replay %llu\n", g_ab_state.c_str(), (unsigned long long)g_replays);
@@ -2545,11 +2603,13 @@ PresentSrc replay() {
             for (int i = 1; i < 4; ++i) k.blend[i] = r.blend_mrt[i];
             k.color_mask = r.color_mask; k.has_ps = r.ps_dxbc != nullptr; k.ps_rt_mask = r.ps_rt_mask;
             k.depthcontrol = r.depthcontrol; k.stencil_ref = r.stencil_ref; k.sc_mode_cntl = r.sc_mode_cntl;
+            if (g_polyofs_on) { k.poly_scale = r.poly_scale; k.poly_offset = r.poly_offset; }
             k.dbg = uint32_t(gl_dbg());
             memcpy(k.viewport, r.viewport, sizeof k.viewport);
             memcpy(k.scissor, r.scissor, sizeof k.scissor);
             k.dt = dt;
             // DIAG (GLGPUSPLIT=2, STATE FROZEN): only after a state-cache reset (a blit, clear or resolve changed GL state)
+            if (g_sc_invalidate_pending) { g_sc.key_valid = false; g_sc_invalidate_pending = false; }
             if (!g_sc.key_valid || (!g_gpuprof_nostate && memcmp(&k, &g_sc.key, sizeof k) != 0)) {
                 apply_state(r, dt);
                 ++g_sc_changes[SC_STATE];
@@ -2560,14 +2620,14 @@ PresentSrc replay() {
         }
         if (g_capture_frame) {
             printf("[GLDRAWCAP] #%u prim %u gs %u n=%u ib=%u mode=%u pitch=%u msaa=%u col=%u/%u dep=%u nrt=%u blend=%08X cmask=%X "
-                   "zctl=%08X cull=%u vp=%.0f,%.0f,%.0fx%.0f sc=%u,%u..%u,%u ps=%s vs=%016llX ps=%016llX gs=%016llX prog=%u |%s\n", draw_i - 1,
+                   "zctl=%08X cull=%u vp=%.0f,%.0f,%.0fx%.0f sc=%u,%u..%u,%u ps=%s vs=%016llX ps=%016llX gs=%016llX prog=%u scm=%08X po=%g/%g |%s\n", draw_i - 1,
                    r.topology, r.gs_type, r.vertex_count,
                    r.ib_count, r.edram_mode, r.surf_info & 0x3FFF, (r.surf_info >> 16) & 3, r.color_info & 0xFFF,
                    (r.color_info >> 16) & 0xF, r.depth_info & 0xFFF, dt.nrt, r.blendcontrol, r.color_mask, r.depthcontrol,
                    r.sc_mode_cntl & 7, r.viewport[0], r.viewport[1], r.viewport[2], r.viewport[3],
                    r.scissor[0], r.scissor[1], r.scissor[2], r.scissor[3], ps ? "y" : "n",
                    (unsigned long long)vs->key, (unsigned long long)(ps ? ps->key : 0), (unsigned long long)(gs ? gs->key : 0), prog,
-                   g_unit_log.c_str());
+                   r.sc_mode_cntl, r.poly_scale, r.poly_offset, g_unit_log.c_str());
             dump_capture_glsl(vs);
             dump_capture_glsl(ps);
             dump_capture_glsl(gs);
@@ -2597,6 +2657,7 @@ PresentSrc replay() {
                 glDrawArrays(mode, 0, count);
             draw_pixels = gpu_pixels_end();
         }
+        if (g_capture_frame) capture_probe(draw_i - 1, dt);
         if (first_use) {
             glFinish();
             printf("[GLPROGT] program %u first draw: %llu ms (VS %zu KB, PS %zu KB)\n", prog,

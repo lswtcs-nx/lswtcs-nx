@@ -52,6 +52,9 @@ struct LswGpuDrawRec {
   const void* gs_dxbc; uint32_t gs_size; uint32_t gs_type;   // optional geometry shader
   // Fixed-function state.
   uint32_t blendcontrol, color_mask, depthcontrol, sc_mode_cntl;
+  // Polygon offset of the face that is drawn (Xenia draw_util GetPreferredFacePolygonOffset): scale in 1/16 subpixels and offset in
+  // depth units, as the registers hold them. 0/0 = none.
+  float poly_scale, poly_offset;
   float viewport[6]; uint32_t scissor[4];
   uint32_t ps_tex_count, ps_smp_count, vs_tex_count, vs_smp_count;
   // Texture bindings: fetch constant index + dimension per slot (resolved at replay).

@@ -839,3 +839,18 @@ The tester saw small faults around 13:29-13:30. One is in capture 6549 (`Gungan_
 - With W on, the drain goes on only when the backlog is 0, no walk is off the turn and none is half done on the turn; it waits for an off-turn walk with `walk_wait_other`. Without W the drain is unchanged and such cases are only counted.
 - `[WALKOFF]` adds `tile drain found a walk N (waited M)`.
 - Sessions as for log17: main `MAPXSN,MAPXSHN`, W `MAPXSN,MAPXSNW,MAPXSHN,MAPXSHNW`.
+
+## Run 18: `0.0.24-log18`, 2 November 2026, two sessions
+
+**Main session** (`private/runs/run18-log18`), `MAPXSN` against `MAPXSHN`: heaviest band 12.7 FPS; H ahead again in the heavy bands (13.7 against 11.8 FPS at 4000+ draws) with no sampled miss. The studs fault came back at the same brick in `Gungan_C` (capture 6142, `MAPXSN`). The tester also notes dark outlines around that brick that should not be there.
+
+**W session** (`private/runs/run18w-log18`): no black bands this time, and the drain counters show what the log18 fix caught: 22-149 times per 5 s the drain found the tile worker's walk under way and waited. The picture then stopped in the hub at replay 2114 (state `MAPXSNW`) while the game, audio and pause menu went on. Every later `[GSPIKE]` shows walk 0.0 ms: the game no longer submitted work. Both tile worker threads (`sub_822D2AB0`) sat in `KeWaitForSingleObject` for 95 % of their samples, as in run 12.
+
+The cause found in the code: VdSwap set the global `g_interrupt_ctx` before waiting for a walk off the turn. That walk (the tile worker's `pm4_walk_now`) had saved a null context and restored it when it ended, so VdSwap then walked with no context. `pm4_fire_interrupt` returns early without one, so the GPU interrupts in that part of the ring were dropped. The tile list they queue never reached the worker, which waits for its event for ever. Not proved; it fits a stop with no black band.
+
+## `0.0.25-log19`
+
+- **W:** VdSwap waits for an off-turn walk before setting the interrupt context. `[WALKOFF]` counts `GPU interrupts lost` (a dropped interrupt for want of a context, in any session).
+- **Polygon offset, state O.** The GL backend never applied the Xenos polygon offset (`PA_SU_SC_MODE_CNTL` bits 11-13, `PA_SU_POLY_OFFSET_*`). It is now recorded per draw, as Xenia picks the face, and applied in state O: the slope scale in 1/16 subpixels, the offset times 2^24 on the float32 depth buffer, as Xenia's host-render-target path. Whether the studs use it is not known; the capture log now prints the mode register and both values (`scm=`, `po=`).
+- **`[GLPROBE]`** in full captures: after each draw into a scene-wide colour target, which of 32×18 screen cells changed. That names the draw that put the studs over the characters, and the outline draw.
+- Main session `MAPXSHN,MAPXSHNO`; W session `MAPXSHN,MAPXSHNW`.

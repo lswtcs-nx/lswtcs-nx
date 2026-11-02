@@ -87,6 +87,13 @@ the attempt to fix it.
 to the holder. Either the lock is also released outside the stubs, or a holder waits for something while holding it. Find which
 first (`RUN2_FINDINGS.md`, run 30, "Next evidence"); until then L is off and route 1 is blocked at this step.
 
+**log29:** the guest code points to a third cause: the voice lock is recursive, with an inline count and owner, and overlapping sections
+leave the count stuck above 0, so the release stub stops running. Not yet confirmed at run time. log29 takes real locks from boot and clears
+the count on winning the word; run 31 compares L and no L on the same level (`RUN2_FINDINGS.md`, "0.0.35-log29").
+
+**Run 31 (log29): confirmed, and route 1 is unblocked.** With L from boot: no forced wait, 16 short waits in 4.67 M acquires, 0-10 % of FPS at most and fuller audio. Without L the count
+goes stale in heavy scenes, so today's default also skips the quantum most of the time from then on. log30 moves `sub_827DDE40`, 57 % of the XAudio thread's turn, off the turn.
+
 **Started in log25 (state U, `audio_offturn.cpp`):** one pure guest function of the XAudio thread, `sub_827F5990`, runs off the turn
 on core 2 while other guest threads hold it. The pattern applies to any guest function that touches only its own buffers: check the
 recompiled body for imports, spinlocks, atomics and calls, override the weak symbol, and run it inside `lswtcs_gil_blocking_urgent`

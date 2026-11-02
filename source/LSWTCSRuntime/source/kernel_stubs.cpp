@@ -39,6 +39,16 @@
 #include "lsw_deko_draw_extent.h"
 #endif
 #include "lsw_save_platform.h"
+// State U (audio_offturn.cpp): guest code runs off the turn. Every kernel stub in this file assumes the turn unless it is marked
+// TURNFREE, so one reached off the turn takes the turn back first, and the guest code finishes on it. That covers what the static audit
+// of the subtree cannot see, its indirect calls. Harmless when nothing is off the turn: one thread-local read per stub.
+extern thread_local bool g_guest_off_turn;
+static void offturn_rejoin(const char* why);
+#undef PPC_FUNC_PROLOGUE
+#define PPC_FUNC_PROLOGUE_BODY() do { __builtin_assume(((size_t)base & 0x1F) == 0); \
+    if (__builtin_expect((((++lswtcs_gil_ctr) & 0x3FFu) == 0u), 0)) lswtcs_gil_quantum(); } while (0)
+#define PPC_FUNC_PROLOGUE_TURNFREE() PPC_FUNC_PROLOGUE_BODY()
+#define PPC_FUNC_PROLOGUE() do { if (__builtin_expect(g_guest_off_turn, 0)) offturn_rejoin(__func__); PPC_FUNC_PROLOGUE_BODY(); } while (0)
 static uint32_t g_kernel_arena = 0;
 static uint64_t g_kernel_epoch_ms = 0;
 static size_t g_kernel_header_bytes = 0;
@@ -739,7 +749,7 @@ static uint32_t g_sp_entry[LSW_SCHED_MAX];           // guest entry of each id (
 static uint64_t g_sp_acc[LSW_SCHED_MAX + 1];         // [LSW_SCHED_MAX] = idle
 static uint64_t g_sp_cnt[LSW_SCHED_MAX + 1];
 static uint64_t g_sp_run[LSW_SCHED_MAX + 1];         // same, never reset (per-frame deltas: [GSPIKE])
-static uint64_t g_sp_last = 0, g_sp_lastdump = 0, g_sp_switches = 0;
+static uint64_t g_sp_last = 0, g_sp_lastdump = 0, g_sp_switches = 0, g_sp_switches_all = 0;
 static int      g_sp_cur = -1;
 static int schedprof_on() { static int v = -1; if (v < 0) { const char* e = getenv("LSWTCS_SCHEDPROF"); v = (e && e[0] == '1') ? 1 : 0; } return v; }
 // CPU time of each id's host thread (cpu=), next to its turn time: a thread that holds the turn while blocked in a host
@@ -754,7 +764,7 @@ static void sched_turn_set(int n) {   // caller holds g_sched_mtx
         LARGE_INTEGER t; QueryPerformanceCounter(&t);
         uint64_t now = uint64_t(t.QuadPart);
         if (g_sp_last) { int k = g_sched_turn < 0 ? LSW_SCHED_MAX : g_sched_turn; g_sp_acc[k] += now - g_sp_last; g_sp_cnt[k]++; g_sp_run[k] += now - g_sp_last; }
-        g_sp_last = now; ++g_sp_switches;
+        g_sp_last = now; ++g_sp_switches; ++g_sp_switches_all;
         if (!g_sp_lastdump) g_sp_lastdump = now;
         if (now - g_sp_lastdump > uint64_t(f.QuadPart) * 5) {
             double tot = double(now - g_sp_lastdump);
@@ -1113,7 +1123,7 @@ static void sched_leave_turn(int id) {   // off the rotation (the turn goes to t
 static void sched_rejoin_urgent(int id);
 extern "C" void lswtcs_gil_blocking_urgent(void (*fn)(void*), void* arg) {
     const int id = g_sched_id;
-    if (!gil_on() || id < 0) { fn(arg); return; }
+    if (!gil_on() || id < 0 || g_guest_off_turn) { fn(arg); return; }   // already off the turn: nothing to leave
     sched_leave_turn(id);
     fn(arg);
     sched_rejoin_urgent(id);
@@ -1158,6 +1168,34 @@ static void sched_rejoin_urgent(int id) {
 extern "C" __attribute__((weak)) void lsw_offcore_begin_prio(int) {}   // Switch: platform_switch.cpp
 extern "C" __attribute__((weak)) void lsw_offcore_begin_on(int, int) {}
 extern "C" void lsw_offcore_end();
+extern "C" void lsw_offcore_begin();
+// State U: run guest code off the turn, on core 2 at the audio priority (audio_offturn.cpp). If a kernel stub takes the turn back on the
+// way (offturn_rejoin), the rest of `fn` runs on the turn. Returns whether it stayed off to the end.
+static thread_local bool g_offturn_rejoined = false;
+static std::atomic<uint64_t> g_offturn_rejoins{0};
+static void offturn_rejoin(const char* why) {
+    g_guest_off_turn = false;
+    g_offturn_rejoined = true;
+    static std::atomic<int> lines{0};
+    if (g_offturn_rejoins.fetch_add(1) < 4000 && lines.fetch_add(1) < 40) { printf("[AUDIOOFF] back on the turn for %s\n", why); fflush(stdout); }
+    lsw_offcore_end();
+    sched_rejoin_urgent(g_sched_id);
+}
+extern "C" bool lswtcs_gil_offturn(void (*fn)(void*), void* arg) {
+    const int id = g_sched_id;
+    if (!gil_on() || id < 0 || g_guest_off_turn) { fn(arg); return false; }
+    sched_leave_turn(id);
+    lsw_offcore_begin();
+    g_offturn_rejoined = false;
+    g_guest_off_turn = true;
+    fn(arg);
+    if (g_offturn_rejoined) { g_offturn_rejoined = false; return false; }
+    g_guest_off_turn = false;
+    lsw_offcore_end();
+    sched_rejoin_urgent(id);
+    return true;
+}
+extern "C" uint64_t lsw_offturn_rejoins() { return g_offturn_rejoins.load(); }
 static std::atomic<int> g_walkoff_state{-1};   // read when a walk begins, so a change applies from the next one (lsw_sched_ab_set)
 static bool walkoff_on() {
     int v = g_walkoff_state.load(std::memory_order_relaxed);
@@ -1304,10 +1342,58 @@ extern "C" void lswtcs_spin_leave() { if (spinguard_on() && g_spinlock_depth > 0
 // U never ran it off the turn. A lock taken while L was off stays "turn-held" (g_spin_turn_depth) and keeps its holder on the turn.
 // A release clears the word whenever it holds this thread's tag, whatever L is now. Switching L on while another thread holds a
 // turn-held lock opens a short window where both could enter; the states change every 15 s, so this is a known test-only risk.
-static std::atomic<bool> g_spin_real{false};
-extern "C" void lsw_spin_real_set(int on) { g_spin_real.store(on != 0, std::memory_order_relaxed); }
+// Run 30's reading of the guest code: the XAudio voice lock (0x83212774) is a recursive lock whose fields the game handles inline in
+// 76 functions: +0 word, +4 count, +8 owner (r13), +12 saved IRQL. The stub runs only when the count is 0 or another thread owns it, and a
+// release by a thread that is not the owner does nothing. Without L, a holder preempted in its section lets another thread in; the owner
+// is overwritten, the first holder's release is lost and the count never reaches 0 again, so the release stub is not called any more.
+// Under L that word then keeps a stale tag, and each change of owner cost 200 ms: in run 30 all 846 waits ended in a forced take.
+// So: LSWTCS_SPINREAL=1 takes the locks from boot, when the fields are clean, and L can then only go off, once. The real locks are only
+// consistent if no section ever overlapped. Whoever wins the word of a recursive lock is its one holder, so any count left there is stale.
+static std::atomic<int> g_spin_real{-1};   // -1: LSWTCS_SPINREAL not read yet
+static bool spin_from_boot() { static const bool on = [] { const char* e = getenv("LSWTCS_SPINREAL"); return e && e[0] == '1'; }(); return on; }
+static inline bool spin_real() {
+    int v = g_spin_real.load(std::memory_order_relaxed);
+    if (v < 0) { v = spin_from_boot() ? 1 : 0; g_spin_real.store(v, std::memory_order_relaxed); }
+    return v > 0;
+}
+extern "C" void lsw_spin_real_set(int on) {
+    if (spin_from_boot() && on) return;   // from boot L can only go off, and stays off: switching it on later meets stale counts
+    g_spin_real.store(on != 0, std::memory_order_relaxed);
+}
 thread_local int g_spin_turn_depth = 0;   // spinlocks this thread holds only through the turn
 static std::atomic<uint64_t> g_spin_real_taken{0}, g_spin_real_waits{0}, g_spin_forced{0};
+static bool spin_recursive(uint32_t lock) { return lock == 0x83212774u; }
+// Per lock, for [VOICELOCK] and [SPINLOCK]. Races between threads off the turn only blur these counts.
+struct SpinStat {
+    std::atomic<uint32_t> lock{0};
+    uint64_t acq = 0, rel = 0, dirty = 0, taken = 0, w1 = 0, w10 = 0, w200 = 0, forced = 0, hold_ns = 0, hold_max = 0, hold_t0 = 0, hold_seen = 0;
+    uint32_t acq_lr = 0, rel_lr = 0;
+    int acq_id = -1, rel_id = -1, lines = 0;
+    bool waits_seen() const { return w1 || w10 || w200 || forced; }
+};
+static SpinStat g_spin_stats[32], g_spin_stat_overflow;
+static SpinStat& spin_stat(uint32_t lock) {
+    for (SpinStat& s : g_spin_stats) {
+        uint32_t k = s.lock.load(std::memory_order_relaxed);
+        if (k == lock) return s;
+        if (!k) {
+            if (s.lock.compare_exchange_strong(k, lock) || k == lock) return s;
+        }
+    }
+    return g_spin_stat_overflow;
+}
+static inline uint64_t spin_now_ns() {
+    return uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+}
+static uint8_t* g_spin_base = nullptr;
+static int g_spin_depth_pub[LSW_SCHED_MAX];   // each id's g_spinlock_depth, for the report
+static std::atomic<uint64_t> g_spin_boundaries{0}, g_spin_q_skipped{0}, g_spin_q_yields{0};   // quantum boundaries; with a depth: no yield, yield
+static inline void spin_depth_publish() { const int id = g_sched_id; if (id >= 0 && id < LSW_SCHED_MAX) g_spin_depth_pub[id] = g_spinlock_depth; }
+static void spin_won(uint8_t* base, SpinStat& st, uint32_t lock, uint32_t lr) {
+    if (spin_recursive(lock)) { PPC_STORE_U32(lock + 4, 0); PPC_STORE_U32(lock + 8, 0); }   // the caller writes owner and count next
+    st.acq_lr = lr; st.acq_id = g_sched_id; st.hold_t0 = spin_now_ns();
+    ++st.taken;
+}
 // Run 27 froze 0.1 s after L switched on, in Gungan_B: a guest thread (823592C0, sub_827EEE08 < sub_827D8148) spun for ever on a
 // KeAcquireSpinLockAtRaisedIrql whose word never cleared, while the XAudio thread and the audio went on. A wait past 200 ms now
 // prints the lock, its word and who holds it ([SPINLOCK]), then takes the lock anyway: no exclusion, as before L, but no freeze.
@@ -1315,9 +1401,19 @@ static void sched_yield_turn();
 static void sched_yield_to(int h);
 static inline uint32_t spin_tag() { return 0x4C535700u | uint32_t(g_sched_id + 2); }   // nonzero, any byte order
 static bool spin_lock_ok(uint32_t lock) { return lock >= 0x80000000u && lock < 0xC0000000u && !(lock & 3); }
-static void spin_acquire(uint8_t* base, uint32_t lock) {
+static void spin_acquire(uint8_t* base, uint32_t lock, uint32_t lr) {
     lswtcs_spin_enter();
-    if (!g_spin_real.load(std::memory_order_relaxed) || !spin_lock_ok(lock)) { ++g_spin_turn_depth; return; }
+    spin_depth_publish();
+    g_spin_base = base;
+    const bool lock_ok = spin_lock_ok(lock);
+    SpinStat& st = lock_ok ? spin_stat(lock) : g_spin_stat_overflow;
+    ++st.acq;
+    if (lock_ok && spin_recursive(lock) && PPC_LOAD_U32(lock + 4) != 0 && PPC_LOAD_U32(lock + 8) != 0) {
+        // Another thread is the recorded owner. Normal when it really holds the word; without L, or with a free word, the count is stale.
+        const uint32_t word_now = *reinterpret_cast<volatile uint32_t*>(PPC_HOST(lock));
+        if (word_now == 0) ++st.dirty;
+    }
+    if (!spin_real() || !lock_ok) { ++g_spin_turn_depth; st.acq_lr = lr; st.acq_id = g_sched_id; return; }
     volatile uint32_t* w = reinterpret_cast<volatile uint32_t*>(PPC_HOST(lock));
     const uint32_t tag = spin_tag();
     bool waited = false;
@@ -1329,14 +1425,19 @@ static void spin_acquire(uint8_t* base, uint32_t lock) {
         if ((++spins & 63) == 0 && std::chrono::steady_clock::now() - t0 > std::chrono::milliseconds(200)) {
             const uint32_t word = *w;
             const bool ours = (word & 0xFFFFFF00u) == 0x4C535700u;
-            static std::atomic<int> lines{0};
-            if (lines.fetch_add(1) < 20) {
-                printf("[SPINLOCK] stuck 200 ms: lock %08X word %08X (%s%d), waiter id %d (entry %08X); taken anyway (%llu so far)\n", lock, word,
-                       ours ? "held by id " : "not a tag, raw ", ours ? int(word & 0xFF) - 2 : int(word), g_sched_id,
-                       g_sched_id >= 0 && g_sched_id < LSW_SCHED_MAX ? g_sp_entry[g_sched_id] : 0u, (unsigned long long)g_spin_forced.load() + 1);
+            const int holder = ours ? int(word & 0xFF) - 2 : -1;
+            if (st.lines++ < 20) {
+                const bool h_ok = holder >= 0 && holder < LSW_SCHED_MAX;
+                printf("[SPINLOCK] stuck 200 ms: lock %08X word %08X (%s%d), waiter id %d (entry %08X) lr %08X; taken anyway (%llu so far) | "
+                       "count %u owner %08X | holder alive %d runnable %d turn %d depth %d | last acquire id %d lr %08X, last release id %d lr %08X\n",
+                       lock, word, ours ? "held by id " : "not a tag, raw ", ours ? holder : int(word), g_sched_id,
+                       g_sched_id >= 0 && g_sched_id < LSW_SCHED_MAX ? g_sp_entry[g_sched_id] : 0u, lr, (unsigned long long)g_spin_forced.load() + 1,
+                       PPC_LOAD_U32(lock + 4), PPC_LOAD_U32(lock + 8), h_ok && g_sched_alive[holder], h_ok && g_sched_runnable[holder], g_sched_turn,
+                       h_ok ? g_spin_depth_pub[holder] : -1, st.acq_id, st.acq_lr, st.rel_id, st.rel_lr);
                 fflush(stdout);
             }
             ++g_spin_forced;
+            ++st.forced;
             *w = tag;
             break;
         }
@@ -1346,31 +1447,117 @@ static void spin_acquire(uint8_t* base, uint32_t lock) {
             else sched_yield_turn();
         } else std::this_thread::yield();
     }
+    if (waited) {
+        const auto dt = std::chrono::steady_clock::now() - t0;
+        if (dt < std::chrono::milliseconds(1)) ++st.w1;
+        else if (dt < std::chrono::milliseconds(10)) ++st.w10;
+        else if (dt < std::chrono::milliseconds(200)) ++st.w200;
+    }
+    spin_won(base, st, lock, lr);
     ++g_spin_real_taken;
     if (waited) ++g_spin_real_waits;
 }
-static bool spin_try(uint8_t* base, uint32_t lock) {
-    if (!g_spin_real.load(std::memory_order_relaxed) || !spin_lock_ok(lock)) { lswtcs_spin_enter(); ++g_spin_turn_depth; return true; }
+static bool spin_try(uint8_t* base, uint32_t lock, uint32_t lr) {
+    if (!spin_real() || !spin_lock_ok(lock)) { lswtcs_spin_enter(); spin_depth_publish(); ++g_spin_turn_depth; return true; }
     volatile uint32_t* w = reinterpret_cast<volatile uint32_t*>(PPC_HOST(lock));
     if (!__sync_bool_compare_and_swap(w, 0u, spin_tag())) return false;
     lswtcs_spin_enter();
+    spin_depth_publish();
+    SpinStat& st = spin_stat(lock);
+    ++st.acq;
+    spin_won(base, st, lock, lr);
     ++g_spin_real_taken;
     return true;
 }
-static void spin_release(uint8_t* base, uint32_t lock) {
+static void spin_release(uint8_t* base, uint32_t lock, uint32_t lr) {
     lswtcs_spin_leave();
+    spin_depth_publish();
     bool was_ours = false;
     if (spin_lock_ok(lock)) {
+        SpinStat& st = spin_stat(lock);
+        ++st.rel; st.rel_lr = lr; st.rel_id = g_sched_id;
         volatile uint32_t* w = reinterpret_cast<volatile uint32_t*>(PPC_HOST(lock));
         was_ours = __sync_bool_compare_and_swap(w, spin_tag(), 0u);
+        if (was_ours && st.hold_t0) {
+            const uint64_t held = spin_now_ns() - st.hold_t0;
+            st.hold_ns += held; ++st.hold_seen;
+            if (held > st.hold_max) st.hold_max = held;
+            st.hold_t0 = 0;
+        }
         // A release writes 0 as the 360's does, whoever set the word: the game may take a lock in its own code (lwarx/stwcx, any
         // value) and give it back through this stub. Only with L on; without L the stubs leave the words alone as before log26.
-        if (!was_ours && g_spin_real.load(std::memory_order_relaxed)) __atomic_store_n(w, 0u, __ATOMIC_RELEASE);
+        if (!was_ours && spin_real()) __atomic_store_n(w, 0u, __ATOMIC_RELEASE);
     }
     if (!was_ours && g_spin_turn_depth > 0) --g_spin_turn_depth;
 }
+// At each A/B state change: running totals, so private/session-tools/ab_factorial.py can charge each state's visits exactly (with states of
+// a few seconds, the 5 s lines below mix them). Turn time needs LSWTCS_SCHEDPROF.
+extern "C" __attribute__((weak)) void lsw_audio_offturn_counts(uint64_t*) {}
+extern "C" void lsw_ab_stat_report(const char* state, unsigned long long replay) {
+    char b[1400];
+    int k = snprintf(b, sizeof b, "[ABSTAT] state %s ended replay %llu | turn", state, replay);
+    {
+        std::unique_lock<std::mutex> lk(g_sched_mtx);
+        static LARGE_INTEGER f{}; if (!f.QuadPart) QueryPerformanceFrequency(&f);
+        for (int i = 0; i <= LSW_SCHED_MAX && k < 700; ++i) {
+            if (!g_sp_run[i]) continue;
+            const double ms = 1e3 * double(g_sp_run[i]) / double(f.QuadPart);
+            if (i == LSW_SCHED_MAX) k += snprintf(b + k, sizeof b - k, " idle:%.0f", ms);
+            else k += snprintf(b + k, sizeof b - k, " %d:%.0f", i, ms);
+        }
+        k += snprintf(b + k, sizeof b - k, " | switches %llu", (unsigned long long)g_sp_switches_all);
+    }
+    const SpinStat& s = spin_stat(0x83212774u);
+    uint64_t a[6] = {};
+    lsw_audio_offturn_counts(a);
+    snprintf(b + k, sizeof b - k, " | voice acquires %llu waits1 %llu waits10 %llu waits200 %llu forced %llu heldms %.1f passed %llu"
+             " | quantum %llu kept %llu yielded %llu | offturn calls %llu off %llu stayed %llu returns %llu workms %.1f totalms %.1f oncallms %.1f\n",
+             (unsigned long long)s.acq, (unsigned long long)s.w1, (unsigned long long)s.w10, (unsigned long long)s.w200, (unsigned long long)s.forced,
+             s.hold_ns / 1e6, (unsigned long long)g_yield_to.load(), (unsigned long long)g_spin_boundaries.load(), (unsigned long long)g_spin_q_skipped.load(),
+             (unsigned long long)g_spin_q_yields.load(), (unsigned long long)a[0], (unsigned long long)a[1], (unsigned long long)a[2],
+             (unsigned long long)g_offturn_rejoins.load(), a[3] / 1e6, a[4] / 1e6, a[5] / 1e6);
+    fputs(b, stdout);
+    fflush(stdout);
+}
+// Every 5 s with LSWTCS_SCHEDPROF: the voice lock's fields and counts, the other locks in use, and each thread's depth. Without L, a count
+// that stays above 0 while the release stub stops is the stale state the fix above is for; with L, dirty must stay 0.
+static void spin_report_tick() {
+    static thread_local unsigned n = 0;
+    if ((++n & 255) || !schedprof_on() || !g_spin_base) return;
+    static std::atomic<uint64_t> last{0};
+    const uint64_t now = spin_now_ns();
+    uint64_t was = last.load(std::memory_order_relaxed);
+    if (was && now - was < 5000000000ull) return;
+    if (!last.compare_exchange_strong(was, now)) return;
+    uint8_t* base = g_spin_base;
+    static uint64_t hold_last = 0;
+    const double wall_ms = was ? (now - was) / 1e6 : 1.0;
+    for (SpinStat& s : g_spin_stats) {
+        const uint32_t lock = s.lock.load(std::memory_order_relaxed);
+        if (!lock) break;
+        if (spin_recursive(lock)) {
+            printf("[VOICELOCK] L %d word %08X count %u owner %08X | stub acquires %llu releases %llu, dirty %llu, taken %llu | waits <1ms %llu <10ms %llu "
+                   "<200ms %llu forced %llu, turn passed %llu | held avg %.3f ms max %.3f ms, %.1f %% of the last %.0f ms\n",
+                   spin_real(), *reinterpret_cast<volatile uint32_t*>(PPC_HOST(lock)), PPC_LOAD_U32(lock + 4), PPC_LOAD_U32(lock + 8),
+                   (unsigned long long)s.acq, (unsigned long long)s.rel, (unsigned long long)s.dirty, (unsigned long long)s.taken,
+                   (unsigned long long)s.w1, (unsigned long long)s.w10, (unsigned long long)s.w200, (unsigned long long)s.forced,
+                   (unsigned long long)g_yield_to.load(), s.hold_seen ? s.hold_ns / 1e6 / s.hold_seen : 0.0, s.hold_max / 1e6,
+                   (s.hold_ns - hold_last) / 1e4 / wall_ms, wall_ms);
+            hold_last = s.hold_ns;
+        } else if (s.waits_seen()) {
+            printf("[VOICELOCK] other lock %08X: stub acquires %llu releases %llu, taken %llu | waits <1ms %llu <10ms %llu <200ms %llu forced %llu\n", lock,
+                   (unsigned long long)s.acq, (unsigned long long)s.rel, (unsigned long long)s.taken, (unsigned long long)s.w1,
+                   (unsigned long long)s.w10, (unsigned long long)s.w200, (unsigned long long)s.forced);
+        }
+    }
+    printf("[VOICELOCK] quantum boundaries %llu: with a held depth %llu kept, %llu yielded | depth by id:", (unsigned long long)g_spin_boundaries.load(),
+           (unsigned long long)g_spin_q_skipped.load(), (unsigned long long)g_spin_q_yields.load());
+    for (int i = 0; i < g_sched_count && i < LSW_SCHED_MAX; ++i) if (g_spin_depth_pub[i]) printf(" %d:%d", i, g_spin_depth_pub[i]);
+    printf("\n");
+    fflush(stdout);
+}
 // For audio_offturn.cpp: true when every spinlock this thread holds is really taken (so it may leave the turn while holding them).
-extern "C" bool lsw_spin_all_real() { return g_spin_turn_depth == 0; }
+extern "C" bool lsw_spin_all_real() { return g_spin_turn_depth == 0 && spin_real(); }
 extern "C" void lsw_spin_report(uint64_t* taken, uint64_t* waits) { *taken = g_spin_real_taken.load(); *waits = g_spin_real_waits.load(); }
 extern "C" void lsw_spin_report2(uint64_t* forced, uint64_t* yield_to) { *forced = g_spin_forced.load(); *yield_to = g_yield_to.load(); }
 static std::atomic<int> g_qdiv_ab{0};
@@ -1384,6 +1571,8 @@ extern "C" void lswtcs_gil_quantum() {
     // Advance all KPRCB ticks so guest timed-waits (sub_822AFB88's 0.5ms poll) progress on ANY code
     // path, not just when VdSwap/sub_822AE698 is reached. See g_kprcb_list comment above.
     lswtcs_advance_all_kprcb_ticks();
+    spin_report_tick();
+    g_spin_boundaries.fetch_add(1, std::memory_order_relaxed);
     // While THIS thread holds a spinlock / raised IRQL, run its critical section atomically
     // (don't preempt → no shared-state corruption). BUT a real spinlock section is SHORT (spans
     // ≤1 quantum boundary); if a "lock" is still held after many quantum boundaries, it's not a
@@ -1402,8 +1591,9 @@ extern "C" void lswtcs_gil_quantum() {
     {
         static thread_local int held = 0;
         if (g_spinlock_depth > 0) {
-            if (++held <= 8) { if (urg) ++g_urg_qspin; return; }   // short critical section: atomic
+            if (++held <= 8) { if (urg) ++g_urg_qspin; g_spin_q_skipped.fetch_add(1, std::memory_order_relaxed); return; }   // short critical section: atomic
             held = 0;                  // held too long = spin-wait → fall through and yield
+            g_spin_q_yields.fetch_add(1, std::memory_order_relaxed);
         } else {
             held = 0;
         }
@@ -1540,8 +1730,8 @@ PPC_FUNC(__imp__RtlInitializeCriticalSectionAndSpinCount) {
 
 // ── Spinlocks ─────────────────────────────────────────────────────────────────
 extern "C" void lswtcs_spin_enter(); extern "C" void lswtcs_spin_leave();
-PPC_FUNC(__imp__KfAcquireSpinLock) { PPC_FUNC_PROLOGUE(); ++g_spin_dbg[0]; spin_acquire(base, ctx.r3.u32); ctx.r3.u32 = 0; }  // returns old IRQL
-PPC_FUNC(__imp__KfReleaseSpinLock) { PPC_FUNC_PROLOGUE(); ++g_spin_dbg[1]; spin_release(base, ctx.r3.u32); }
+PPC_FUNC(__imp__KfAcquireSpinLock) { PPC_FUNC_PROLOGUE_TURNFREE(); ++g_spin_dbg[0]; spin_acquire(base, ctx.r3.u32, uint32_t(ctx.lr)); ctx.r3.u32 = 0; }  // returns old IRQL
+PPC_FUNC(__imp__KfReleaseSpinLock) { PPC_FUNC_PROLOGUE_TURNFREE(); ++g_spin_dbg[1]; spin_release(base, ctx.r3.u32, uint32_t(ctx.lr)); }
 
 // ── TLS ───────────────────────────────────────────────────────────────────────
 // Per-thread (correct: KeTls* is thread-local on the 360). This is now SAFE because
@@ -7089,7 +7279,7 @@ PPC_FUNC(__imp__XeCryptShaUpdate)           { PPC_FUNC_PROLOGUE(); }
 PPC_FUNC(__imp__XexGetModuleHandle)         { PPC_FUNC_PROLOGUE(); LSW_XSTUB_LOG(); ctx.r3.u32 = 0; }
 PPC_FUNC(__imp__XexGetProcedureAddress)     { PPC_FUNC_PROLOGUE(); LSW_XSTUB_LOG(); ctx.r3.u32 = 0; }
 PPC_FUNC(__imp__ExRegisterTitleTerminateNotification) { PPC_FUNC_PROLOGUE(); ctx.r3.u32 = 0; }
-PPC_FUNC(__imp__KeAcquireSpinLockAtRaisedIrql) { PPC_FUNC_PROLOGUE(); ++g_spin_dbg[2]; spin_acquire(base, ctx.r3.u32); ctx.r3.u32 = 0; }
+PPC_FUNC(__imp__KeAcquireSpinLockAtRaisedIrql) { PPC_FUNC_PROLOGUE_TURNFREE(); ++g_spin_dbg[2]; spin_acquire(base, ctx.r3.u32, uint32_t(ctx.lr)); ctx.r3.u32 = 0; }
 PPC_FUNC(__imp__KeInitializeSemaphore) {
     PPC_FUNC_PROLOGUE();
     // r3=*KSEMAPHORE, r4=count, r5=limit. X_KSEMAPHORE = DISPATCHER_HEADER(16) + limit(+16).
@@ -7106,7 +7296,7 @@ PPC_FUNC(__imp__KeInitializeSemaphore) {
     ctx.r3.u32 = 0;
 }
 PPC_FUNC(__imp__KeQueryPerformanceFrequency) {
-    PPC_FUNC_PROLOGUE();
+    PPC_FUNC_PROLOGUE_TURNFREE();
     // Guest timer rate: 50,000,000 Hz (Xenia's guest tick rate; mftb is scaled to match). Not the
     // 360's nominal 49.875 MHz: the game derives its frame-timer frequency as (this / 1000000) *
     // 1000000 in integer math (sub_8250E160), which turned 49875000 into 49000000 and made game
@@ -7124,7 +7314,7 @@ PPC_FUNC(__imp__KeQueryPerformanceFrequency) {
 // the acquire/release pairs, which balance. Default 1: bare IRQL raises are not counted (Eden hub, back to back:
 // p50/p90 24.9/31.2 -> 23.9/28.1 ms, audio underruns in the hub 744-1712 -> 0-6 per 10 s). =0: the old behaviour.
 static bool irqlfix_on() { static const bool on = [] { const char* e = getenv("LSWTCS_IRQLFIX"); return !(e && e[0] == '0'); }(); return on; }
-PPC_FUNC(__imp__KeRaiseIrqlToDpcLevel) { PPC_FUNC_PROLOGUE(); ++g_spin_dbg[3]; if (!irqlfix_on()) lswtcs_spin_enter(); ctx.r3.u32 = 0; }  // DPC level disables preemption
+PPC_FUNC(__imp__KeRaiseIrqlToDpcLevel) { PPC_FUNC_PROLOGUE_TURNFREE(); ++g_spin_dbg[3]; if (!irqlfix_on()) lswtcs_spin_enter(); ctx.r3.u32 = 0; }  // DPC level disables preemption
 PPC_FUNC(__imp__KeReleaseSemaphore) {
     PPC_FUNC_PROLOGUE();
     // r3=*KSEMAPHORE, r4=increment (priority boost), r5=adjustment, r6=wait. Returns the
@@ -7137,10 +7327,10 @@ PPC_FUNC(__imp__KeReleaseSemaphore) {
     kw_notify();
     ctx.r3.u32 = prev;
 }
-PPC_FUNC(__imp__KeReleaseSpinLockFromRaisedIrql) { PPC_FUNC_PROLOGUE(); ++g_spin_dbg[4]; spin_release(base, ctx.r3.u32); }
-PPC_FUNC(__imp__KeTryToAcquireSpinLockAtRaisedIrql) { PPC_FUNC_PROLOGUE(); ++g_spin_dbg[5]; ctx.r3.u32 = spin_try(base, ctx.r3.u32) ? 1 : 0; }  // without L: always "acquires" under the GIL
-PPC_FUNC(__imp__KfLowerIrql) { PPC_FUNC_PROLOGUE(); ++g_spin_dbg[6]; ctx.r3.u32 = 0; }  // not counted (see KeRaiseIrqlToDpcLevel)
-PPC_FUNC(__imp__MmGetPhysicalAddress) { PPC_FUNC_PROLOGUE(); /* virt == phys in our port */ }
+PPC_FUNC(__imp__KeReleaseSpinLockFromRaisedIrql) { PPC_FUNC_PROLOGUE_TURNFREE(); ++g_spin_dbg[4]; spin_release(base, ctx.r3.u32, uint32_t(ctx.lr)); }
+PPC_FUNC(__imp__KeTryToAcquireSpinLockAtRaisedIrql) { PPC_FUNC_PROLOGUE_TURNFREE(); ++g_spin_dbg[5]; ctx.r3.u32 = spin_try(base, ctx.r3.u32, uint32_t(ctx.lr)) ? 1 : 0; }  // without L: always "acquires" under the GIL
+PPC_FUNC(__imp__KfLowerIrql) { PPC_FUNC_PROLOGUE_TURNFREE(); ++g_spin_dbg[6]; ctx.r3.u32 = 0; }  // not counted (see KeRaiseIrqlToDpcLevel)
+PPC_FUNC(__imp__MmGetPhysicalAddress) { PPC_FUNC_PROLOGUE_TURNFREE(); /* virt == phys in our port */ }
 PPC_FUNC(__imp__XAudioGetVoiceCategoryVolume) { PPC_FUNC_PROLOGUE(); ctx.r3.u32 = 0; }
 PPC_FUNC(__imp__XAudioGetVoiceCategoryVolumeChangeMask) { PPC_FUNC_PROLOGUE(); ctx.r3.u32 = 0; }
 PPC_FUNC(__imp__XAudioQueryDriverPerformance) { PPC_FUNC_PROLOGUE(); ctx.r3.u32 = 0; }

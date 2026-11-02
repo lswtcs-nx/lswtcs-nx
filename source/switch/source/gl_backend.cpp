@@ -56,6 +56,7 @@ extern "C" void lsw_tile_relaxed_set(int on);                  // kernel_stubs.c
 extern "C" void lsw_native_mix_set(int on);                    // native_mixer.cpp: N
 extern "C" void lsw_audio_offturn_set(int on);                 // audio_offturn.cpp: U (the second audio mixer off the guest turn)
 extern "C" void lsw_spin_real_set(int on);                     // kernel_stubs.cpp: L (guest spinlocks really taken)
+extern "C" void lsw_ab_stat_report(const char* state, unsigned long long replay);   // kernel_stubs.cpp: [ABSTAT]
 extern "C" void lsw_quantum_div_set(int n);                    // kernel_stubs.cpp: Q (a guest thread switch every 4th quantum)
 extern "C" void lsw_walk_ab_set(int nowait, int nodrain);           // kernel_stubs.cpp: Y and D (with W)
 extern "C" void lsw_walk_core_set(int core);                         // kernel_stubs.cpp: K (with W) walks on core 2; 0 = LSWTCS_WALKOFF_CORE
@@ -2120,8 +2121,9 @@ void ab_cycle_tick() {
             std::swap(order[i - 1], order[size_t(seed % i)]);
         }
     }
+    if (!g_ab_state.empty()) lsw_ab_stat_report(g_ab_state.c_str(), (unsigned long long)g_replays);
     g_ab_state = states[order[index++ % states.size()]];
-    const auto has = [](char c) { return g_ab_state.find(c) != std::string::npos; };
+    const auto has =[](char c) { return g_ab_state.find(c) != std::string::npos; };
     g_ut_off_ab = !has('M');
     lsw_sched_ab_set(has('A'), has('W'));
     lsw_walk_ab_set(has('Y'), has('D'));

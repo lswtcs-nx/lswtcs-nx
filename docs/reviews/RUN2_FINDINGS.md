@@ -1110,3 +1110,86 @@ The game crashed while entering `Gungan_A` (state `MAPXSHN`, so L and R off at t
 - **Profile:** `MAPXSHN`, `MAPXSHNRG` (L, U out). Same build.
 
 Route 1 now depends on making guest spinlocks real without this stall (`CPU_ROADMAP.md`). Route 2 (faster generated code) does not.
+
+## `0.0.35-log29`
+
+**What run 30's stall most likely is (read from the guest code and the run 30 counters; the count was never read at run time):**
+
+- The voice lock `83212774` is a recursive lock handled inline in 76 guest functions (`private/session-tools/voice_lock_sites.py`): +0 word,
+  +4 count, +8 owner (r13, one per guest thread here), +12 saved IRQL. A thread that owns it only adds to the count. The stub runs only
+  when the count is 0 or another thread owns it. A release by a thread that is not the owner does nothing, and the release stub runs only
+  when the count reaches 0.
+- Without L, a holder preempted in its section lets a second thread in. The owner is overwritten, the first release is lost, and the
+  count stays at 1 or more for good. Harmless to the turn-only stubs. With L, the word then keeps the last tag and each change of owner
+  waits 200 ms, and the forced take adds to the count again.
+- Fits run 30: `waited` equals `taken after 200 ms` on the `[AUDIOOFF]` lines checked, up to the final 846 and 846, so no wait ended
+  normally. The first stall came 0.1 s after L switched on in a heavy scene. Reports alternate owner and waiter. Run 27's hang was on the same lock.
+- This corrects run 30's text in one point: only the first 20 of the 846 reports were printed, so "all on `83212774`" holds for those 20.
+- Hypothesis 2 of run 30 (a holder waiting for the waiter) is less likely but not excluded.
+- Possibly also without L, not measured: with a stale count the acquire stub runs and the release stub does not, so `g_spinlock_depth` only
+  grows and those threads yield at every 9th quantum boundary.
+
+**The build:**
+
+- `LSWTCS_SPINREAL=1`: real locks from boot, when the fields are clean. L can then go off once and not back on.
+- Winning the word of the voice lock clears its count and owner, so a forced take no longer leaves it broken. An address table of one
+  entry, since the game's inline code cannot be hooked.
+- `[VOICELOCK]` every 5 s (with `LSWTCS_SCHEDPROF`): word, count, owner, stub acquires and releases, stale counts seen (`dirty`), waits by
+  duration, time held, quantum boundaries kept or yielded under a held depth, depth by thread. Other locks appear once they have a wait.
+- `[SPINLOCK]` is limited per lock and adds the count, owner, holder state and last acquire and release sites.
+- Profile: `LSWTCS_ABSTATES=MAPXSHNL` until the first return to the hub, `LSWTCS_ABSTATES2=MAPXSHN` after it. The same level played in both;
+  the second pass has its shaders ready, which favours the state without L.
+
+**What run 31 decides:** forced near 0 with short waits and FPS within about 10 % means route 1 continues with the `sub_827F1258` subtree.
+Forced near 0 but much slower: use the hold times to decide whether L is worth it. Forced with a clean count: hypothesis 2, and the holder
+state says what to fix; without a simple fix, route 2. A count stuck in phase 2 with depth growing: the no-L effect is real, a separate fix.
+
+## Run 31: `0.0.35-log29`, 2 November 2026: real spinlocks work
+
+`Gungan_A` to `E`, the hub, and the same level again; no crash, no hang, no `[SPINLOCK]`. Archived in `private/runs/run31-log29`.
+
+- **The stale count is confirmed at run time.** Phase 1 (L from boot): 4.67 M stub acquires, as many releases, count 0, `dirty` 0, no forced
+  wait, 16 waits, all under 1 ms; the longest hold 11 ms, the lock held 1-9 % of wall time.
+- **Phase 2 (L off) reproduced the fault by itself:** it stayed clean until the second `Gungan_B`, about 378 s in, then the release stub never
+  ran again (releases frozen at 6,078,238 while acquires went on) and the count climbed to 24. `g_spinlock_depth` grew to thousands (0:4343,
+  1:16396, 4:9090, 5:9059), so those threads now skip the quantum at 8 boundaries in 9. Today's default has this defect once the level gets heavy.
+- **FPS and audio, L first pass against no L second pass** (the second has its shaders ready):
+
+| Draws | L | No L |
+| --- | --- | --- |
+| 800-1300 | 29.2 FPS, audio 100 % | 28.9, 99 % |
+| 1300-2500 | 24.4, 99 % | 27.1, 95 % |
+| 2500-4000 | 21.0, 99 % | 21.9, 79 % |
+| 4000-5000 | 15.9, 97 % | 15.5, 85 % |
+| 5000+ | 13.5, 93 % | 14.0, 91 % |
+
+  So L costs 0-10 % of FPS at most, in the pass that also compiles shaders, and audio is clearly fuller. The two are not separated cleanly: pass order
+  and the stale count both differ. L's pass had 4 frames of 500 ms or more (max 1554 ms) against none; cause not checked, but no lock wait comes near that.
+- **Decision:** L is sound, so route 1 continues. Making L the default is the owner's call; it stays in the test profile.
+
+## `0.0.36-log30`
+
+- **State U is rebuilt:** the voice processing `sub_827DDE40` (57 % of the XAudio thread's turn in heavy frames, only that thread on the stacks) leaves the turn as a whole,
+  on core 2 at priority 0x2B. Log25's per-call `sub_827F5990` is gone. `sub_827F1258` was the earlier candidate, but it sits under a per-voice dispatch.
+- **Off-turn guard:** kernel stubs now take the turn back if reached off it (`offturn_rejoin`), except those marked `PPC_FUNC_PROLOGUE_TURNFREE`
+  (spinlocks, IRQL, `KeQueryPerformanceFrequency`, `MmGetPhysicalAddress`). The rest of the call then runs on the turn. This covers indirect calls the audit cannot follow, for
+  imports in `kernel_stubs.cpp`; guest code reached that way runs off the turn until it meets a stub.
+- `[AUDIOOFF]` every 5 s: calls a second, off the turn, stayed off, returns for a stub, cost per call on and off the turn; the first 40 returns name the stub.
+- **Profile:** `MAPXSHNL,MAPXSHNLU` until the first return to the hub, `MAPXSHNLR,MAPXSHNLRU` after it. Each pass compares U within itself.
+- **Not known:** calls a second (each costs a handoff, about 0.41 ms in run 27). Lock-free sharing without barriers is unaudited (`sync`/`lwsync` are dropped).
+
+**What run 32 decides:** U at or above the same state without it, audio no worse, no corruption: keep it and move more of the XAudio thread. Many stub returns: the
+named stub is the next audit. U slower because of handoffs: find a root called less often. Audio faults or crashes only in U: look for lock-free sharing first.
+
+## `0.0.37-log31`
+
+Same code as log30 for U. The run is redesigned to answer more in one pass of the level (the tester's request).
+
+- **Eight states, every 6 s:** U, R, G and Q on top of `MAPXSHNL`, in a new order each round: G is on when an odd number of U, R, Q are. Each letter is on in 4 states and is compared over
+  half of the session; a single letter's effect is clear of the others, but pairs are mixed (R+G with U+Q). No second pass.
+- **Run 24 and 25 reread with load matching:** R is +2 to +5 % and G +3 to +5 %, with intervals of about 4-5 %, not the 10-15 % of the raw comparison, which mixed scenes of different load.
+- **Q is back** on one reading of run 31: the stale count made threads skip 8 quantum boundaries in 9, which is a longer quantum. That may be part of why the second
+  pass had more FPS and less audio. Run 16 dropped Q without L, when that stale state was probably already active in heavy scenes, so that result may not carry over.
+- **`[ABSTAT]`** at each state change: running totals of turn time by thread, thread switches, voice lock counts, quantum boundaries and off-turn calls, so they can be charged to a state exactly.
+- **`private/session-tools/ab_factorial.py`:** the effect of each letter by draw band and load-matched, with a 90 % interval from resampling visits. An interval across 0 means the run cannot say.
+- **Limits:** a crash loses the later states but names the state it happened in. If U corrupts something, the other states' numbers share that session. Compiler changes (route 2) still need two builds.

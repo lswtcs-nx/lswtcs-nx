@@ -53,6 +53,7 @@
 extern "C" void dbg_ram(const char* fmt, ...);
 extern "C" PPC_FUNC(__imp__sub_827E2208);
 extern "C" void lswtcs_gil_blocking_urgent(void (*fn)(void*), void* arg);   // kernel_stubs.cpp
+extern thread_local bool g_guest_off_turn;                                  // kernel_stubs.cpp
 // Move the calling thread to a free core for a burst of host-only work and back. The Switch defines them
 // (platform_switch.cpp); elsewhere host threads are not pinned and these do nothing.
 extern "C" __attribute__((weak)) void lsw_offcore_begin() {}
@@ -165,7 +166,7 @@ int mode() {
 
 bool off_rotation() {
     static const bool on = [] { const char* e = getenv("LSWTCS_REVERBOFF"); return !(e && e[0] == '0'); }();
-    return on;
+    return on && !g_guest_off_turn;   // state U: already off the turn and on core 2
 }
 
 uint64_t now_ns() {

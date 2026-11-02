@@ -1156,7 +1156,7 @@ static std::condition_variable g_walk_cv;
 static std::atomic<uint64_t> g_walk_waits{0}, g_walk_rewaits{0};   // [GPUPAGES]: waits for that walker; waits again after one
 // [WALKOFF] (lsw_walkoff_report): what W does, every 5 s while it walks, and the walker's state when the ring stops being walked.
 static std::atomic<uint64_t> g_wo_ibs{0}, g_wo_off_ns{0}, g_wo_rejoin_ns{0}, g_wo_rejoin_max_ns{0}, g_wo_needturn{0}, g_wo_claims{0},
-                             g_wo_second{0}, g_wo_second_skipped{0};
+                             g_wo_second{0}, g_wo_second_skipped{0}, g_wo_drain_waits{0}, g_wo_drain_busy{0};
 static std::atomic<int64_t> g_walk_end_ms{0};   // steady clock, end of the last ring walk
 static thread_local std::chrono::steady_clock::time_point t_walk_off_since;
 static void walk_off_enter() {
@@ -5910,25 +5910,26 @@ static uint32_t pm4_tile_backlog() {
 // the turn, the walker's state and the tile backlog.
 extern "C" void lsw_walkoff_report() {
     if (!gil_on() || !g_rb_base || !g_rb_size) return;
-    static uint64_t last[8] = {};
-    const uint64_t now[8] = {g_wo_ibs.load(), g_wo_off_ns.load(), g_wo_rejoin_ns.load(), g_wo_needturn.load(), g_wo_claims.load(),
-                             g_wo_second.load(), g_walk_waits.load(), g_walk_rewaits.load()};
-    uint64_t d[8];
-    for (int i = 0; i < 8; ++i) { d[i] = now[i] - last[i]; last[i] = now[i]; }
+    static uint64_t last[10] = {};
+    const uint64_t now[10] = {g_wo_ibs.load(), g_wo_off_ns.load(), g_wo_rejoin_ns.load(), g_wo_needturn.load(), g_wo_claims.load(),
+                              g_wo_second.load(), g_walk_waits.load(), g_walk_rewaits.load(), g_wo_drain_busy.load(), g_wo_drain_waits.load()};
+    uint64_t d[10];
+    for (int i = 0; i < 10; ++i) { d[i] = now[i] - last[i]; last[i] = now[i]; }
     const int64_t ms_now = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
     const int64_t end = g_walk_end_ms.load();
     uint8_t* base = g_base;
     const uint32_t rbd = g_rb_size >> 2, w = PPC_LOAD_U32(0x7FC80714u) % rbd, r = g_rb_rptr_dwords % rbd;
-    const bool stuck = end && ms_now - end > 3000 && w != r;
+    // Not before the first walk has run since boot (runs 17: the menu's ring sat at 25/22 for 10 s with nothing wrong).
+    const bool stuck = end && ms_now - end > 3000 && w != r && g_wo_ibs.load() + g_walk_waits.load() > 0;
     static int stuck_lines = 0;
     if (stuck && stuck_lines >= 20) return;
-    if (!d[0] && !stuck && !d[5]) return;
+    if (!d[0] && !stuck && !d[5] && !d[8]) return;
     const uint64_t rmax = g_wo_rejoin_max_ns.exchange(0);
     printf("[WALKOFF] 5 s: %llu IBs off the turn, %.1f ms off, rejoin %.2f ms avg %.2f max, guest code inside %llu, half-walk claims %llu, "
-           "second walkers %llu (skipped %llu total), waits %llu again %llu%s\n",
+           "second walkers %llu (skipped %llu total), waits %llu again %llu, tile drain found a walk %llu (waited %llu)%s\n",
            (unsigned long long)d[0], d[1] / 1e6, d[0] ? d[2] / 1e6 / d[0] : 0.0, rmax / 1e6, (unsigned long long)d[3], (unsigned long long)d[4],
            (unsigned long long)d[5], (unsigned long long)g_wo_second_skipped.load(), (unsigned long long)d[6], (unsigned long long)d[7],
-           stuck ? " | NO WALK" : "");
+           (unsigned long long)d[8], (unsigned long long)d[9], stuck ? " | NO WALK" : "");
     if (stuck) {
         ++stuck_lines;
         char b[512]; int k;
@@ -5986,7 +5987,18 @@ static void pm4_process_ring_flat_impl(bool allow_drain) {
             g_pm4_walking = false;
             int spins = 0;
             g_gpuprof[GP_WALK] += gp_now() - gp_walk0;
-            while (pm4_tile_backlog() && spins < 20000) { sched_yield_turn(); ++spins; }
+            // Run 17's W session (black tile bands, then a heap fault inside shader translation): the tile worker empties its queue
+            // and then walks the segments it kicked, off the turn with W. This walker went on as soon as the backlog read 0, so two
+            // walkers read the ring and filled the same frame at once. With W it now also waits for that walk (and for one half
+            // done on the turn); without W such a case is only counted.
+            const bool wo = walkoff_on();
+            while (spins < 20000) {
+                const bool off = g_walk_off_sid.load() >= 0, busy = g_pm4_walking;
+                if (busy || off) ++g_wo_drain_busy;
+                if (!pm4_tile_backlog() && (!wo || (!busy && !off))) break;
+                if (wo && off) { ++g_wo_drain_waits; walk_wait_other(); } else sched_yield_turn();
+                ++spins;
+            }
             gp_walk0 = gp_now();
             gpu_shm_new_epoch(2);
             g_pm4_walking = true;

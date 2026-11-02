@@ -820,3 +820,22 @@ Handheld at stock clocks, 10,950 frames in 401 s, `Map\Map` and `Gungan_A/B/C/E`
 - The W fix described above, plus a W-only change: with W on, a walk that finds another one half done (its thread yielded on the turn inside a wait-register poll or the guest interrupt) leaves the ring to that walker instead of becoming a second walker. Without W this is only counted.
 - `[WALKOFF]` every 5 s while W walks: IBs off the turn, time off, the walker's wait to get the turn back (average and maximum), guest code run inside the walk, fences reported done during a half walk, second walkers, and the waits from the fix. When no walk has ended for 3 s while the game's write pointer is ahead (the stopped picture of runs 7 and 12), `NO WALK` and a line with the walker's state, the tile backlog and who holds the turn.
 - Main session `profiles/hardware-ab.env`: `MAPXSN,MAPXSHN`. W session `profiles/hardware-walk.env`: `MAPXSN,MAPXSNW,MAPXSHN,MAPXSHNW`, walk on core 1.
+
+## Run 17: `0.0.23-log17`, 2 November 2026, two sessions
+
+**Main session** (`private/runs/run17-log17`): 9,840 frames in 371 s, `Map\Map` and `Gungan_A/B/C`, `MAPXSN` against `MAPXSHN`. Heaviest band 12.5 FPS (11.7 in run 16); H again ahead there (14.0 against 11.8 FPS) and no sampled miss. No black rows in the 200 history frames. Audio 70-100 % by band, lower than run 16's; not looked into.
+
+The tester saw small faults around 13:29-13:30. One is in capture 6549 (`Gungan_C`, `MAPXSN`): the studs on top of a brick show through the legs of the characters standing on it. It is the same in the unmerged history frame (6549 `_u`) and the merged one before it, so tile merging is not the cause. A depth or draw-order fault of the stud draws; not investigated yet, and whether earlier runs had it is not known.
+
+**W session** (`private/runs/run17w-log17`): crashed in the hub after 61 s, before any level.
+- The fix of log17 was needed: `[WALKOFF]` counted 5 waits in each 5 s that would have gone on wrongly (`again 5`), out of 23-26. Up to 1.2 s of walking per 5 s went off the turn (165-242 IBs).
+- Still black tile bands in W: 5 of 40 history frames (the unmerged ones) have 45-91 black rows; capture 2162 shows rows 320-620 black. The draw count per frame jumped by about 320 from frame to frame (1123, 1445, 1767, 2090), roughly one tile's records, so tile records landed in the wrong frame.
+- The crash: a corrupted free list in rpmalloc, reached from SPIR-V translation of a new shader (`[SHADERNEW]` just before) inside a walk by the tile worker (`sub_822D2AB0` → `sub_822D2798` → ring-space wait → `pm4_walk_now`). The bad pointer holds ASCII ("xe_u"), part of a SPIR-V name.
+- The cause found in the code: during a VdSwap walk, the tile drain yields the turn until the tile backlog reads 0, then walks on. The tile worker pops its queue and then walks the segments it kicked, off the turn with W, so both threads walked the ring and filled the same frame, and both used the shader translator, at once. `walk_wait_other` was never called there. That fits the jumping draw counts, the bands and a heap corrupted from two threads; not proved.
+- The `NO WALK` lines at boot were a false alarm (the menu's ring sits at 25/22 before any walk); log18 reports a stopped walk only after a walk has run.
+
+## `0.0.24-log18`: the tile drain waits for the tile worker's walk
+
+- With W on, the drain goes on only when the backlog is 0, no walk is off the turn and none is half done on the turn; it waits for an off-turn walk with `walk_wait_other`. Without W the drain is unchanged and such cases are only counted.
+- `[WALKOFF]` adds `tile drain found a walk N (waited M)`.
+- Sessions as for log17: main `MAPXSN,MAPXSHN`, W `MAPXSN,MAPXSNW,MAPXSHN,MAPXSHNW`.

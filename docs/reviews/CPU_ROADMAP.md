@@ -48,7 +48,29 @@ Scenes differ between runs; compare within a session where possible (`LSWTCS_ABC
 - **Open faults:** studs and dark outlines of one brick drawn through the characters (`Gungan_C`), from program 374's early
   draws (cube sampler bound to a 2D texture, `DIM-MISMATCH`). See `RUN2_FINDINGS.md`, runs 17-20.
 
-## Route 1: guest threads on several cores
+## Big picture after run 32: half of the turn is this port's own code
+
+Run 31, frames of 1300+ draws, by the sampled pc while holding the turn (`private/session-tools/turn_big_picture.py`):
+
+| Share of the turn | What |
+| --- | --- |
+| 41 % | guest code (main thread 76 % guest, XAudio thread 54 %) |
+| 34 % | PM4 walk, draw recording, hashes: `pm4_extract_ib` 6.7+, `XXH3` 6.3, `pm4_regs_copy` 6.1, `gpu_record_draw*` 3.6 |
+| 8 % | `memmove`, `memset`, `memcmp` |
+| 7 % | Horizon syscalls |
+| 10 % | other host code, thread and scheduler code, kernel stubs |
+
+The command thread is 38 % of the turn and almost all native. So compiler work on generated code (LTO, PGO, plain memory) reaches 41 % at most: bo2-360-nx's +9.8 % would be about +4 % here, and
+`plain_mem_probe.sh` shows little for plain memory to remove. Order to try, by how much each can reach:
+
+1. **One tile at the source (not investigated).** The game draws its world three times per frame for EDRAM. At 1280x704 with 2x MSAA a frame needs about 14 MB of the 10 MB EDRAM; with one sample about 7 MB, so
+   it should fit without tiling, and the port already draws one sample (`LSWTCS_MSAA1X`). If the game can be made to ask for no MSAA, it would walk, record and merge one tile. Heaviest frames: walk about 33 ms, `repeat tiles` 9 ms measured, of a 72 ms
+   frame. A guess of 9-22 ms saved, plus much of `plan` (13 ms on the render thread); no measurement behind it, and it depends on the game's own passes. Run 14's T could not reach this, since each tile's draw state differs.
+2. **The walk and recording themselves.** Native, not guest-thread-safety work, and often switchable in A/B. Recording on a second thread, as bo2-360-nx defers it, moves only native work.
+3. **Fourth core** (bo2-360-nx: +11.9 to +16 %, audio and XMA alone on core 3). Needs a forwarder installed: owner decision.
+4. **Game settings** (bo2-360-nx's main route: half the draws at its very low preset). Product decision of the author, never silent.
+5. **XAudio off the turn** (U): about 12 % of the turn at most. Run 33 tests it.
+6. **Compiler work:** late, as above. bo2-360-nx measured a full Direct3D-level renderer at about +2 % at best, so replacing PM4 with D3D hooks is not a route on its own.
 
 The only route that could roughly double heavy scenes; also the riskiest. **Run 24 measured that there is parallelism to gain**
 (`[PARALLEL]`, frames of 1300+ draws):

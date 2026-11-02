@@ -63,9 +63,8 @@ Run 31, frames of 1300+ draws, by the sampled pc while holding the turn (`privat
 The command thread is 38 % of the turn and almost all native. So compiler work on generated code (LTO, PGO, plain memory) reaches 41 % at most: bo2-360-nx's +9.8 % would be about +4 % here, and
 `plain_mem_probe.sh` shows little for plain memory to remove. Order to try, by how much each can reach:
 
-1. **One tile at the source (not investigated).** The game draws its world three times per frame for EDRAM. At 1280x704 with 2x MSAA a frame needs about 14 MB of the 10 MB EDRAM; with one sample about 7 MB, so
-   it should fit without tiling, and the port already draws one sample (`LSWTCS_MSAA1X`). If the game can be made to ask for no MSAA, it would walk, record and merge one tile. Heaviest frames: walk about 33 ms, `repeat tiles` 9 ms measured, of a 72 ms
-   frame. A guess of 9-22 ms saved, plus much of `plan` (13 ms on the render thread); no measurement behind it, and it depends on the game's own passes. Run 14's T could not reach this, since each tile's draw state differs.
+1. **One tile at the source (`LSWTCS_ONETILE`, log33, not yet run).** The game draws its world three times per frame for EDRAM. The engine's layout function decides that, and has a plain path, so log33 makes the layout fit without changing MSAA or
+   resolution (`RUN2_FINDINGS.md`, "0.0.39-log33"). Heaviest frames: walk about 33 ms, `repeat tiles` 9 ms measured, of a 72 ms frame. A guess of 9-22 ms saved, plus much of `plan` (13 ms on the render thread); no measurement behind it. Run 14's T could not reach this, since each tile's draw state differs.
 2. **The walk and recording themselves.** Native, not guest-thread-safety work, and often switchable in A/B. Recording on a second thread, as bo2-360-nx defers it, moves only native work.
 3. **Fourth core** (bo2-360-nx: +11.9 to +16 %, audio and XMA alone on core 3). Needs a forwarder installed: owner decision.
 4. **Game settings** (bo2-360-nx's main route: half the draws at its very low preset). Product decision of the author, never silent.

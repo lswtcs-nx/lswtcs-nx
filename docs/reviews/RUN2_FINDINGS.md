@@ -1224,3 +1224,20 @@ The audio numbers of R, G and Q are dominated by which states had U; without U: 
 **Route 2 prerequisite found:** `private/session-tools/poll_loops.py`: 686 no-call, no-store backward loops whose address looks fixed, many of them list walks, but some true polls (`sub_822D2798`, `sub_822AF268`, `sub_82264240`). Plain guest memory could read those once and spin for ever, so they need to stay volatile. A build-wide change needs that exception first.
 
 **Route 2 probe, no console (`plain_mem_probe.sh`, `plain_mem_compare.py`):** the hottest generated file, `ppc_recomp.359.cpp`, compiled with plain memory: 90,416 to 90,928 bytes (+0.6 %), memory instructions 8,826 to 9,220 (+4.5 %), and the two hottest functions in it about unchanged (`sub_8231ED30` 0 %, `sub_82320328` +1.5 %). One file, and size is only a proxy for speed, but it shows no sign that the compiler removes much. Plain memory drops down the route 2 list until something measures otherwise.
+
+## `0.0.39-log33`: one draw pass per frame (`LSWTCS_ONETILE`)
+
+**What the game does, from the recompiled code.** Tiling is the engine's own choice, not D3D's. `sub_82316AF8` sums the EDRAM a render target set needs (`sub_822A3CE0`, up to 4 colour targets and depth). Above 2048 tiles it computes a tile height, writes the rects, and stores the count at set +264. Every user of that count seen (`sub_82316530`, `sub_823168D0`, `sub_82316978`, `sub_823170F8`) also has a plain path for a count of 1 or less. The main scene set is 2 colour targets and depth at 1280x704, 2x MSAA, in tiles of 320 rows (`[GLDRAWCAP]`, run 17). That needs more than the 2048. So does one sample: about 2112.
+
+The device's 2x MSAA comes from the video mode (`sub_8248CE98`, present parameters at `0x830CB7E8`). Changing it would not be enough, as above, and it is not needed: this port has no EDRAM limit (`rt_get`: one host target per base, pitch and format, 2048 rows tall).
+
+**The change.** While the engine lays out a set, its own calls to the size helper get a quarter of the real size, so the layout fits and takes the plain path; the bases stay apart. Surface creation still gets the real size. MSAA and resolution do not change. Decided at boot; `LSWTCS_ONETILE=0` in `env.txt` returns to the game's tiles without a new build. `[ONETILE]` prints each layout (tile count should be 0 or 1).
+
+**Not known until the console:**
+- whether the picture holds. Nothing has run; passes that assume tile-shaped resolves or EDRAM bases may break. Look at resolves, depth reuse between passes, and anything that samples a target just drawn;
+- the gain. Guess from run 31's heaviest frames: walk about 33 ms, `repeat tiles` 9 ms, `plan` 13 ms on the render thread;
+- the GPU cost, which may change with fewer merged draws.
+
+**Comparing:** draw counts fall, so load matching by draws does not hold across runs. Compare by level with `phase_compare.py` against run 31's L pass (`Gungan_B` 21.3 FPS, `C` 23.3, `E` 31.7, 5000+ draws 13.5) and run 32's states without U. U and A still compare within the session with `ab_factorial.py`.
+
+**What run 33 decides:** picture right and FPS up: keep it, and propose it to the owner as the default. Picture wrong in specific passes: read those passes and decide per target set. No FPS gain: the time is not where the profile suggests; go on with the walk itself.

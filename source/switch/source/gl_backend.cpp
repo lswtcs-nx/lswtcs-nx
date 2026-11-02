@@ -57,6 +57,7 @@ extern "C" void lsw_native_mix_set(int on);                    // native_mixer.c
 extern "C" void lsw_audio_offturn_set(int on);                 // audio_offturn.cpp: U (the second audio mixer off the guest turn)
 extern "C" void lsw_spin_real_set(int on);                     // kernel_stubs.cpp: L (guest spinlocks really taken)
 extern "C" void lsw_ab_stat_report(const char* state, unsigned long long replay);   // kernel_stubs.cpp: [ABSTAT]
+extern "C" void lsw_shm_age_set(int on);                       // kernel_stubs.cpp: E (settled pages hashed one frame in 4)
 extern "C" void lsw_quantum_div_set(int n);                    // kernel_stubs.cpp: Q (a guest thread switch every 4th quantum)
 extern "C" void lsw_walk_ab_set(int nowait, int nodrain);           // kernel_stubs.cpp: Y and D (with W)
 extern "C" void lsw_walk_core_set(int core);                         // kernel_stubs.cpp: K (with W) walks on core 2; 0 = LSWTCS_WALKOFF_CORE
@@ -2140,6 +2141,7 @@ void ab_cycle_tick() {
     lsw_native_mix_set(has('N'));
     lsw_audio_offturn_set(has('U'));
     lsw_spin_real_set(has('L'));
+    lsw_shm_age_set(has('E'));
     lsw_quantum_div_set(has('Q') ? 4 : 0);
     g_polyofs_on = has('O');
     g_sc.key_valid = false;
@@ -2342,8 +2344,9 @@ PresentSrc replay() {
         static const uint64_t every = [] { const char* e = getenv("LSWTCS_GLGPUPROF"); return uint64_t(e ? atoi(e) : 0); }();
         g_gpuprof_frame = every && (g_replays % every) == 0;
         // The heaviest frames are few, and run 10 sampled them once: more often there, at most every fifth of the period.
+        // 1300 draws since log34: with one tile (LSWTCS_ONETILE) the heaviest frames have about 2,000, and run 33 sampled only 11 frames.
         static uint64_t last_heavy = 0;
-        if (every && !g_gpuprof_frame && f.draws.size() >= 4000 && g_replays - last_heavy >= every / 5) g_gpuprof_frame = true;
+        if (every && !g_gpuprof_frame && f.draws.size() >= 1300 && g_replays - last_heavy >= every / 5) g_gpuprof_frame = true;
         if (g_gpuprof_frame) last_heavy = g_replays;
         static const int split = [] { const char* e = getenv("LSWTCS_GLGPUSPLIT"); return e ? atoi(e) : 0; }();
         static uint64_t samples = 0;

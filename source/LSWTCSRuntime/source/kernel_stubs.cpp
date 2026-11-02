@@ -1500,6 +1500,10 @@ static void spin_release(uint8_t* base, uint32_t lock, uint32_t lr) {
     }
     if (!was_ours && g_spin_turn_depth > 0) --g_spin_turn_depth;
 }
+static constexpr uint32_t kShmAgedChecks = 30;
+static std::atomic<bool> g_shm_age_on{false};   // A/B state E, gpu_shm_track
+static std::atomic<uint64_t> g_shm_aged_skips{0}, g_shm_aged_late{0};
+extern "C" void lsw_shm_age_set(int on) { g_shm_age_on.store(on != 0, std::memory_order_relaxed); }
 // At each A/B state change: running totals, so private/session-tools/ab_factorial.py can charge each state's visits exactly (with states of
 // a few seconds, the 5 s lines below mix them). Turn time needs LSWTCS_SCHEDPROF.
 extern "C" __attribute__((weak)) void lsw_audio_offturn_counts(uint64_t*) {}
@@ -1521,11 +1525,13 @@ extern "C" void lsw_ab_stat_report(const char* state, unsigned long long replay)
     uint64_t a[6] = {};
     lsw_audio_offturn_counts(a);
     snprintf(b + k, sizeof b - k, " | voice acquires %llu waits1 %llu waits10 %llu waits200 %llu forced %llu heldms %.1f passed %llu"
-             " | quantum %llu kept %llu yielded %llu | offturn calls %llu off %llu stayed %llu returns %llu workms %.1f totalms %.1f oncallms %.1f\n",
+             " | quantum %llu kept %llu yielded %llu | offturn calls %llu off %llu stayed %llu returns %llu workms %.1f totalms %.1f oncallms %.1f"
+             " | agedskips %llu agedlate %llu\n",
              (unsigned long long)s.acq, (unsigned long long)s.w1, (unsigned long long)s.w10, (unsigned long long)s.w200, (unsigned long long)s.forced,
              s.hold_ns / 1e6, (unsigned long long)g_yield_to.load(), (unsigned long long)g_spin_boundaries.load(), (unsigned long long)g_spin_q_skipped.load(),
              (unsigned long long)g_spin_q_yields.load(), (unsigned long long)a[0], (unsigned long long)a[1], (unsigned long long)a[2],
-             (unsigned long long)g_offturn_rejoins.load(), a[3] / 1e6, a[4] / 1e6, a[5] / 1e6);
+             (unsigned long long)g_offturn_rejoins.load(), a[3] / 1e6, a[4] / 1e6, a[5] / 1e6,
+             (unsigned long long)g_shm_aged_skips.load(), (unsigned long long)g_shm_aged_late.load());
     fputs(b, stdout);
     fflush(stdout);
 }
@@ -4530,9 +4536,15 @@ static void gpu_shm_track(LswGpuFrame& f, uint32_t a, uint32_t sz) {
         // A/B state H only (the rule above is the default): a page already hashed this frame and unchanged for a while is
         // not hashed again in this frame's later epochs, except one in 16, which reports what the rule would have missed.
         const bool settled = frame_hash && pg.frame == g_shm_frame && pg.stable >= kShmSettledFrames;
+        // A/B state E: a page unchanged for 30 checks is hashed on one frame in 4. Page hashes were 7.6 % of the main thread's turn in run 33's heavy
+        // frames. A page that does change then reaches the GPU up to 3 frames late; the hash that finds it counts in [ABSTAT] (agedlate).
+        const bool aged = g_shm_age_on.load(std::memory_order_relaxed) && pg.valid && pg.stable >= kShmAgedChecks;
         if (pg.epoch != g_shm_epoch && settled && (++g_shm_hash_tick & 15u) != 0) {
             pg.epoch = g_shm_epoch;
             ++g_gpuprof[GP_N_HASH_SKIP];
+        } else if (pg.epoch != g_shm_epoch && aged && pg.frame != g_shm_frame && ((g_shm_frame + p) & 3u) != 0) {
+            pg.epoch = g_shm_epoch;
+            g_shm_aged_skips.fetch_add(1, std::memory_order_relaxed);
         } else if (pg.epoch != g_shm_epoch) {
             // XXH3 (SIMD: AVX2 here, NEON on Switch); LSWTCS_XXH3=0 = the scalar lsw_hash_bytes (A/B).
             static int xxh = -1; if (xxh < 0) { const char* e = getenv("LSWTCS_XXH3"); xxh = (e && e[0] == '0') ? 0 : 1; }
@@ -4552,6 +4564,7 @@ static void gpu_shm_track(LswGpuFrame& f, uint32_t a, uint32_t sz) {
                                 p << kShmPageShift, g_shm_epoch_src, copies.size() - 1);
                 } } }
             const bool changed = !pg.valid || pg.hash != h;
+            if (changed && aged) g_shm_aged_late.fetch_add(1, std::memory_order_relaxed);
             if (changed && settled) {
                 ++g_gpuprof[GP_N_HASH_MISS];
                 if (!g_shm_frame_hash_broken) {

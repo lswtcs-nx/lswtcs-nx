@@ -1262,3 +1262,13 @@ The device's 2x MSAA comes from the video mode (`sub_8248CE98`, present paramete
 - **U per tick works here.** At 5000+ equivalent: 17.6-18.8 FPS without U (6-12 s each), 23.2-23.3 with it (7-12 s each), audio 98-100 % in all. Load-matched at 1300+ draws in this session: U +18.5 % (90 %: +4.4 to +29.7, 10 visits only); over all frames -4.4 % (-10.0 to +1.6). So U helps where the turn is the limit and may cost a little elsewhere. 740 calls a second, 0.26 ms of work, 0.53 ms with the handoffs; 32 returns to the turn, all for `KeSetEvent`. No forced wait, so the give-way fix held.
 - **A off:** no measurable change (load-matched -1.5 %, -7.9 to +5.0), audio 99-100 % either way.
 - **What limits now:** GPU `draws..present` is about 30-36 ms at any load, so about 30 FPS is the ceiling at these clocks, and `[GLGPU]` was sampled too rarely here to say more. Heavy scenes are still turn-limited (turn held 95 %, main thread 86 % of it: 59 % guest, 27 % PM4 and record, 6.5 % XXH3).
+- **Picture:** the tester reports it unchanged from earlier runs. So `ONETILE` stays on; the default for the port is the owner's call.
+
+## `0.0.40-log34`
+
+- **State E (new):** a page unchanged for 30 checks is hashed one frame in 4. Page hashes are 7.6 % of the main thread's turn at 1300+ draws, all from `gpu_shm_track`. A page that changes then reaches the GPU up to 3 frames late. `[ABSTAT]` counts `agedskips` and `agedlate`, the changes found on such pages.
+- **W and Y are back in the test.** Out since run 22 (8.7 against 14.0 FPS), when the game also waited for the tile drain. With one tile, the walk is on the main thread's turn and about a third of it, so moving it could pay now. Default core 2, beside U.
+- **`[GLGPU]`** now samples frames from 1300 draws, since 4000 no longer occurs.
+- **Profile:** U, WY, R, G and E on `MAPXSHNL`, 8 states every 6 s, one pass. Each letter is on in 4 states and any two in 2. G is the parity of U, W, R and E is U xor R, so a letter's effect mixes with those pair effects.
+
+**What run 34 decides:** which of the five stay on. `agedlate` high or flicker in E states: E goes. W faster with no fault: move more of the record work off the turn. `[GLGPU]`'s top programs give the first GPU list.

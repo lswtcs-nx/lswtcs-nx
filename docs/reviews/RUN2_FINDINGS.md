@@ -641,3 +641,46 @@ So the game's own code is about a third of the turn. The rest is this port's ove
 **Why W is worth one more look, and why apart.** Run 7's trial ran on core 2 with shader compiles and Mesa's worker on a cold cache, and the walk assumed memory cannot change inside an epoch, which is false off the turn. Both may explain its faults; neither is shown. `profiles/hardware-walk.env` cycles MAPXS and MAPXSW, on core 1 with a new epoch per IB. It remains a test, not a recommendation, and running guest code beside the walk still needs the owner's view before it could ever be default.
 
 **`0.0.18-log12`:** the kick notifies without the mutex, the capture pause is gone, `LSWTCS_WALKOFF_CORE` and the repeat-tile timer are added. Next run: lock share, FPS and audio by band against run 11, repeat-tile time; then W's session: black rows in history frames, `[GSPIKE]`, FPS against MAPXS.
+
+## Run 12: `0.0.18-log12`, two sessions, 2 November 2026
+
+Handheld at stock clocks. Archived in `private/runs/run12-log12` (main) and `private/runs/run12w-log12` (W). No crash, stderr empty in both.
+
+### Main session: the lock is gone
+
+276 s, 8,370 frames, levels `Map\Map` and `Gungan_A/B/C`, three full captures taken for material, no visual fault reported.
+
+- `svcArbitrateLock` no longer appears on the audio thread; the audio thread's share of the heavy turn fell from 28.6 to 13.8 %. Its leaves are now its own mixing: `sub_827E51D0` 18.8 % and `sub_827F5990` 16.9 % of that thread, about 5 % of the turn together.
+- Audio queue empty 2.8 % of the session (6.67 % in run 11), longest 604 ms. The heaviest band plays 86 % of real time against 52 %.
+
+| Draws | Run 11 FPS | Run 12 FPS | Run 11 median ms | Run 12 median ms | Run 11 audio | Run 12 audio |
+|---|---:|---:|---:|---:|---:|---:|
+| 800-1300 | 21.6 | 26.8 | 42 | 33 | 79 % | 94 % |
+| 1300-1900 | 20.8 | 26.2 | 40 | 36 | 87 % | 93 % |
+| 2500-3100 | 19.1 | 22.5 | 50 | 44 | 71 % | 73 % |
+| 3100-4000 | 15.6 | 20.7 | 58 | 47 | 69 % | 77 % |
+| 4000-5000 | 12.3 | 13.7 | 75 | 64 | 61 % | 85 % |
+| 5000+ | 10.1 | 12.1 | 96 | 75 | 52 % | 86 % |
+
+Rows of run 12 with under 10 s (2500-4000) are indications. As expected, part of the freed turn went to audio, which now keeps up.
+
+- Heavy turn now: main thread 40.5 %, command thread (walk and record) 39.5 %, audio 13.8 %. The scheduler's idle share is near 0 again in those stretches, so the heaviest band is still CPU-limited.
+- `repeat tiles` read 0.00 ms in every `[GPUPAGES]` line, heavy frames included. So walk-time tile skipping (`tile_skip_begin`) did not start for the ring-level IBs of this level, while the replay still merged 3,400 or so repeated draws per heavy frame. The repeats are then walked and recorded in full, which may be most of the command thread's time. Not proved: the reason for each rejection goes to `dbg_ram`, which no session keeps. Next build: count and print why.
+- Captures: 12 to 16 s per capture, as in run 11.
+
+### W session: rejected again, and the mechanism is narrower now
+
+141 s in the hub, cycling MAPXS and MAPXSW, walk on core 1. The tester saw a black band, then a picture that stopped.
+
+- From the first W phase (t ≈ 45 s), the published frame stays serial 2499 until the end: every later replay repeats it (`2499R` in `frames.log`, 2,332 times), as in run 7. Audio stayed at 100 % and guest threads ran.
+- `[GSPIKE]` after that shows walk 0.0 ms: the ring was no longer walked at all. The game's command thread (`822D2AB0`) spent 95-96 % of its samples in every later window in `KeWaitForSingleObject` called from `sub_822D2AB0`. It waits for something that never comes, so it never kicks the ring again.
+- So W does not just draw wrongly: once the walk has run beside guest threads, an event the command thread waits for is lost or never set. Candidates, none checked: a GPU interrupt or a fence write (`pm4_gpu_write`) racing a guest thread that tests the fence and then waits, or the order of `walk_wait_other` and the walker's rejoin.
+- The capture, taken after the stop, shows the stuck hub frame without a band; the band itself was not captured.
+
+W stays out. Moving the walk off the turn would need the waits and interrupts of the command thread understood first, which is a scheduler change for the owner to weigh, not a setting to try.
+
+### Next
+
+1. Print why walk-time tile skipping rejects ring-level IBs in this level, with counters per frame. If the repeats can be skipped safely, it is the largest CPU gain left that keeps one guest thread at a time.
+2. Native audio mixers `sub_827E51D0` and `sub_827F5990`, with a compare mode: about 5 % of the heavy turn now.
+3. H remains the owner's decision.

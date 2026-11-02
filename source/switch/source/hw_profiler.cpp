@@ -120,14 +120,15 @@ void sample_target(int index, int turn, uint32_t band) {
     }
 }
 
-struct ThreadLine { char name[24]; int sched_id; double cpu; uint64_t samples; };
+struct ThreadLine { char name[24]; int sched_id; double cpu; uint64_t samples; int core; uint64_t mask; int prio; };
 
 // On the background thread. `full` is cleared for its next turn.
 void write_window(FILE* f, uint64_t start_ns, uint64_t now_ns, uint64_t dropped, const std::vector<ThreadLine>& threads, Entry* full) {
     fprintf(f, "window %llu %llu dropped %llu\n", (unsigned long long)(start_ns / 1000000), (unsigned long long)(now_ns / 1000000),
             (unsigned long long)dropped);
     for (size_t i = 0; i < threads.size(); ++i)
-        fprintf(f, "thread %zu %s sched %d cpu %.1f samples %llu\n", i, threads[i].name, threads[i].sched_id, threads[i].cpu, (unsigned long long)threads[i].samples);
+        fprintf(f, "thread %zu %s sched %d cpu %.1f samples %llu core %d mask %llx prio %x\n", i, threads[i].name, threads[i].sched_id, threads[i].cpu,
+                (unsigned long long)threads[i].samples, threads[i].core, (unsigned long long)threads[i].mask, threads[i].prio);
     for (uint32_t i = 0; i < kTableSize; ++i) {
         Entry& e = full[i];
         if (!e.used) continue;
@@ -156,6 +157,12 @@ bool end_window(FILE* f, uint64_t start_ns, uint64_t now_ns) {
         line.sched_id = t.sched_id;
         line.cpu = have && t.cpu_ns_last ? 100.0 * double(cpu - t.cpu_ns_last) / double(window_ns) : -1.0;
         line.samples = t.samples;
+        // Where each thread may run, at the end of the window. Runs 19 and 20: in every session that used W the render thread took
+        // twice its usual wall time for the same CPU time, as if something shared core 1 with it after W had run.
+        s32 core = -9; u64 mask = 0; s32 prio = -1;
+        if (R_FAILED(svcGetThreadCoreMask(&core, &mask, t.handle))) core = -9;
+        if (R_FAILED(svcGetThreadPriority(&prio, t.handle))) prio = -1;
+        line.core = core; line.mask = mask; line.prio = prio;
         threads->push_back(line);
         t.cpu_ns_last = cpu;
         t.samples = 0;
@@ -167,6 +174,13 @@ bool end_window(FILE* f, uint64_t start_ns, uint64_t now_ns) {
     g_spare = full;
     g_table_used = 0;
     g_table_dropped = 0;
+    {   // the same placement in stdout, for a session whose profile is not read
+        char b[1200]; int k = snprintf(b, sizeof b, "[THREADS]");
+        for (const ThreadLine& l : *threads)
+            if (k < 1100) k += snprintf(b + k, sizeof b - k, " %s:c%d/m%llx/p%x/%.0f%%", l.name, l.core, (unsigned long long)l.mask, l.prio, l.cpu);
+        printf("%s\n", b);
+        fflush(stdout);
+    }
     if (!lsw_bg_submit(0, [=] { write_window(f, start_ns, now_ns, dropped, *threads, full); })) g_spare_busy.store(false, std::memory_order_release);
     return true;
 }

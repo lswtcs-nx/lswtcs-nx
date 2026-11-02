@@ -873,3 +873,18 @@ The cause found in the code: VdSwap set the global `g_interrupt_ctx` before wait
 - `[WALKOFF]` adds `swaps left to a walk` and `swaps without drain`.
 - `[GLPROBE]` only with `LSWTCS_GLPROBE=1`; the capture log adds `z=min..max` per draw.
 - Main session `MAPXSHN,MAPXSHNW,MAPXSHNWY` (walk on core 1); second session `MAPXSHNWY,MAPXSHNWYD`.
+
+## Run 20: `0.0.26-log20`, 2 November 2026, two sessions
+
+Both sessions (`private/runs/run20-log20`, `run20w-log20`) played `Gungan_A` to `E` without a stop or a visual fault from W, Y or D. Captures came only near the end, as asked.
+
+**Both sessions were render-limited, in every state.** At 5000+ draws the frame took 94-108 ms. The render thread's replay took 82-96 ms of it, against 35-38 ms in runs 18 and 19 (main sessions), so the states cannot be ranked here: 9.6 (no W), 9.8 (W), 10.4 FPS (W+Y); 10.3 (W+Y) against 10.0 (W+Y+D) in the second session.
+
+What grew is `plan` (tile-merge planning, mostly XXH3 hashing of each tile draw's constants and geometry): 53-58 ms per heavy replay against 13.4-13.7 ms. It grew in the states without W as well. But the bytes are the same (the arena per replay matches run 19), the CPU clock read 1020 MHz throughout, and the render thread's CPU time per frame is unchanged (about 20 ms: 20 % of the core at 10 FPS, against 30 % at 14 FPS). So the render thread got the core for only part of its wall time. Every session that used W at any point shows this (run 19's W session, both of run 20); run 19's main session, without W, does not. The working guess is that something W does leaves a thread competing with the render thread on core 1 (the walk runs there). Log21 records each thread's core mask and priority every 60 s (`[THREADS]`, also in `hwprof.txt`) and the first returns from an off-core move (`[OFFCORE]`).
+
+**Studs:** every draw in the stud capture uses the full depth range (z 0..1), so the fault is in the depth the vertex shader computes, or in the order of the depth writes. Still open.
+
+## `0.0.27-log21`
+
+- `[THREADS]` and `[OFFCORE]` as above. No behaviour change.
+- Main session: `MAPXSHN` only, as the baseline without W. Second session: `MAPXSHN,MAPXSHNWY`.

@@ -128,6 +128,8 @@ extern "C" void lsw_offcore_begin_prio(int prio);
 extern "C" void lsw_offcore_begin() { lsw_offcore_begin_prio(0x2B); }
 // Same with a chosen priority (the PM4 walk, kernel_stubs.cpp LSWTCS_WALKOFF: its multi-ms bursts at 0x2B starved the
 // glthread worker on core 2 and with it the render thread).
+// [OFFCORE]: the first few moves and returns, with what was saved and what the thread is left with.
+static std::atomic<int> g_offcore_logs{0};
 extern "C" void lsw_offcore_begin_on(int target_core, int new_prio) {
     s32 core = 0; u64 mask = 0;
     if (R_FAILED(svcGetThreadCoreMask(&core, &mask, CUR_THREAD_HANDLE))) { g_offcore_prev_core = -1; return; }
@@ -142,6 +144,14 @@ extern "C" void lsw_offcore_end() {
     if (g_offcore_prev_core < 0) return;
     svcSetThreadCoreMask(CUR_THREAD_HANDLE, g_offcore_prev_core, g_offcore_prev_mask);
     if (g_offcore_prev_prio >= 0) svcSetThreadPriority(CUR_THREAD_HANDLE, g_offcore_prev_prio);
+    if (g_offcore_logs.fetch_add(1) < 12) {
+        s32 core = -9, prio = -1; u64 mask = 0;
+        svcGetThreadCoreMask(&core, &mask, CUR_THREAD_HANDLE);
+        svcGetThreadPriority(&prio, CUR_THREAD_HANDLE);
+        printf("[OFFCORE] back: saved core %d mask %llx prio %x, now core %d mask %llx prio %x\n", g_offcore_prev_core,
+               (unsigned long long)g_offcore_prev_mask, g_offcore_prev_prio, core, (unsigned long long)mask, prio);
+        fflush(stdout);
+    }
     g_offcore_prev_core = -1;
 }
 

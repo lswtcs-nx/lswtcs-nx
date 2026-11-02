@@ -1032,3 +1032,28 @@ C costs audio and gives nothing, and is dropped. R and G are within noise of tod
 - `[AUDIOOFF]` prints every 2,000 calls with the off-turn count, the cost per call, and real locks taken and waited for.
 - States `MAPXSHN`, `MAPXSHNL`, `MAPXSHNLU`, `MAPXSHNRGLU`. L alone shows the cost of real locks; LU the first guest code beside
   the turn; RGLU whether that gives back the audio RG cost.
+
+## Run 27: `0.0.32-log26`, 2 November 2026: froze in L
+
+The game froze in `Gungan_B` 0.1 s after state L switched on (replay 4020), after playing without faults until then. The audio
+went on. Archived in `private/runs/run27-log26`.
+
+- **The hang:** the guest thread `823592C0` spun for ever in `spin_acquire` (`KeAcquireSpinLockAtRaisedIrql` from `sub_827EEE08` <
+  `sub_827D8148`), on a lock word that never cleared. The main thread waited in guest waits, and the tile worker waited for its event.
+- **Likely cause, not proved:** the game takes some locks in its own code (`lwarx`/`stwcx`, any value) and releases them through the
+  kernel stub. The log26 release only cleared a word holding this thread's tag, so a word set by the game's own code stayed set.
+  Without L the words were never read, so this never showed. The window when L switches on is the other suspect.
+- **U ran:** 18,963 calls off the turn without a fault. But the mixing took 0.010 ms per call against 0.41 ms with the turn handoffs.
+  Per call, U only loses. A whole subtree has to leave the turn at once.
+- **Audit of the XAudio code** (`private/session-tools/callee_audit.py`, new):
+  - `sub_827F1258` (voice processing, under the voice lock) reaches 31 functions. Its kernel imports are spinlocks, IRQL,
+    `KeQueryPerformanceFrequency` and `MmGetPhysicalAddress`. It has indirect calls in 3 functions.
+  - The XAudio thread's own loop (`sub_827DB318`) calls `KeWaitForSingleObject`, `KeSetEvent` and `KeReleaseSemaphore`. Most of its
+    work is behind indirect calls, which a static audit cannot follow.
+
+## `0.0.33-log27`
+
+- **Release** writes 0 with L on, as the 360's does, whoever set the word.
+- **A wait for a spinlock past 200 ms** prints `[SPINLOCK]`: the lock, its word, and whether that word is one of this port's tags
+  (and whose) or a raw value the game wrote. It then takes the lock anyway: no exclusion, as before L, but no freeze.
+- States `MAPXSHN`, `MAPXSHNL`, `MAPXSHNRG`, `MAPXSHNRGL`; U is out until a subtree can leave the turn at once.

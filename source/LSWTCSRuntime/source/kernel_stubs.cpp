@@ -1290,7 +1290,10 @@ extern "C" void lswtcs_spin_leave() { if (spinguard_on() && g_spinlock_depth > 0
 static std::atomic<bool> g_spin_real{false};
 extern "C" void lsw_spin_real_set(int on) { g_spin_real.store(on != 0, std::memory_order_relaxed); }
 thread_local int g_spin_turn_depth = 0;   // spinlocks this thread holds only through the turn
-static std::atomic<uint64_t> g_spin_real_taken{0}, g_spin_real_waits{0};
+static std::atomic<uint64_t> g_spin_real_taken{0}, g_spin_real_waits{0}, g_spin_forced{0};
+// Run 27 froze 0.1 s after L switched on, in Gungan_B: a guest thread (823592C0, sub_827EEE08 < sub_827D8148) spun for ever on a
+// KeAcquireSpinLockAtRaisedIrql whose word never cleared, while the XAudio thread and the audio went on. A wait past 200 ms now
+// prints the lock, its word and who holds it ([SPINLOCK]), then takes the lock anyway: no exclusion, as before L, but no freeze.
 static void sched_yield_turn();
 static inline uint32_t spin_tag() { return 0x4C535700u | uint32_t(g_sched_id + 2); }   // nonzero, any byte order
 static bool spin_lock_ok(uint32_t lock) { return lock >= 0x80000000u && lock < 0xC0000000u && !(lock & 3); }
@@ -1300,8 +1303,25 @@ static void spin_acquire(uint8_t* base, uint32_t lock) {
     volatile uint32_t* w = reinterpret_cast<volatile uint32_t*>(PPC_HOST(lock));
     const uint32_t tag = spin_tag();
     bool waited = false;
+    uint32_t spins = 0;
+    std::chrono::steady_clock::time_point t0;
     while (!__sync_bool_compare_and_swap(w, 0u, tag)) {
+        if (!waited) t0 = std::chrono::steady_clock::now();
         waited = true;
+        if ((++spins & 63) == 0 && std::chrono::steady_clock::now() - t0 > std::chrono::milliseconds(200)) {
+            const uint32_t word = *w;
+            const bool ours = (word & 0xFFFFFF00u) == 0x4C535700u;
+            static std::atomic<int> lines{0};
+            if (lines.fetch_add(1) < 20) {
+                printf("[SPINLOCK] stuck 200 ms: lock %08X word %08X (%s%d), waiter id %d (entry %08X); taken anyway (%llu so far)\n", lock, word,
+                       ours ? "held by id " : "not a tag, raw ", ours ? int(word & 0xFF) - 2 : int(word), g_sched_id,
+                       g_sched_id >= 0 && g_sched_id < LSW_SCHED_MAX ? g_sp_entry[g_sched_id] : 0u, (unsigned long long)g_spin_forced.load() + 1);
+                fflush(stdout);
+            }
+            ++g_spin_forced;
+            *w = tag;
+            break;
+        }
         if (!g_guest_off_turn && g_sched_id >= 0 && g_sched_turn == g_sched_id) sched_yield_turn();
         else std::this_thread::yield();
     }
@@ -1318,11 +1338,15 @@ static bool spin_try(uint8_t* base, uint32_t lock) {
 }
 static void spin_release(uint8_t* base, uint32_t lock) {
     lswtcs_spin_leave();
+    bool was_ours = false;
     if (spin_lock_ok(lock)) {
         volatile uint32_t* w = reinterpret_cast<volatile uint32_t*>(PPC_HOST(lock));
-        if (__sync_bool_compare_and_swap(w, spin_tag(), 0u)) return;
+        was_ours = __sync_bool_compare_and_swap(w, spin_tag(), 0u);
+        // A release writes 0 as the 360's does, whoever set the word: the game may take a lock in its own code (lwarx/stwcx, any
+        // value) and give it back through this stub. Only with L on; without L the stubs leave the words alone as before log26.
+        if (!was_ours && g_spin_real.load(std::memory_order_relaxed)) __atomic_store_n(w, 0u, __ATOMIC_RELEASE);
     }
-    if (g_spin_turn_depth > 0) --g_spin_turn_depth;
+    if (!was_ours && g_spin_turn_depth > 0) --g_spin_turn_depth;
 }
 // For audio_offturn.cpp: true when every spinlock this thread holds is really taken (so it may leave the turn while holding them).
 extern "C" bool lsw_spin_all_real() { return g_spin_turn_depth == 0; }

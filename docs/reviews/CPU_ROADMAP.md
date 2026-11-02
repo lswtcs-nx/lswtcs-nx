@@ -76,6 +76,13 @@ What has to change before two guest threads may run at once, from reading the co
 only counted a depth. State L (log26) takes the lock word for real; any guest code that leaves the turn while holding a spinlock needs
 it. This is item 2 of the list above, done for spinlocks only.
 
+**What runs 26-27 taught about the granularity:** a turn handoff costs about 0.41 ms (two scheduler wake-ups). The second mixer's
+call takes 0.010 ms, so moving single calls loses about 40 to 1. Either a whole subtree leaves the turn (the voice processing,
+`sub_827F1258`, 31 functions, see `callee_audit.py`), or the XAudio thread runs entirely off the turn and syncs only through real
+locks and kernel objects. The second needs every kernel stub it calls made safe beside the turn holder, and its indirect-call
+targets found at run time; the static audit cannot follow them. Real spinlocks (L) must work first: run 27 froze in L, and log27 is
+the attempt to fix it.
+
 **Started in log25 (state U, `audio_offturn.cpp`):** one pure guest function of the XAudio thread, `sub_827F5990`, runs off the turn
 on core 2 while other guest threads hold it. The pattern applies to any guest function that touches only its own buffers: check the
 recompiled body for imports, spinlocks, atomics and calls, override the weak symbol, and run it inside `lswtcs_gil_blocking_urgent`

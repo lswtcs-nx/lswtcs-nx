@@ -34,6 +34,7 @@
 #include "lsw_glsl_fold.h"
 #include "lsw_gpu_bridge.h"
 #include "lsw_gpu_frame.h"
+#include "lsw_png_write.h"
 #include "lsw_spirv_glsl.h"
 #include <dirent.h>
 #include <sys/stat.h>
@@ -56,6 +57,10 @@ extern "C" void lsw_log_async_path(char* out, size_t capacity, const char* name)
 extern "C" void lsw_prof_register(const char* name, int sched_id);   // hw_profiler.cpp
 extern "C" void lsw_prof_note_draws(uint32_t draws);
 bool lsw_bg_submit(size_t bytes, std::function<void()> run);   // log_async.cpp: slow file work off this thread
+bool lsw_bg_submit_other(size_t bytes, std::function<void()> run);
+int lsw_capture_open(const char* path, size_t size_guess);
+bool lsw_capture_write(int fd, const uint8_t* data, size_t size);
+void lsw_capture_close(int fd, size_t final_size);
 size_t lsw_bg_queued_bytes();
 extern "C" uint32_t lsw_level_seq();                           // native_crt.cpp: the level the game last built a path for
 extern "C" void lsw_level_name(char* out, size_t capacity);
@@ -715,7 +720,10 @@ GLuint program(const LswGlShader* vs, const LswGlShader* ps, const LswGlShader* 
             g_programs.emplace(key, prog);
             return prog;
         }
-        if (prog_list_on()) program_list_save(ckey, s);
+        // Off this thread: in run 10 the file work of a rewritten list was about 20 % of the render thread's samples in freezes. A full queue only means
+        // the program is listed next session instead.
+        if (prog_list_on())
+            lsw_bg_submit_other(s.vs.size() + s.ps.size() + s.gs.size(), [ckey, copy = std::make_shared<ProgSources>(s)] { program_list_save(ckey, *copy); });
         std::lock_guard<std::mutex> lk(g_prog_mtx);
         ProgEntry& e = g_prog_entries[ckey];
         if (e.state == kProgQueued && !e.requested) {
@@ -775,7 +783,7 @@ extern uint64_t g_replays;   // defined with the texture cache below
 // own since 2026-10-11 s7 (before, they were charged to the next draw: 15 rect draws "cost" 3.9 ms with pixels off).
 // GK_OTHER: GPU time just before such a blit (state setup, nothing drawn).
 enum { GK_START, GK_PLAIN, GK_POINTS, GK_RECTS, GK_QUADS, GK_RESOLVE, GK_PRESENT, GK_TEXSRC, GK_OTHER, GK_N };
-struct GpuStamp { uint8_t kind; GLuint prog; uint64_t ps_key; };
+struct GpuStamp { uint8_t kind; GLuint prog; uint64_t ps_key; int32_t pixels; };
 bool g_gpuprof_frame = false;
 // Timestamp queries on switch-mesa return the GPU timer in ticks that run at 384/625 of real time (the Tegra X1 GPU
 // timer; yuzu/Eden convert with the same 384/625 ratio), not nanoseconds. Console 2026-10-11: the paused game swapped
@@ -799,7 +807,27 @@ bool g_blit_stamp = false;   // blit() stamps itself as GK_TEXSRC (set around te
 uint64_t g_gpuprof_verts = 0;
 std::vector<GLuint> g_gpq_pool;
 std::vector<GpuStamp> g_gpq_labels;
-void gpu_stamp(uint8_t kind, GLuint prog = 0, uint64_t ps_key = 0) {
+// LSWTCS_GLGPUPIX=1: also a sample counter around each draw of a profiled frame, for pixels per program. Run 10's one sample of the heaviest level had 61 of 94 ms
+// in one simple smoke shader; time per pixel says whether fill is the limit, and comparing shaders whether the shader or the blending is. It counts what passed the
+// depth test. The counter around each draw may stretch the timings of that frame a little.
+std::vector<GLuint> g_gpx_pool;
+size_t g_gpx_used = 0;
+bool gpu_pixels_on() { static const bool on = env_on("LSWTCS_GLGPUPIX", false); return on; }
+void gpu_pixels_begin() {
+    if (!g_gpuprof_frame || !gpu_pixels_on()) return;
+    if (g_gpx_used >= g_gpx_pool.size()) {
+        const size_t add = std::max<size_t>(256, g_gpx_pool.size());
+        g_gpx_pool.resize(g_gpx_pool.size() + add);
+        glGenQueries(GLsizei(add), g_gpx_pool.data() + g_gpx_pool.size() - add);
+    }
+    glBeginQuery(GL_SAMPLES_PASSED, g_gpx_pool[g_gpx_used]);
+}
+int32_t gpu_pixels_end() {
+    if (!g_gpuprof_frame || !gpu_pixels_on()) return -1;
+    glEndQuery(GL_SAMPLES_PASSED);
+    return int32_t(g_gpx_used++);
+}
+void gpu_stamp(uint8_t kind, GLuint prog = 0, uint64_t ps_key = 0, int32_t pixels = -1) {
     if (!g_gpuprof_frame) return;
     const size_t i = g_gpq_labels.size();
     if (i >= g_gpq_pool.size()) {
@@ -808,7 +836,7 @@ void gpu_stamp(uint8_t kind, GLuint prog = 0, uint64_t ps_key = 0) {
         glGenQueries(GLsizei(add), g_gpq_pool.data() + g_gpq_pool.size() - add);
     }
     glQueryCounter(g_gpq_pool[i], GL_TIMESTAMP);
-    g_gpq_labels.push_back({kind, prog, ps_key});
+    g_gpq_labels.push_back({kind, prog, ps_key, pixels});
 }
 void gpu_prof_finish() {
     if (!g_gpuprof_frame) return;
@@ -819,30 +847,34 @@ void gpu_prof_finish() {
     std::vector<GLuint64> t(n);
     for (size_t i = 0; i < n; ++i) { glGetQueryObjectui64v(g_gpq_pool[i], GL_QUERY_RESULT, &t[i]); t[i] = gpu_ticks_to_ns(t[i]); }
     uint64_t by_kind[GK_N] = {}, cnt[GK_N] = {};
-    struct ProgCost { uint64_t ns = 0; uint32_t draws = 0; uint64_t ps_key = 0; };
+    struct ProgCost { uint64_t ns = 0; uint32_t draws = 0; uint64_t ps_key = 0; uint64_t pixels = 0; };
     std::unordered_map<GLuint, ProgCost> by_prog;
+    uint64_t pixels_total = 0;
     for (size_t i = 1; i < n; ++i) {
         const uint64_t d = t[i] > t[i - 1] ? t[i] - t[i - 1] : 0;
         const GpuStamp& s = g_gpq_labels[i];
         by_kind[s.kind] += d;
         ++cnt[s.kind];
-        if (s.prog) { ProgCost& c = by_prog[s.prog]; c.ns += d; ++c.draws; c.ps_key = s.ps_key; }
+        GLuint64 px = 0;
+        if (s.pixels >= 0) { glGetQueryObjectui64v(g_gpx_pool[size_t(s.pixels)], GL_QUERY_RESULT, &px); pixels_total += px; }
+        if (s.prog) { ProgCost& c = by_prog[s.prog]; c.ns += d; ++c.draws; c.ps_key = s.ps_key; c.pixels += px; }
     }
+    g_gpx_used = 0;
     const uint64_t total = n > 1 && t[n - 1] > t[0] ? t[n - 1] - t[0] : 0;
     const char* variant = g_gpuprof_nostate ? " PIXELS+VERTS+UBO+TEX+STATE OFF" : g_gpuprof_notex ? " PIXELS+VERTS+UBO+TEX OFF"
                         : g_gpuprof_noubo ? " PIXELS+VERTS+UBO OFF" : g_gpuprof_novtx ? " PIXELS+VERTS OFF" : g_gpuprof_nopix ? " PIXELS OFF" : "";
     printf("[GLGPU] replay %llu%s: GPU %.2f ms, %llu verts | plain %.2f (%llu) points %.2f (%llu) rects %.2f (%llu) quads %.2f (%llu) "
-           "resolves %.2f (%llu) texsrc blits %.2f (%llu, pre %.2f) present %.2f\n", (unsigned long long)g_replays, variant,
+           "resolves %.2f (%llu) texsrc blits %.2f (%llu, pre %.2f) present %.2f | %.1f Mpx\n", (unsigned long long)g_replays, variant,
            total / 1e6, (unsigned long long)g_gpuprof_verts,
            by_kind[GK_PLAIN] / 1e6, (unsigned long long)cnt[GK_PLAIN], by_kind[GK_POINTS] / 1e6, (unsigned long long)cnt[GK_POINTS],
            by_kind[GK_RECTS] / 1e6, (unsigned long long)cnt[GK_RECTS], by_kind[GK_QUADS] / 1e6, (unsigned long long)cnt[GK_QUADS],
            by_kind[GK_RESOLVE] / 1e6, (unsigned long long)cnt[GK_RESOLVE], by_kind[GK_TEXSRC] / 1e6, (unsigned long long)cnt[GK_TEXSRC],
-           by_kind[GK_OTHER] / 1e6, by_kind[GK_PRESENT] / 1e6);
+           by_kind[GK_OTHER] / 1e6, by_kind[GK_PRESENT] / 1e6, pixels_total / 1e6);
     std::vector<std::pair<GLuint, ProgCost>> top(by_prog.begin(), by_prog.end());
     std::sort(top.begin(), top.end(), [](const auto& a, const auto& b) { return a.second.ns > b.second.ns; });
     for (size_t i = 0; i < top.size() && i < 10; ++i)
-        printf("[GLGPU]   program %u (PS %016llX): %.2f ms over %u draws\n", top[i].first,
-               (unsigned long long)top[i].second.ps_key, top[i].second.ns / 1e6, top[i].second.draws);
+        printf("[GLGPU]   program %u (PS %016llX): %.2f ms over %u draws, %.2f Mpx\n", top[i].first,
+               (unsigned long long)top[i].second.ps_key, top[i].second.ns / 1e6, top[i].second.draws, top[i].second.pixels / 1e6);
     fflush(stdout);
     g_gpq_labels.clear();
 }
@@ -2214,6 +2246,10 @@ PresentSrc replay() {
     {   // DIAG (LSWTCS_GLGPUPROF=N): GPU timestamps in every Nth replay (gpu_stamp / gpu_prof_finish)
         static const uint64_t every = [] { const char* e = getenv("LSWTCS_GLGPUPROF"); return uint64_t(e ? atoi(e) : 0); }();
         g_gpuprof_frame = every && (g_replays % every) == 0;
+        // The heaviest frames are few, and run 10 sampled them once: more often there, at most every fifth of the period.
+        static uint64_t last_heavy = 0;
+        if (every && !g_gpuprof_frame && f.draws.size() >= 4000 && g_replays - last_heavy >= every / 5) g_gpuprof_frame = true;
+        if (g_gpuprof_frame) last_heavy = g_replays;
         static const int split = [] { const char* e = getenv("LSWTCS_GLGPUSPLIT"); return e ? atoi(e) : 0; }();
         static uint64_t samples = 0;
         const uint64_t kind = g_gpuprof_frame && split ? samples++ % (split >= 2 ? 6 : 3) : 0;
@@ -2536,6 +2572,7 @@ PresentSrc replay() {
         static const bool timing = env_on("LSWTCS_GLTIMING", false);
         static std::unordered_map<GLuint, bool> drawn_once;
         const bool first_use = timing && !drawn_once[prog];
+        int32_t draw_pixels = -1;
         uint64_t t_first = 0;
         if (first_use) { glFinish(); t_first = gp_now(); drawn_once[prog] = true; }
         {
@@ -2546,11 +2583,13 @@ PresentSrc replay() {
             GLsizei count = GLsizei(r.ib_count ? r.ib_count : r.vertex_count);
             if (g_gpuprof_frame) g_gpuprof_verts += uint64_t(count);
             if (g_gpuprof_novtx) count = std::min<GLsizei>(count, 6);   // DIAG
+            gpu_pixels_begin();
             if (r.ib_count)
                 glDrawElements(mode, count, r.ib_32bit ? GL_UNSIGNED_INT : GL_UNSIGNED_SHORT,
                                reinterpret_cast<const void*>(uintptr_t(r.ib_off)));
             else
                 glDrawArrays(mode, 0, count);
+            draw_pixels = gpu_pixels_end();
         }
         if (first_use) {
             glFinish();
@@ -2559,7 +2598,7 @@ PresentSrc replay() {
             fflush(stdout);
         }
         ++by_gs[r.gs_type & 3];
-        gpu_stamp(uint8_t(GK_PLAIN + (r.gs_type & 3)), prog, ps ? ps->key : 0);
+        gpu_stamp(uint8_t(GK_PLAIN + (r.gs_type & 3)), prog, ps ? ps->key : 0, draw_pixels);
         maybe_flush_draws();
         static const bool gltest = env_on("LSWTCS_GLTEST", false);
         static bool first_done = false;
@@ -2690,70 +2729,14 @@ PresentSrc replay() {
 // File "shot_now" in sdmc:/lswtcs (or automatically at replays 300 and 1500 with LSWTCS_GLTEST=1):
 // the scene FBO -> shot_<replay>.png (rows top-down = the guest image) plus a count of pixels that
 // differ from the clear colour, so the GL output can be inspected without Eden's window.
-uint32_t png_crc(const uint8_t* p, size_t n, uint32_t crc) { return ~crc32CalculateWithSeed(~crc, p, n); }   // the running value, before its final inversion
-void png_chunk(FILE* f, const char* type, const uint8_t* data, uint32_t len) {
-    const uint8_t lb[4] = {uint8_t(len >> 24), uint8_t(len >> 16), uint8_t(len >> 8), uint8_t(len)};
-    fwrite(lb, 1, 4, f);
-    uint32_t crc = png_crc(reinterpret_cast<const uint8_t*>(type), 4, 0xFFFFFFFFu);
-    fwrite(type, 1, 4, f);
-    if (len) { crc = png_crc(data, len, crc); fwrite(data, 1, len, f); }
-    crc ^= 0xFFFFFFFFu;
-    const uint8_t cb[4] = {uint8_t(crc >> 24), uint8_t(crc >> 16), uint8_t(crc >> 8), uint8_t(crc)};
-    fwrite(cb, 1, 4, f);
-}
-void write_png_rgba(const char* path, const uint8_t* rgba, int w, int h) {   // zlib "stored" blocks
-    FILE* f = fopen(path, "wb");
-    if (!f) return;
-    const uint8_t sig[8] = {137, 80, 78, 71, 13, 10, 26, 10};
-    fwrite(sig, 1, 8, f);
-    const uint8_t ihdr[13] = {uint8_t(w >> 24), uint8_t(w >> 16), uint8_t(w >> 8), uint8_t(w),
-                              uint8_t(h >> 24), uint8_t(h >> 16), uint8_t(h >> 8), uint8_t(h), 8, 6, 0, 0, 0};
-    png_chunk(f, "IHDR", ihdr, 13);
-    // IDAT streamed in stored deflate blocks through a 64 KB buffer: no full-size copies of the image (captures used
-    // to build two, on a heap that may not have such blocks left; Switch 2026-10-09).
-    const size_t stride = 1 + size_t(w) * 4, raw_len = size_t(h) * stride;
-    const size_t nblk = raw_len ? (raw_len + 65534) / 65535 : 1;
-    const uint32_t idat_len = uint32_t(2 + nblk * 5 + raw_len + 4);
-    const uint8_t lb[4] = {uint8_t(idat_len >> 24), uint8_t(idat_len >> 16), uint8_t(idat_len >> 8), uint8_t(idat_len)};
-    fwrite(lb, 1, 4, f);
-    uint32_t crc = png_crc(reinterpret_cast<const uint8_t*>("IDAT"), 4, 0xFFFFFFFFu);
-    auto put = [&](const uint8_t* d, size_t n) { crc = png_crc(d, n, crc); fwrite(d, 1, n, f); };
-    fwrite("IDAT", 1, 4, f);
-    const uint8_t zh[2] = {0x78, 0x01};
-    put(zh, 2);
-    std::vector<uint8_t> buf_store(65535);   // this runs on the render thread or the background thread
-    uint8_t* const buf = buf_store.data();
-    uint32_t a = 1, b = 0;
-    size_t pos = 0, row = 0, column = 0;   // column 0 of each row in the raw stream is its filter byte
-    do {
-        const size_t blk = std::min<size_t>(raw_len - pos, 65535u);
-        const uint8_t bh[5] = {uint8_t(pos + blk >= raw_len ? 1 : 0), uint8_t(blk), uint8_t(blk >> 8), uint8_t(~blk), uint8_t(~blk >> 8)};
-        put(bh, 5);
-        // Two divisions and two remainders per byte kept a capture's PNGs at under 1 MB/s (run 8): the game ran into the queue's limit.
-        for (size_t i = 0; i < blk;) {
-            if (!column) { buf[i++] = 0; column = 1; continue; }
-            const size_t n = std::min(blk - i, stride - column);
-            memcpy(buf + i, rgba + row * size_t(w) * 4 + column - 1, n);
-            i += n;
-            column += n;
-            if (column == stride) { column = 0; ++row; }
-        }
-        for (size_t i = 0; i < blk;) {   // Adler-32, reduced as seldom as zlib: 5552 bytes cannot overflow the sums
-            const size_t end = std::min(blk, i + 5552);
-            for (; i < end; ++i) { a += buf[i]; b += a; }
-            a %= 65521; b %= 65521;
-        }
-        put(buf, blk);
-        pos += blk;
-    } while (pos < raw_len);
-    const uint32_t adler = (b << 16) | a;
-    const uint8_t ad[4] = {uint8_t(adler >> 24), uint8_t(adler >> 16), uint8_t(adler >> 8), uint8_t(adler)};
-    put(ad, 4);
-    crc ^= 0xFFFFFFFFu;
-    const uint8_t cb[4] = {uint8_t(crc >> 24), uint8_t(crc >> 16), uint8_t(crc >> 8), uint8_t(crc)};
-    fwrite(cb, 1, 4, f);
-    png_chunk(f, "IEND", nullptr, 0);
-    fclose(f);
+void write_png_rgba(const char* path, const uint8_t* rgba, int w, int h) {
+    const size_t raw = (size_t(w) * 4 + 1) * size_t(h);
+    const int fd = lsw_capture_open(path, raw / 4 * 3 + 4096);   // more than most images need, cut to size at the end
+    if (fd < 0) return;
+    size_t total = 0;
+    const bool ok = lsw_png_encode(rgba, uint32_t(w), uint32_t(h), [&](const uint8_t* d, size_t n) { total += n; return lsw_capture_write(fd, d, n); });
+    lsw_capture_close(fd, total);
+    if (!ok) { remove(path); printf("[CAPSAVE] could not write %s\n", path); fflush(stdout); }
 }
 // The file work of a capture leaves the render thread: the game keeps running while the files reach the SD card.
 void save_png(const char* path, std::vector<uint8_t>&& rgba, int w, int h) {

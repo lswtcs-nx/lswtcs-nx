@@ -424,6 +424,24 @@ void set_tokens(const Bridge& b, LswGpuDraw* out) {
 }
 int prepare_full(Bridge& b, const uint32_t* regs_in, const uint32_t* vs_ucode_be, uint32_t vs_dwords,
                  const uint32_t* ps_ucode_be, uint32_t ps_dwords, uint32_t index_endian, LswGpuDraw* out);
+// Where a comparison failed, for the [PREPMEMO] line.
+char g_memo_detail[96];
+// By bits: a NaN constant differs from itself as a float, and run 10's reuse turned itself off on "vertex floats" after 1,275 clean checks,
+// which that would explain. The same bits always make the same draw.
+bool floats_differ(const std::vector<float>& now, const std::vector<float>& saved) {
+  if (now.size() != saved.size()) {
+    snprintf(g_memo_detail, sizeof g_memo_detail, ": %zu values, was %zu", now.size(), saved.size());
+    return true;
+  }
+  if (now.empty() || !std::memcmp(now.data(), saved.data(), now.size() * sizeof(float))) return false;
+  size_t i = 0;
+  while (!std::memcmp(&now[i], &saved[i], sizeof(float))) ++i;
+  uint32_t a, b;
+  std::memcpy(&a, &now[i], 4);
+  std::memcpy(&b, &saved[i], 4);
+  snprintf(g_memo_detail, sizeof g_memo_detail, ": value %zu of %zu is %08X, was %08X", i, now.size(), a, b);
+  return true;
+}
 // Field by field: the arrays are valid only up to their counts. Returns the first field that differs, or null.
 const char* memo_differs(const LswGpuDraw& a, const Bridge& b, const LswGpuDraw& saved, const uint8_t* saved_sys,
                          const std::vector<float>& saved_vs, const std::vector<float>& saved_ps, const float* saved_derived) {
@@ -433,8 +451,8 @@ const char* memo_differs(const LswGpuDraw& a, const Bridge& b, const LswGpuDraw&
   if (a.primitive_polygonal != saved.primitive_polygonal || a.gs_key_bits != saved.gs_key_bits) return "primitive";
   if (std::memcmp(a.viewport, saved.viewport, sizeof a.viewport) || std::memcmp(a.scissor, saved.scissor, sizeof a.scissor)) return "viewport";
   if (std::memcmp(b.sys_block, saved_sys, sizeof b.sys_block)) return "system constants";
-  if (b.vs_float != saved_vs) return "vertex floats";
-  if (b.ps_float != saved_ps) return "pixel floats";
+  if (floats_differ(b.vs_float, saved_vs)) return "vertex floats";
+  if (floats_differ(b.ps_float, saved_ps)) return "pixel floats";
   if (a.vfetch_count != saved.vfetch_count || std::memcmp(a.vfetch_addr, saved.vfetch_addr, a.vfetch_count * 4) ||
       std::memcmp(a.vfetch_size, saved.vfetch_size, a.vfetch_count * 4)) return "vertex ranges";
   if (a.vs_tex_count != saved.vs_tex_count || a.ps_tex_count != saved.ps_tex_count || a.vs_smp_count != saved.vs_smp_count || a.ps_smp_count != saved.ps_smp_count) return "binding counts";
@@ -828,8 +846,8 @@ extern "C" int lsw_gpu_prepare(const uint32_t* regs_in, const uint32_t* vs_ucode
     if (const char* what = full ? memo_differs(*out, b, saved, saved_sys, saved_vs, saved_ps, saved_derived) : "full path failed") {
       g_prep_memo_broken = true;
       g_prep_memo_on.store(false, std::memory_order_relaxed);
-      printf("[PREPMEMO] MISMATCH in %s after %llu reuses: reuse turned off for this session (VS %p, PS %p)\n", what, (unsigned long long)g_pm_reused,
-             static_cast<const void*>(vs_ucode_be), static_cast<const void*>(ps_ucode_be));
+      printf("[PREPMEMO] MISMATCH in %s%s after %llu reuses: reuse turned off for this session (VS %016llX, PS %016llX)\n", what, g_memo_detail,
+             (unsigned long long)g_pm_reused, (unsigned long long)out->vs_key, (unsigned long long)out->ps_key);
       fflush(stdout);
     }
     return full;

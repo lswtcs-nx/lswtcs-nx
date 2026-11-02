@@ -150,6 +150,9 @@ void note_level(uint8_t* base, uint32_t path) {
         if ((*q == 'l' || *q == 'L') && strncmp(q + 1, "evels\\", 6) == 0) { from = q + 7; break; }
     char* cut = const_cast<char*>(strrchr(from, '\\'));
     if (cut && strchr(cut, '.')) *cut = 0;
+    // A level's AI folder is still that level.
+    cut = const_cast<char*>(strrchr(from, '\\'));
+    if (cut && (cut[1] == 'a' || cut[1] == 'A') && (cut[2] == 'i' || cut[2] == 'I') && !cut[3]) *cut = 0;
     std::lock_guard<std::mutex> lk(g_level_mx);
     if (strcmp(g_level, from) == 0) return;
     snprintf(g_level, sizeof g_level, "%s", from);

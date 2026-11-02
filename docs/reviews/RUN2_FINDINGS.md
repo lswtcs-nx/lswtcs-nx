@@ -437,10 +437,10 @@ under the method in `BO2_OPTIMIZATION_PATHS.md`.
 The next run should repeat Episode I chapter 2. It decides whether the freezes are gone (`--band 3` shows any left), what FPS and audio gained at the same
 draw counts, and whether `[LEVEL]` names the levels. Captures are best kept for moments with a fault, since each full one writes about 130 MB.
 
-## `0.0.16-log10`: planned from run 8's profile, not yet run on hardware
+## `0.0.16-log10`: planned from run 8's profile, first run on hardware is run 10 below
 
 Compiled and validated. The draw-identity test passes. The fetch-constant test passes, also over the 181 distinct shaders captured so far, and those shaders still
-compile as rewritten on a PC's OpenGL driver (NVIDIA), which says nothing about Mesa. Nothing below has run on a console.
+compile as rewritten on a PC's OpenGL driver (NVIDIA), which says nothing about Mesa. This section was written before any of it ran on a console.
 
 Run 8 changed the order of `BO2_OPTIMIZATION_PATHS.md`. In the heavy band 69 % of the turn is host code and 31 % the game's, and the game's top 100 functions are only 22 %.
 So work on this port's own record path comes first, and compiler flags or native rewrites of guest code have less to offer for now.
@@ -479,3 +479,92 @@ measures well. Only in this state, a page unchanged for 8 frames and already has
 
 **Reading the next run.** `tools/analyze_run.py` compares the states by draw band and prints `[PREPMEMO]`, `[GPUPAGES]`, `[GLSTITCH]` and, from `LSWTCS_GLGPUPROF=600`, GPU time by kind of work with merging on, which run 2's table predates. A
 `MISMATCH` or a flagged `[UNTILECHECK]` decides against that change whatever its FPS. `tests/run_fetch_fold.py` covers the rewrite.
+
+## Run 10: first hardware run of `0.0.16-log10`, 1 November 2026
+
+Handheld at stock clocks, 16,739 frames in 647 s, no crash, stderr empty, two full captures (replay 1957 in the hub, 12860 in `Gungan_C`). Levels seen: `Map\Map`, `Episode_I\Gungan\Gungan_A/B/C`. Archived in `private/runs/run10-log10`. The tester saw no visual fault and neither do
+the two screenshots, which says little about the frames not captured. Real heavy gameplay was short, about 180 s (t≈360 to 540), and t≈180 to 360 sat at 64 draws. The state slices are 15 s long and land on different scenes, so the per-state numbers below are indications, not comparisons of equals.
+
+**Long freezes are mostly gone.** Gaps of 1 s or more: 27 totalling 50.7 s (7.8 % of the session), against 21 totalling 227 s (29 %) in run 8. Of the time in gaps of 500 ms or more, 81 s falls in the two windows of about 100 s while a capture saves, and 16.8 s outside them.
+Saving took 99.6 s for 99 MB and 99.7 s for 105 MB, about 1 MB/s, so the SD card and not the PNG encoder sets the pace.
+During those gaps the render thread spends 35 % of its samples in `nvioctlChannel_KickoffPb` under `pushbuf_submit`, and 11 % in `nvFenceWait` under `nwindowDequeueBuffer`. A hypothesis not proved here: file system and nvservices share the system core, so busy SD writes starve the GPU kick. That would also fit run 8's freezes with GPU load 0.
+
+**FPS by recorded draws, outside capture saves and gaps of 1 s or more.** Run 8 is its MA and MAV states over the whole session, with gaps of 1 s or more removed but its capture saves still in. Run 10's 300-800 row is only 6 s and its 4000-5000 row 13 s.
+
+| Draws | Run 8 FPS | Run 8 median ms | Run 10 FPS | Run 10 median ms | Run 8 audio | Run 10 audio |
+|---|---:|---:|---:|---:|---:|---:|
+| 300-800 | 21.7 | 42 | 25.1 | 36 | 97 % | 80 % |
+| 800-1300 | 18.0 | 50 | 20.0 | 46 | 95 % | 76 % |
+| 1300-1900 | 17.8 | 51 | 20.2 | 46 | 82 % | 82 % |
+| 2500-3100 | 14.9 | 61 | 16.6 | 56 | 59 % | 57 % |
+| 4000-5000 | 11.6 | 71 | 11.9 | 78 | 66 % | 69 % |
+| 5000+ | 10.9 | 85 | 9.5 | 100 | 45 % | 59 % |
+
+So 11 to 16 % better up to about 3100 draws, even in the 4000-5000 band by FPS though not by median, and 13 % worse in the heaviest band, with the regression below in force in all of them. Audio is the fraction of real time played at that band. Its queue was empty for 5.25 % of the session against 9.54 % in run 8, but the longest empty stretch grew from 512 to 851 ms.
+The light bands' drop to 76-80 % is not explained. Part of it is t≈600 to 630, at about 950 draws and 64 %. Audio also falls at 64 draws, t≈270 to 360, to 63-89 % with 7 s of empty queue, and what the game was doing there is unknown.
+
+**A regression from this version: the XMA kick.** `svcArbitrateLock` is 22.2 % of the heavy band's turn, against 0.7 % in run 8, and 20.5 points of it are the audio thread in `pthread_mutex_lock < SetEvent < lswtcs_xma_mmio_store`. The audio thread's share of the turn went from 10.5 to 30.8 %.
+`SetEvent` takes the one mutex shared by all wait objects (`win32_switch.cpp`) and notifies every waiter, and now that the XMA worker runs on core 2 it contends on that mutex truly in parallel. The worker is pinned there in every state, so the X state says little about it. Fix: a mutex, condition variable and pending flag of the worker's own, with `notify_one`.
+How much FPS this returns is not known until it runs.
+
+**P turned itself off at t≈98 s.** `[PREPMEMO] MISMATCH in vertex floats after 326400 reuses`, in the hub, so all real gameplay ran without P and P against no P cannot be read from this run. `memo_differs` compares `std::vector<float>` by value, so a NaN constant differs from itself, which makes a false alarm likely. This is not proved. Compare bits and print the first
+differing index. Until then the mismatch stands. Before it, 67 to 79 % of draws reused, about half of them with new fetch or float data.
+
+**Polls and walk.** `svcSendSyncRequest` fell from 12.4 to 1.6 % of the heavy turn. Audio thread CPU from 35 to 15 %. Walker from 44 to 34.5 % and main from 35 to 30 % of the turn. Host against guest is still 69 to 31. Left in the record path: `pm4_extract_ib` 7.1, XXH3 6.7, `memcmp` 3.3, `prepare_full` 1.7, `fill_fetch_derived` 1.6, the last one new.
+
+**S works.** Heavy frames went from 28.9 to about 15.6 blits and 11.79 to about 7 Mpx, close to the 5 Mpx estimated. `[GLGPU]` texsrc blits fell from about 2.5 ms to 0.00 with S. `[UNTILECHECK]`: 19 checks, none flagged, at most 4 pixels different. A comparison only covers the frames it sampled.
+
+**H looks effective, and is still the owner's decision.** Heavy frames hashed 1312 pages against 2168, re-hashed 105 against 1140, walk 15.8 against 18 ms, record 12 against 14 ms. Sampled misses: 0 in the session, a small sample at one in 16. Other pages still change mid-frame about 0.9 times per frame. Stays off by default for the reason in the source comment.
+
+**Fetch fold: compiles, cost one recompile.** No compile or link failure on Mesa, 352 programs. Worker time was 196 s against 49 s, which is not the fold being slower to compile: run 8 hit Mesa's disk cache (`shader_cache_read_program`), and the rewritten text missed it. Front-end samples (GLSL IR and TGSI) rose from 661 to 7918, while the nv50 backend, which runs either way, only went from 2458 to 2753.
+Disk cache writes rose from 310 to 3848 samples. So a second session of this build should fall back near 49 s; that is an inference, not measured. Also one-time: about 20 % of the render thread's freeze samples were file operations in `program()`, from `program_list_save` rewriting the list, which runs on the render thread and should move to the background writer.
+The queue drained around replay 2068, right after the first capture, so capture 1957's 5.9 s gap had both writers competing. The fold's own FPS effect cannot be separated from the rest here.
+
+**GPU.** `[GLGPU]`, few samples per band: under 300 draws 3.8 ms; 300 to 1300 draws 32.6 ms (plain 18.5, rects 4.9, resolves 3.0, quads 2.6); 1300 to 2500 draws 37.4 ms (plain 21.8, rects 5.9, resolves 5.7). One sample at about 5000 draws, replay 10800: 94 ms, of which 62.95 ms quads and 61.08 ms a single pixel shader, `CEF661992D489E4B`, over 83 draws. It has one texture and alpha test branches, which suggests smoke or fog overdraw. So the heaviest spot is limited by the GPU too, while `gpuwait` reads 0.
+One sample decides nothing, and any reduction in that effect is a quality decision for the owner.
+
+**Levels.** `[LEVEL]` works; `note_level` leaves a trailing `\ai` that should go.
+
+## Smoke in Episode I chapter 2: what is known, and options for the owner
+
+The tester sees it in `Gungan_C`, as fog and smoke sheets near the waterfall and in the forest. The shader is `CEF661992D489E4B`.
+
+**Measured.**
+
+- One timed frame, replay 10800 in run 10: 61.08 of 94 ms of GPU over 83 draws. It is the only `[GLGPU]` sample that fell on such a frame out of 27, so how typical it is, is unknown. If it is, the heaviest band cannot pass about 10 FPS whatever the CPU does, which fits its 100 ms median, although the GPU wait column reads 0 (the wait does not show there).
+- Captured frames: 131 draws in run 8's replay 3787 and 167 in run 7's replay 4242, a few draws in other frames. Each draw is usually 36 vertices through the quad geometry shader, so 9 quads, about 1,240 quads in replay 3787.
+- One DXT5 texture per draw (1024x1024 and 512x512 seen), in the main scene pass at 1280x704. The guest's 2x MSAA is already drawn at one sample per pixel here (`LSWTCS_MSAA1X`), so no gain is left there. Blend `00000706` is source alpha and one minus source alpha. `RB_DEPTHCONTROL` is `00700736`: depth test and depth write on. Two colour targets are written.
+- The second target is not wasted: it is resolved and sampled later in the frame, so it cannot simply be left out.
+- Most of those draws come early in the pass, before other opaque geometry. In replay 3787, 121 of the 131 come within the first 165 of 1,949 records. Pixels covered later were shaded for nothing, and the game's order cannot be changed from here without knowing why it draws so.
+
+**From the shader text, not measured.** The translated shader is small: a texture read, a few multiplies, then the translator's run-time checks for alpha test, alpha to mask and gamma, each read from a uniform per pixel. Depth writing with a coverage-dependent alpha test rules out the early hint (Xenia's condition, `gl_bridge.cc`), so if alpha test is on in these draws, as depth writing suggests, pixels behind geometry already drawn are shaded too. The capture does not record the alpha test.
+
+**Rough scale, an estimate.** 61 ms at the GPU's likely fill of 0.5 to 1.2 Gpixel/s would be 30 to 75 Mpx, or 30 to 80 layers of the whole screen. That is why it is cheap on the 360, whose blending happens in eDRAM, and expensive here. What limits it (shader, texture cache, blending or memory) is unknown. `0.0.17-log11` measures pixels per program in those frames (`LSWTCS_GLGPUPIX`) and samples frames of 4000 draws or more every 120 frames instead of every 600, which should answer the first question: nanoseconds per pixel of this shader against costlier ones.
+
+**Options, none implemented.** Each depends on that measurement, and all but the first change or may change the picture, so they are the owner's decision. A rule keyed to this shader would also be the kind of per-content exception `AGENTS.md` rules out unless the owner accepts it.
+
+| Option | Expected effect | Visual risk | Effort, problem |
+|---|---|---|---|
+| Specialise the translator's run-time checks per program (alpha test, alpha to mask, gamma) | Fewer instructions on every shader, not just smoke. Helps only if shader time is the limit | None intended | Medium. More program variants, and run 4 showed variants cost shader holds in a cold session |
+| Positive LOD bias on large blended sprites | Less texture memory traffic | Softer smoke, small on already soft textures | Small, but needs a rule that picks these draws |
+| Skip quads that are fully transparent | Depends on how many are fading out, unknown | None if alpha really is zero | Needs vertex data the capture lacks, and geometry shader work |
+| Dynamic resolution in heavy frames | The largest and most general, all fill falls with pixels | Softer picture while it lasts | Large: every target and blit scales, and it is a quality decision |
+| Lower resolution for smoke only (off-screen particles) | Up to a quarter of the fill | Soft edges against geometry | Large. These draws write depth and a second target, which a lower-resolution pass cannot simply reproduce |
+| Draw fewer smoke quads | Direct | Visible thinning | Small, but a change of content; last resort |
+
+## `0.0.17-log11`: fixes from run 10, not yet run on hardware
+
+Run 10's analysis leads to this batch. Compiled and validated only.
+
+- **XMA wakeup** (`lsw_xma.cc`). The worker has its own mutex, condition variable and flags, and a kick takes the lock only if the worker is asleep. Expected: `svcArbitrateLock` back near run 8's 0.7 % of the heavy turn. What FPS that returns is the main question of the next run.
+- **P's comparison** (`gl_bridge.cc`). Floats compare by bits. A real difference now prints which value, both bit patterns and the shader keys, and still turns reuse off. If no mismatch appears, this run gives the first real reading of P in gameplay.
+- **Program list** (`gl_backend.cpp`). Written from the background thread. A full queue skips the entry, and the program is listed next session.
+- **Capture files** (`lsw_png_write.h`, `log_async.cpp`). PNGs are compressed: filter Up, zlib level 1, tried on run 10's own images on a PC, about 40 % of the bytes overall (43 of 105 MB). The file size is set first, then cut to what was written, and 256 KB goes to the card per write, against 64 KB through a `FILE`. Every other capture also pauses after each write for as long as the write took, to test whether SD writes starve the GPU's kicks. `[CAPSAVE]` now says bytes on the card, writes, time writing, longest write, time in open, size and close, and time paused. Unknown: how zlib's CPU time on the background thread compares, and whether presetting the size helps on this card.
+- **Profiler.** `xma`, `bg_files` and `log_writer` are now sampled, so the save rate of about 1 MB/s can be split into CPU starvation of that thread at priority 0x3A and waiting for the card.
+- **GPU sampling.** As above. The counter around each draw may stretch the timings of sampled frames a little.
+- **Levels.** A trailing `\ai` is stripped.
+- **A/B.** MAPX is dropped, since S looked clean: `MAPXS,MAXS,MAPS,MAPXSH,MAPXSV`. V still checks S.
+
+**Considered and left out.** `fill_fetch_derived` (1.6 % of the heavy turn in run 10): all of run 10's gameplay ran it per draw because P was off, and P's reuse avoids it on many draws. A dirty mask per fetch slot could remove the rest, but a missed write would show as a wrong LOD and P's check could not catch it unless it recomputed everything, which is not worth about 1 %.
+
+**Reading the next run.** A warm shader cache is expected, so compile time should be near 49 s; if not, the inference in run 10 was wrong. `tools/analyze_run.py` prints milliseconds per Mpx for the costliest programs.

@@ -150,13 +150,14 @@ def print_stdout(path):
         for line in gpu[:60]:print(' ',line[:170])
     tops={}
     for line in lines:
-        match=re.match(r'\[GLGPU\]   program (\d+) \(PS (\w+)\): ([\d.]+) ms over (\d+) draws',line)
+        match=re.match(r'\[GLGPU\]   program (\d+) \(PS (\w+)\): ([\d.]+) ms over (\d+) draws(?:, ([\d.]+) Mpx)?',line)
         if match:
-            entry=tops.setdefault(match[2],[0.0,0]);entry[0]+=float(match[3]);entry[1]+=int(match[4])
+            entry=tops.setdefault(match[2],[0.0,0,0.0]);entry[0]+=float(match[3]);entry[1]+=int(match[4]);entry[2]+=float(match[5] or 0)
     if tops:
-        print('\nMost expensive pixel shaders, summed over samples:')
-        for key,(ms,draws) in sorted(tops.items(),key=lambda item:-item[1][0])[:10]:
-            print(f'  PS {key}: {ms:.1f} ms over {draws} draws')
+        print('\nMost expensive pixel shaders, summed over samples (ms per Mpx from LSWTCS_GLGPUPIX):')
+        for key,(ms,draws,mpx) in sorted(tops.items(),key=lambda item:-item[1][0])[:10]:
+            rate=f', {mpx:.1f} Mpx, {ms/mpx:.2f} ms/Mpx' if mpx else ''
+            print(f'  PS {key}: {ms:.1f} ms over {draws} draws{rate}')
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('directory',type=Path,help='folder holding frames.log and stdout.log')

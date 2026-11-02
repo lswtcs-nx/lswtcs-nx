@@ -11,6 +11,8 @@
 #include <windows.h>
 #include <atomic>
 #include <bit>
+#include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <cstdio>
 #include <mutex>
@@ -22,6 +24,7 @@
 extern "C" void dbg_ram(const char* fmt, ...);
 extern "C" void lswtcs_sched_snapshot();   // DIAG (kernel_stubs.cpp)
 extern "C" __attribute__((weak)) void lsw_offcore_begin_prio(int) {}   // Switch: platform_switch.cpp
+extern "C" __attribute__((weak)) void lsw_prof_register(const char*, int) {}   // Switch: hw_profiler.cpp
 
 namespace {
 constexpr uint32_t kContextCount = 320;
@@ -35,22 +38,45 @@ xe::apu::XmaContext* g_ctx[kContextCount] = {};
 uint32_t g_first = 0;                 // guest VA of context 0
 bool g_used[kContextCount] = {};
 std::mutex g_alloc_mx;
-HANDLE g_work_event = nullptr;
+// The worker's wakeup is its own. Run 10: a Win32 event goes through the one mutex and condition variable of all wait objects, and with the worker
+// on another core each kick fought for that mutex while holding the guest turn: 20.5 % of the heavy band's turn. A kick now takes a lock only when
+// the worker is really asleep. Either the kick sees `waiting` or the worker sees `pending` (both sequentially consistent), so no wakeup is lost.
+std::mutex g_wake_mx;
+std::condition_variable g_wake_cv;
+std::atomic<bool> g_wake_pending{false}, g_worker_waiting{false};
 std::atomic<uint64_t> g_fn[8];   // DIAG call counters (lswtcs_fncount)
 std::atomic<uint64_t> g_kicks{0}, g_works{0}, g_locks{0}, g_clears{0}, g_other{0};
 // A/B state X: a kick only wakes the worker, as the 360's decoder runs beside the CPU, instead of decoding on the thread that
 // holds the guest scheduler's turn (run 8: about 18 % of the audio thread's turn in heavy scenes).
 std::atomic<bool> g_kick_async{false};
 
+void wake_worker() {
+    g_wake_pending.store(true);
+    if (!g_worker_waiting.load()) return;
+    { std::lock_guard<std::mutex> lk(g_wake_mx); }
+    g_wake_cv.notify_one();
+}
+// Still wakes every 4 ms without a kick: a context waiting for output space has nothing to wake it.
+void worker_wait() {
+    g_worker_waiting.store(true);
+    if (!g_wake_pending.load()) {
+        std::unique_lock<std::mutex> lk(g_wake_mx);
+        g_wake_cv.wait_for(lk, std::chrono::milliseconds(4), [] { return g_wake_pending.load(); });
+    }
+    g_worker_waiting.store(false);
+    g_wake_pending.store(false);
+}
+
 void worker_main() {
     // On core 2 beside the audio output thread: a frame decodes in well under a millisecond, and on core 0 this thread
     // would compete with whichever guest thread holds the turn.
     lsw_offcore_begin_prio(0x2B);
+    lsw_prof_register("xma", -1);
     for (;;) {
         bool did = false;
         for (uint32_t i = 0; i < kContextCount; ++i)
             if (g_ctx[i] && g_ctx[i]->is_enabled() && g_ctx[i]->Work()) { did = true; ++g_works; }
-        if (!did) WaitForSingleObject(g_work_event, 4);
+        if (!did) worker_wait();
         static DWORD last = GetTickCount();
         if (GetTickCount() - last >= 5000) {   // periodic activity report
             last = GetTickCount();
@@ -86,7 +112,6 @@ extern "C" int lswtcs_xma_init(uint8_t* base, uint32_t ctx_va) {
     // Registers the game READS: ContextArrayAddress (lwbrx -> stored little-endian).
     uint32_t phys = ctx_va & 0x1FFFFFFFu;
     lsw_guest::store<uint32_t>(base + kMmioBase + kRegContextArrayAddress * 4, phys);
-    g_work_event = CreateEvent(nullptr, FALSE, FALSE, nullptr);
     std::thread(worker_main).detach();
     dbg_ram("[XMA] decoder up: %u contexts at VA 0x%08X (phys 0x%08X)\n", kContextCount, ctx_va, phys);
     printf("[XMA] decoder up: %u contexts at VA 0x%08X\n", kContextCount, ctx_va); fflush(stdout);
@@ -127,7 +152,7 @@ extern "C" void lswtcs_xma_mmio_store(uint8_t* base, uint32_t addr, uint32_t val
                 ++g_kicks;
             }
         }
-        if (g_work_event) SetEvent(g_work_event);
+        wake_worker();
         static uint64_t last = 0;
         if (g_kicks - last >= 2000 || last == 0) { last = g_kicks; dbg_ram("[XMA] kicks=%llu works=%llu\n", (unsigned long long)g_kicks.load(), (unsigned long long)g_works.load()); }
     } else if (r >= kRegLock && r < kRegLock + 10) {

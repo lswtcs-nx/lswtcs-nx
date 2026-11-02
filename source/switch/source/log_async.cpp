@@ -19,6 +19,8 @@
 #include <mutex>
 #include <thread>
 
+extern "C" void lsw_prof_register(const char* name, int sched_id);   // hw_profiler.cpp
+
 namespace {
 struct Stream {
     int fd = -1;
@@ -53,6 +55,7 @@ bool stream_write(Stream& s) {
 }
 
 void writer_main(void*) {
+    lsw_prof_register("log_writer", -1);
     for (;;) {
         bool any = false;
         mutexLock(&g_write_lock);
@@ -113,19 +116,28 @@ devoptab_t g_device;
 bool g_device_ok = false;
 
 // ---- background jobs ----------------------------------------------------------------------------
-struct Job { size_t bytes; std::function<void()> run; };
+struct Job { size_t bytes; std::function<void()> run; bool capture; };
 std::mutex g_job_mx;
 std::condition_variable g_job_cv;
 std::deque<Job> g_jobs;
 size_t g_job_bytes = 0;
 constexpr size_t kJobBytesMax = size_t(192) << 20;   // beyond this the caller drops the work
 
+// What one capture's files cost, for [CAPSAVE]. Only the background thread touches these. Whether SD writes starve the GPU's kicks is a hypothesis from
+// run 10 (file system and nvservices may share the system core), so every other capture pauses after each write for as long as the write took: the two
+// kinds can then be compared by the slow frames during their saves.
+struct CaptureCost { uint64_t written, writes, write_ns, longest_ns, file_ns, pause_ns; };
+CaptureCost g_cost;
+bool g_capture_paced = false;
+inline uint64_t now_ns() { return armTicksToNs(armGetSystemTick()); }
+
 void job_main() {
     // Core 1, below the render thread: it waits for the GPU for much of a frame. On core 2, under the audio mix and Mesa's
     // worker, one full capture was not done a minute later (run 7), and leaving the game lost the rest.
     svcSetThreadCoreMask(CUR_THREAD_HANDLE, 1, 1u << 1);
     svcSetThreadPriority(CUR_THREAD_HANDLE, 0x3A);
-    uint64_t done = 0, batch_ns = 0, batch_bytes = 0;
+    lsw_prof_register("bg_files", -1);
+    uint64_t done = 0, batch_ns = 0, batch_bytes = 0, last_end_ns = 0;
     for (;;) {
         Job job;
         {
@@ -134,26 +146,68 @@ void job_main() {
             job = std::move(g_jobs.front());
             g_jobs.pop_front();
         }
-        if (!batch_ns) batch_ns = armTicksToNs(armGetSystemTick());
+        if (job.capture && !batch_bytes) {
+            batch_ns = now_ns();
+            g_cost = CaptureCost{};
+            // A queue that ran dry in the middle of one capture is still that capture.
+            if (batch_ns - last_end_ns > 10000000000ull) g_capture_paced = !g_capture_paced;
+        }
         job.run();
         ++done;
-        batch_bytes += job.bytes;
+        if (job.capture) batch_bytes += job.bytes;
         bool empty;
         {
             std::lock_guard<std::mutex> lk(g_job_mx);
             g_job_bytes -= job.bytes;
             empty = g_jobs.empty();
         }
-        if (empty && !batch_bytes) batch_ns = 0;   // a small job with no capture around it says nothing
         if (empty && batch_bytes) {
-            const double seconds = (armTicksToNs(armGetSystemTick()) - batch_ns) / 1e9;
-            printf("[CAPSAVE] all capture files written (%llu so far): %.0f MB in %.1f s\n", (unsigned long long)done, batch_bytes / 1048576.0, seconds);
+            printf("[CAPSAVE] all capture files written (%llu so far): %.0f MB in %.1f s; %.0f MB on the card, %llu writes, %.1f s writing, longest %.0f ms, %.1f s open/size/close, %.1f s paused (%s)\n",
+                   (unsigned long long)done, batch_bytes / 1048576.0, (now_ns() - batch_ns) / 1e9, g_cost.written / 1048576.0, (unsigned long long)g_cost.writes,
+                   g_cost.write_ns / 1e9, g_cost.longest_ns / 1e6, g_cost.file_ns / 1e9, g_cost.pause_ns / 1e9, g_capture_paced ? "paced" : "not paced");
             fflush(stdout);
-            batch_ns = 0; batch_bytes = 0;
+            batch_bytes = 0;
+            last_end_ns = now_ns();
         }
     }
 }
 }  // namespace
+
+// Capture files, on the background thread. Setting the size first spares the file system growing the file on every write; the guess may be high or low.
+int lsw_capture_open(const char* path, size_t size_guess) {
+    const uint64_t t = now_ns();
+    const int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd >= 0 && size_guess) (void)!ftruncate(fd, off_t(size_guess));
+    g_cost.file_ns += now_ns() - t;
+    return fd;
+}
+bool lsw_capture_write(int fd, const uint8_t* data, size_t size) {
+    const uint64_t t = now_ns();
+    size_t left = size;
+    while (left) {
+        const ssize_t w = write(fd, data, left);
+        if (w <= 0) return false;
+        data += w;
+        left -= size_t(w);
+    }
+    const uint64_t took = now_ns() - t;
+    g_cost.written += size;
+    ++g_cost.writes;
+    g_cost.write_ns += took;
+    g_cost.longest_ns = std::max(g_cost.longest_ns, took);
+    if (g_capture_paced) {
+        const uint64_t pause = std::min<uint64_t>(took, 50000000);
+        svcSleepThread(int64_t(pause));
+        g_cost.pause_ns += pause;
+    }
+    return true;
+}
+void lsw_capture_close(int fd, size_t final_size) {
+    const uint64_t t = now_ns();
+    (void)!ftruncate(fd, off_t(final_size));
+    close(fd);
+    g_cost.file_ns += now_ns() - t;
+}
 
 extern "C" bool lsw_log_async_init() {
     mutexInit(&g_write_lock);
@@ -193,15 +247,19 @@ size_t lsw_bg_queued_bytes() {
 
 // Runs `run` on the background thread, one job at a time, so its files do not compete for the SD card; false = over the
 // memory bound. `bytes` is what the job keeps in memory.
-bool lsw_bg_submit(size_t bytes, std::function<void()> run) {
+static bool bg_submit(size_t bytes, std::function<void()> run, bool capture) {
     static std::once_flag started;
     std::call_once(started, [] { std::thread(job_main).detach(); });
     {
         std::lock_guard<std::mutex> lk(g_job_mx);
         if (g_job_bytes + bytes > kJobBytesMax) return false;
         g_job_bytes += bytes;
-        g_jobs.push_back({bytes, std::move(run)});
+        g_jobs.push_back({bytes, std::move(run), capture});
     }
     g_job_cv.notify_one();
     return true;
 }
+// A job with bytes > 0 counts as a capture's in [CAPSAVE].
+bool lsw_bg_submit(size_t bytes, std::function<void()> run) { return bg_submit(bytes, std::move(run), bytes != 0); }
+// The same queue and bound for file work that is not a capture.
+bool lsw_bg_submit_other(size_t bytes, std::function<void()> run) { return bg_submit(bytes, std::move(run), false); }

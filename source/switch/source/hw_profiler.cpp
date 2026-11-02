@@ -44,7 +44,12 @@ struct Target {
 };
 }  // namespace
 extern "C" bool lsw_offcore_active(Handle h);   // platform_switch.cpp
+extern "C" uint64_t lsw_sched_waiting_mask();   // kernel_stubs.cpp
 namespace {
+// [PARALLEL]: how much the one guest turn holds back. Each 2 ms tick in frames of 1300 draws or more: whether a guest thread holds the
+// turn, how many more are ready and waiting for it, and which. If one thread is nearly always alone, running guest threads on
+// several cores (the CPU plan's step 1) has little to gain; the waiting share by thread says where it would.
+uint64_t g_par_ticks, g_par_held, g_par_wait[4], g_par_by_id[64];
 Target g_targets[kMaxThreads];
 // A/B states G (guest threads at priority 0x2E: above the low-priority helpers that share their cores, below render with R, Mesa
 // and audio) and C (guest threads on core 0 only). Run 22: every guest thread had mask 7 and priority 0x3B, the same as the render
@@ -194,6 +199,23 @@ bool end_window(FILE* f, uint64_t start_ns, uint64_t now_ns) {
     g_spare = full;
     g_table_used = 0;
     g_table_dropped = 0;
+    if (g_par_ticks) {
+        char b[900];
+        int k = snprintf(b, sizeof b, "[PARALLEL] heavy ticks %llu: turn held %.0f%%, others waiting 0: %.0f%% 1: %.0f%% 2: %.0f%% 3+: %.0f%% | waiting by thread:",
+                         (unsigned long long)g_par_ticks, 100.0 * g_par_held / g_par_ticks, 100.0 * g_par_wait[0] / g_par_ticks,
+                         100.0 * g_par_wait[1] / g_par_ticks, 100.0 * g_par_wait[2] / g_par_ticks, 100.0 * g_par_wait[3] / g_par_ticks);
+        for (int id = 0; id < 64 && k < 820; ++id) {
+            if (!g_par_by_id[id]) continue;
+            const char* name = "?";
+            for (int i = 0; i < count; ++i) if (g_targets[i].sched_id == id) { name = g_targets[i].name; break; }
+            k += snprintf(b + k, sizeof b - k, " %d %s %.0f%%", id, name, 100.0 * g_par_by_id[id] / g_par_ticks);
+        }
+        printf("%s\n", b);
+        fflush(stdout);
+        g_par_ticks = g_par_held = 0;
+        for (auto& v : g_par_wait) v = 0;
+        for (auto& v : g_par_by_id) v = 0;
+    }
     {   // the same placement in stdout, for a session whose profile is not read
         char b[1200]; int k = snprintf(b, sizeof b, "[THREADS]");
         for (const ThreadLine& l : *threads)
@@ -248,6 +270,14 @@ void profiler_main(void* arg) {
         const uint64_t last_frame = g_last_frame_tick.load(std::memory_order_relaxed);
         const uint32_t band = last_frame && armGetSystemTick() - last_frame > kStallTicks ? 3 : draws < 300 ? 0 : draws < 1300 ? 1 : 2;
         const int turn = lsw_sched_turn();
+        if (band == 2) {
+            const uint64_t w = lsw_sched_waiting_mask();
+            const int n = __builtin_popcountll(w);
+            ++g_par_ticks;
+            if (turn >= 0) ++g_par_held;
+            ++g_par_wait[n < 3 ? n : 3];
+            for (uint64_t b = w; b; b &= b - 1) ++g_par_by_id[__builtin_ctzll(b)];
+        }
         const int count = g_target_count.load(std::memory_order_acquire);
         // Whoever holds the turn each tick, everyone else every 4th: blocked threads are the question, not the volume.
         const bool all = (++tick & 3) == 0;

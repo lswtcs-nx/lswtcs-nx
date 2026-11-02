@@ -914,6 +914,14 @@ static void sampleprof_loop(int mode) {
 // Console profiler (hw_profiler.cpp): which thread to sample, and who holds the turn. Weak: not on the PC.
 extern "C" __attribute__((weak)) void lsw_prof_register_guest(int, uint32_t) {}
 extern "C" int lsw_sched_turn() { return g_sched_turn; }
+// [PARALLEL] (hw_profiler.cpp): guest threads that are ready to run but wait for the turn, as a bit mask by scheduler id. A racy read
+// for sampling only. Threads blocked in a guest wait or a host call are not runnable and do not count.
+extern "C" uint64_t lsw_sched_waiting_mask() {
+    uint64_t m = 0;
+    const int turn = g_sched_turn, n = g_sched_count < 64 ? g_sched_count : 64;
+    for (int i = 0; i < n; ++i) if (g_sched_alive[i] && g_sched_runnable[i] && i != turn) m |= 1ull << i;
+    return m;
+}
 static void sched_register(int id) {
     if (!gil_on() || id < 0) return;
     { static int sp = -1; if (sp < 0) { const char* e = getenv("LSWTCS_SAMPLEPROF"); sp = (e && (e[0] == '1' || e[0] == '2')) ? e[0] - '0' : 0;

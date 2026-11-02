@@ -933,3 +933,5 @@ One pass through `Gungan_A` to `E`, no crash, no capture. Archived in `private/r
 
 - G and C leave the XAudio thread's placement alone.
 - States `MAPXSHN`, `MAPXSHNRG`, `MAPXSHNRC`, `MAPXSHNRGC`: G and C crossed, both with R, against today's placement.
+- `[PARALLEL]` (added before staging): in frames of 1300+ draws, every 2 ms, whether a guest thread holds the turn, how many others are
+  ready and waiting for it, and which. It says whether guest threads on several cores (route 1 in `CPU_ROADMAP.md`) has anything to gain.

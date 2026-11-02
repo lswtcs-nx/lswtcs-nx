@@ -1070,3 +1070,22 @@ The game crashed while entering `Gungan_A` (state `MAPXSHN`, so L and R off at t
 - **L:** it was on during the menu and the hub (replays 0-807, and 2138-2577 with RG). There was no `[SPINLOCK]` report and no hang,
   so log27's release looks sound there. `Gungan_B`, where run 27 hung, was not reached.
 - Next run: the same build and profile again. Per `ISSUES.md`, no guard that hides the invalid device.
+
+## Run 29: `0.0.33-log27`, 2 November 2026
+
+`Gungan_A` to `E` and back to the hub; no crash, no hang. Archived in `private/runs/run29-log27`.
+
+- **L no longer hangs, but it is far slower.**
+  - The 200 ms limit fired 20 times, always on one lock, `83212774` (the XAudio voice lock, by the threads involved). The holder was
+    one of this port's tags each time: ids 0, 1, 4 and 5 in turn, so neither the release nor a game-written word was the problem.
+  - In L, 1300-2500 draws ran at 6.0 FPS with audio 36 % filled, p95 638 ms; today's placement ran at 26.0 FPS.
+- **Why, from the reports:** the holder did not run for 200 ms. A waiter that holds the turn passed it round the rotation, and with
+  audio first (A) the XAudio thread, when it was the waiter, got the turn straight back. Under the old turn-only locks the holder
+  simply kept running. This is priority inversion.
+
+## `0.0.34-log28`
+
+- **A spinlock waiter passes the turn directly to the holder**, whose scheduler id is in the lock word's tag (`sched_yield_to`). It
+  falls back to an ordinary yield if the holder cannot run.
+- `[AUDIOOFF]` lines now also count "turn passed to the holder" and "taken after 200 ms".
+- States `MAPXSHN`, `MAPXSHNL` only, so L gets twice the play time.

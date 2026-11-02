@@ -25,6 +25,7 @@ extern thread_local int g_spinlock_depth;   // kernel_stubs.cpp
 extern thread_local bool g_guest_off_turn;  // kernel_stubs.cpp
 extern "C" bool lsw_spin_all_real();        // kernel_stubs.cpp: every spinlock held is really taken (state L)
 extern "C" void lsw_spin_report(uint64_t* taken, uint64_t* waits);
+extern "C" void lsw_spin_report2(uint64_t* forced, uint64_t* yield_to);
 
 namespace {
 std::atomic<bool> g_on{[] { const char* e = getenv("LSWTCS_AUDIOOFF"); return e && e[0] == '1'; }()};
@@ -42,7 +43,15 @@ PPC_FUNC(sub_827F5990) {
     ++g_calls;
     if (!g_on.load(std::memory_order_relaxed) || g_guest_off_turn) {
         __imp__sub_827F5990(ctx, base);
-        if ((g_calls % 2000) == 0) { printf("[AUDIOOFF] %llu calls (U off now), %llu off the turn so far\n", (unsigned long long)g_calls, (unsigned long long)g_off); fflush(stdout); }
+        if ((g_calls % 2000) == 0) {
+            uint64_t taken = 0, waits = 0, forced = 0, yto = 0;
+            lsw_spin_report(&taken, &waits);
+            lsw_spin_report2(&forced, &yto);
+            printf("[AUDIOOFF] %llu calls (U off now), %llu off the turn so far | real spinlocks taken %llu, waited %llu, turn passed to the "
+                   "holder %llu, taken after 200 ms %llu\n", (unsigned long long)g_calls, (unsigned long long)g_off, (unsigned long long)taken,
+                   (unsigned long long)waits, (unsigned long long)yto, (unsigned long long)forced);
+            fflush(stdout);
+        }
         return;
     }
     // Under a spinlock only when it is really taken (state L); a lock held only through the turn keeps the call on the turn.

@@ -968,6 +968,23 @@ static void sched_yield_turn() {
     sched_turn_set(n); sched_notify_all();
     sched_wait_turn(lk, id);
 }
+// Pass the turn to one thread `h` (a spinlock's holder, state L), then wait until it is ours again. Run 29: waiters on the XAudio
+// voice lock passed the turn round the rotation, and with audio first the XAudio thread got it straight back, so the holder did not
+// run for 200 ms and more (20 [SPINLOCK] reports, 6 FPS). If `h` cannot run now, an ordinary yield.
+static std::atomic<uint64_t> g_yield_to{0};
+static void sched_yield_to(int h) {
+    const int id = g_sched_id; if (!gil_on() || id < 0) return;
+    {
+        std::unique_lock<std::mutex> lk(g_sched_mtx);
+        if (h >= 0 && h < g_sched_count && h != id && g_sched_alive[h] && g_sched_runnable[h]) {
+            ++g_yield_to;
+            sched_turn_set(h); sched_notify_all();
+            sched_wait_turn(lk, id);
+            return;
+        }
+    }
+    sched_yield_turn();
+}
 // RAII for a host-blocking call: mark this thread off the rotation (so the scheduler hands the
 // turn elsewhere while we block on a host primitive), then rejoin + reclaim the turn after.
 struct GilYield {
@@ -1295,6 +1312,7 @@ static std::atomic<uint64_t> g_spin_real_taken{0}, g_spin_real_waits{0}, g_spin_
 // KeAcquireSpinLockAtRaisedIrql whose word never cleared, while the XAudio thread and the audio went on. A wait past 200 ms now
 // prints the lock, its word and who holds it ([SPINLOCK]), then takes the lock anyway: no exclusion, as before L, but no freeze.
 static void sched_yield_turn();
+static void sched_yield_to(int h);
 static inline uint32_t spin_tag() { return 0x4C535700u | uint32_t(g_sched_id + 2); }   // nonzero, any byte order
 static bool spin_lock_ok(uint32_t lock) { return lock >= 0x80000000u && lock < 0xC0000000u && !(lock & 3); }
 static void spin_acquire(uint8_t* base, uint32_t lock) {
@@ -1322,8 +1340,11 @@ static void spin_acquire(uint8_t* base, uint32_t lock) {
             *w = tag;
             break;
         }
-        if (!g_guest_off_turn && g_sched_id >= 0 && g_sched_turn == g_sched_id) sched_yield_turn();
-        else std::this_thread::yield();
+        if (!g_guest_off_turn && g_sched_id >= 0 && g_sched_turn == g_sched_id) {
+            const uint32_t word = *w;
+            if ((word & 0xFFFFFF00u) == 0x4C535700u) sched_yield_to(int(word & 0xFF) - 2);   // the holder runs next
+            else sched_yield_turn();
+        } else std::this_thread::yield();
     }
     ++g_spin_real_taken;
     if (waited) ++g_spin_real_waits;
@@ -1351,6 +1372,7 @@ static void spin_release(uint8_t* base, uint32_t lock) {
 // For audio_offturn.cpp: true when every spinlock this thread holds is really taken (so it may leave the turn while holding them).
 extern "C" bool lsw_spin_all_real() { return g_spin_turn_depth == 0; }
 extern "C" void lsw_spin_report(uint64_t* taken, uint64_t* waits) { *taken = g_spin_real_taken.load(); *waits = g_spin_real_waits.load(); }
+extern "C" void lsw_spin_report2(uint64_t* forced, uint64_t* yield_to) { *forced = g_spin_forced.load(); *yield_to = g_yield_to.load(); }
 static std::atomic<int> g_qdiv_ab{0};
 extern "C" void lsw_quantum_div_set(int n) { g_qdiv_ab.store(n, std::memory_order_relaxed); }
 extern "C" void lswtcs_gil_quantum() {

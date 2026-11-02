@@ -1,4 +1,4 @@
-# CPU roadmap after run 23, 2 November 2026
+# CPU roadmap after run 24, 2 November 2026
 
 The state of the CPU work for whoever takes it over. It summarizes what runs 10-23 measured, what was tried and dropped, and the
 two routes left: guest threads on several cores, and faster generated code. The run-by-run evidence is in `RUN2_FINDINGS.md`, and
@@ -26,6 +26,7 @@ So the guest turn sets the pace in heavy scenes, and the render thread would be 
 | 18 | 25.0 | 25.4 | 16.8 | 12.7 | |
 | 22 | 26.2 | 23.5 | 20.5 | 11.5 | |
 | 23 | 29.1 | 26.6 | 23.0 | 14.0 | Render 0x2C, guest priority/core states (RGC 14.9 at 5000+) |
+| 24 | 28.7 | 26.5 | 22.1 | 15.2 | Same states with XAudio left alone; best heavy run so far, audio 57 % filled |
 
 Scenes differ between runs; compare within a session where possible (`LSWTCS_ABCYCLE`).
 
@@ -48,9 +49,14 @@ Scenes differ between runs; compare within a session where possible (`LSWTCS_ABC
 
 ## Route 1: guest threads on several cores
 
-The only route that could roughly double heavy scenes; also the riskiest. Log24 measures first whether there is parallelism to
-gain: `[PARALLEL]` gives, in frames of 1300+ draws, how often a guest thread holds the turn, how many others are ready and
-waiting, and which. If one thread is nearly always alone, this route gains little.
+The only route that could roughly double heavy scenes; also the riskiest. **Run 24 measured that there is parallelism to gain**
+(`[PARALLEL]`, frames of 1300+ draws):
+- the turn is held 88-100 % of the time, and at least one more guest thread is ready and waiting in 62-76 % of it;
+- the main thread waits 43-56 % of the time, and the XAudio thread 28-40 %.
+
+"Ready" includes threads that only poll, so this bounds the gain rather than measuring it. It also explains why heavy-scene audio
+gets worse as FPS rises (57 % filled in run 24): the XAudio thread competes for the same turn. It is the natural first thread to
+move.
 
 What has to change before two guest threads may run at once, from reading the code (not exhaustive):
 

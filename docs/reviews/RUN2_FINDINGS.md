@@ -935,3 +935,39 @@ One pass through `Gungan_A` to `E`, no crash, no capture. Archived in `private/r
 - States `MAPXSHN`, `MAPXSHNRG`, `MAPXSHNRC`, `MAPXSHNRGC`: G and C crossed, both with R, against today's placement.
 - `[PARALLEL]` (added before staging): in frames of 1300+ draws, every 2 ms, whether a guest thread holds the turn, how many others are
   ready and waiting for it, and which. It says whether guest threads on several cores (route 1 in `CPU_ROADMAP.md`) has anything to gain.
+
+## Run 24: `0.0.30-log24`, 2 November 2026
+
+`Gungan_A` to `E`, back to the hub and `A`-`B` again; no crash, no capture. Archived in `private/runs/run24-log24`.
+
+**Guest threads wait for the turn most of the time (`[PARALLEL]`, six 60 s windows, frames of 1300+ draws).**
+- A guest thread held the turn in 88-100 % of the 2 ms ticks.
+- At least one more thread was ready and waiting in 62-76 % of them, two or more in 41-62 %.
+- By thread, the share of ticks spent ready but waiting:
+
+| Thread | Waiting |
+| --- | --- |
+| Main thread | 43-56 % |
+| XAudio | 28-40 % |
+| Second tile worker (`822D2AB0`) | 14-18 % |
+| `82356D18` and the two `823592C0` | 9-15 % each |
+| File threads (`824FD9A8`, `82508C48`) | 0-41 %, during loads |
+
+So a second core has work waiting for it most of the time. "Ready" includes threads that only poll and yield, so this is an upper bound on what could run at once, not a gain.
+
+**FPS:** the best so far: 15.2 FPS at 5000+ draws (run 23: 14.0), 17.0 at 4000-5000 draws (run 23: 15.3).
+
+By state at 4000+ draws:
+
+| State | FPS | Audio filled |
+| --- | --- | --- |
+| Today's placement | 16.2 | 67 % |
+| RC | 14.9 | 69 % |
+| RG | 16.6 | 65 % |
+| RGC | 15.3 | 40 % |
+
+C costs audio and gives nothing, and is dropped. R and G are within noise of today's placement. R alone was not separated in runs 23-24.
+
+**Audio in the heavy band is worse than before as FPS rises:** 57 % filled overall at 5000+ draws, against 89 % in run 22 at 11.5 FPS. The XAudio thread waits for the turn 28-40 % of the time. When the turn serves more game frames, the audio gets less of it. Route 1 (`CPU_ROADMAP.md`) would remove that conflict: the XAudio thread on its own core.
+
+**Run 25** (same build, profile only): `MAPXSHN`, `MAPXSHNR`, `MAPXSHNRG`, to settle R and G against audio.

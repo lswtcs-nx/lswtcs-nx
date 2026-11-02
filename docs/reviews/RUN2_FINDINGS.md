@@ -701,3 +701,22 @@ W stays out. Moving the walk off the turn would need the waits and interrupts of
 **A/B.** `MAPXS,MAPXST,MAPXSTV,MAPXSH,MAPXSTH`. MAPXST against MAPXS measures the gain; MAPXSTV checks the picture with T on; MAPXSTH is both CPU savings together.
 
 **Reading the next run.** `repeat tiles` and `walk`/`record` per frame by state; `[TILESKIP]` false matches must stay 0; FPS and audio by band against run 12. If T holds, the next candidates are the native audio mixers (about 5 % of the turn) and, larger and harder, page hashing (about 10 %): either H, which is the owner's decision, or tracking guest writes to vertex pages with memory protection, which would replace hashing by proof but is a large change.
+
+## Run 13: `0.0.19-log13`, 2 November 2026
+
+Handheld at stock clocks, 8,610 frames in 326 s, levels `Map\Map`, `Gungan_A/B/C`, five full captures for material, no visual fault reported. Archived in `private/runs/run13-log13`.
+
+**T ran for about 20 s and then turned itself off.**
+
+- Under T, 1,328 repeats began and the hash stopped 1,324 of them at their first draw, so almost nothing was copied under T.
+- One full check compared 725 draws: 724 equal, one `FALSE MATCH` at draw 723 (VS `2E84CD15F17C7538`, PS `A57505D45FC84D0D`), at t ≈ 100 s, inside the load from `Gungan_A` to `Gungan_B` with new shaders arriving. T switched off there, so the T states after it ran without T and the state table says nothing about T.
+- Which field differed was not printed. A level load is when guest memory changes between the tiles of a frame, so stale vertex, index or constant memory is the likely cause, not the register hash. That staleness applies equally to the copies of the entry check, which ran all along. In merged frames it would not show, since the replay then draws tile 0's records for the whole screen.
+
+**The entry check's refusals now have a name.** With T off, 4,212 repeats passed it and 8,562 were refused. Every refusal was on register `0x0A2F`, next to `COHER_STATUS_HOST` (`0x0A31`): Xenia's `COHER_SIZE_HOST`, set by the game's cache-coherency packets around resolves. No draw reads it. It also explains T: the hash covered it, so it differed at the first draw of each repeat. Copies made: about 2.2 M over the session. `repeat tiles` now reads 4-8 ms per heavy frame.
+
+**FPS.** Compared with run 12: 12.4 against 12.1 at 5000+ draws, 15.7 against 13.7 at 4000-5000, about equal elsewhere. That is within the noise of different routes, as expected without T.
+
+**Next, small.**
+- Leave the coherency registers (`0x0A2F` to `0x0A31`) out of both the entry check and the hash.
+- Print which field a false match differed in.
+- Turn T off after three false matches instead of one, so a level load alone does not end the test.

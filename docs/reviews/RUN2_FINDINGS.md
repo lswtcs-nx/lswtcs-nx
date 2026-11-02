@@ -1241,3 +1241,24 @@ The device's 2x MSAA comes from the video mode (`sub_8248CE98`, present paramete
 **Comparing:** draw counts fall, so load matching by draws does not hold across runs. Compare by level with `phase_compare.py` against run 31's L pass (`Gungan_B` 21.3 FPS, `C` 23.3, `E` 31.7, 5000+ draws 13.5) and run 32's states without U. U and A still compare within the session with `ab_factorial.py`.
 
 **What run 33 decides:** picture right and FPS up: keep it, and propose it to the owner as the default. Picture wrong in specific passes: read those passes and decide per target set. No FPS gain: the time is not where the profile suggests; go on with the walk itself.
+
+## Run 33: `0.0.39-log33`, 2 November 2026: one tile is the largest gain so far
+
+`Gungan_A` to `E` once and the hub; no crash, no `[SPINLOCK]`. Archived in `private/runs/run33-log33`. **The logs cannot show whether the picture is right**, and no capture was taken: that needs the tester's answer.
+
+- **Tiling is gone.** Every `[ONETILE]` line reads tile count 0, draws fell about 3x (p95 5425 to 2004), `plan` fell from 13 ms to under 1 ms, and the command thread `822D2AB0`, 38 % of the turn before, no longer holds the turn at all.
+- **Against run 31's L pass** (draws x3 to compare load; all states of run 33, half of them with U):
+
+| Load | Run 31 | Run 33 |
+| --- | --- | --- |
+| `Gungan_B` | 21.3 FPS, p95 80 ms | 26.5, p95 56 |
+| `Gungan_C` | 23.3, p95 67 | 28.4, p95 43 |
+| `Gungan_E` | 31.7, p95 47 | 37.0, p95 40 |
+| 2500-4000 draws | 21.0 | 29.1 |
+| 4000-5000 | 15.9 | 25.3 |
+| 5000+ | 13.5, audio 93 % | 20.7, audio 99 % |
+
+  One route, by hand, so routes differ; the size of the gain is well above that.
+- **U per tick works here.** At 5000+ equivalent: 17.6-18.8 FPS without U (6-12 s each), 23.2-23.3 with it (7-12 s each), audio 98-100 % in all. Load-matched at 1300+ draws in this session: U +18.5 % (90 %: +4.4 to +29.7, 10 visits only); over all frames -4.4 % (-10.0 to +1.6). So U helps where the turn is the limit and may cost a little elsewhere. 740 calls a second, 0.26 ms of work, 0.53 ms with the handoffs; 32 returns to the turn, all for `KeSetEvent`. No forced wait, so the give-way fix held.
+- **A off:** no measurable change (load-matched -1.5 %, -7.9 to +5.0), audio 99-100 % either way.
+- **What limits now:** GPU `draws..present` is about 30-36 ms at any load, so about 30 FPS is the ceiling at these clocks, and `[GLGPU]` was sampled too rarely here to say more. Heavy scenes are still turn-limited (turn held 95 %, main thread 86 % of it: 59 % guest, 27 % PM4 and record, 6.5 % XXH3).

@@ -746,7 +746,9 @@ Handheld at stock clocks, 10,290 frames in 403 s, levels `Map\Map`, `Gungan_A/B/
 
 ## What the 360 version targets, and the fourth core
 
-**30 FPS on the 360, by the game's own code.** No published frame-rate analysis of the 360 version was found. The executable's frame timing (`kernel_stubs.cpp`, the frame-time floor) says it plainly: the nominal frame length word starts at 1/60, and `sub_8229D8B8` sets it to 1/30, or 1/25 in PAL mode, which is 60 Hz and 50 Hz displays with a swap every second refresh. The port lets the game run up to 60 FPS (`LSWTCS_FPS_CAP=60`) with game time following real time. So 30 FPS steady matches the original, and 60 FPS in heavy scenes is beyond it. With one guest thread at a time at 1020 MHz, the game's own code and audio take about 30-35 ms per heavy frame even with no port overhead, and the GPU about 30 ms.
+**The 360's frame rate: not settled by the code, and probably 60 FPS.** An earlier version of this section concluded 30 FPS from a source comment, and that was wrong. `sub_8229D8B8` stores one of two constants from the executable image into the frame-length floor (`0x830AA980`), depending on what `sub_824FC358` returns (3 picks the first). The values of those constants were not read here, and the function has no direct caller in the generated code, so whether gameplay runs with a 1/30 floor is unknown. The tester reports that several sources say the 360 version runs at 60 FPS, and the port's main loop already lets the game run at 60 with game time following real time. So 60 FPS is treated as the original target.
+
+Why a game that ran on the previous generation is heavy here: the 360 runs its threads on three 3.2 GHz cores (six hardware threads), and its GPU reads the command buffers itself. Here every guest thread shares one 1.02 GHz core, one at a time, through recompiled code, and the GPU's command processing is software on that same turn: the command thread is about 40 % of it in heavy scenes. The cost is the translation, not the game.
 
 **The fourth core, as bo2-360-nx does it.** From its public source (`sdk/src/ui/switch_core3.cpp`, techniques only):
 
@@ -764,3 +766,13 @@ Here the limit is the guest turn on core 0, which core 3 does not lift by itself
 - Every 64th call the guest code runs on the real buffer and the native code on a copy, and the bytes are compared. The first difference prints `[NATIVEMIX] MISMATCH` and leaves the guest code in place for the session. The equality is not tested on a PC.
 - A/B: `MAPXS,MAPXSN,MAPXSH,MAPXSHN`, so N, H and both together are compared in one session.
 - Reading it: `[NATIVEMIX]` must show no mismatch; the audio thread's share of the heavy turn by state; FPS and audio by band.
+
+## Run 15: `0.0.21-log15`, 2 November 2026
+
+Handheld at stock clocks, 10,020 frames in 389 s, levels `Map\Map`, `Gungan_A/B/C/E`, five full captures for material, no visual fault reported. Process core mask `0x7`: a normal homebrew launch with three cores. Archived in `private/runs/run15-log15`.
+
+**N is exact, and small.** `[NATIVEMIX]`: 2.56 M calls, 40,000 checks, all equal, so the native mixer computes the guest's result bit for bit. Its cost in the heavy band's turn: the native loop 1.11 % of samples against 1.60 % for the guest function, each running about half the session (the guest share also holds the 1-in-64 checks). That is roughly a third cheaper per call, about 0.5 % of the turn: the loop is bound by memory more than by the context traffic it removes. Worth keeping on, but not a large gain, and the second mixer (`sub_827F5990`, similar size) would give about the same.
+
+**FPS.** Against run 14 within noise: 13.3 against 12.5 at 5000+ draws, 15.3 against 14.2 at 4000-5000, the rest equal. By state (10-40 s per cell, different scenes) no ordering between MAPXS, N, H and both is visible beyond noise in the heavy band, while `[GPUPAGES]` keeps showing H's lower walk time.
+
+**Heavy turn now:** main thread 44 %, command thread 41 %, audio 12 %.

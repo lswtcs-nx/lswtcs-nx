@@ -1,4 +1,4 @@
-# CPU roadmap after run 24, 2 November 2026
+# CPU roadmap after run 25, 2 November 2026
 
 The state of the CPU work for whoever takes it over. It summarizes what runs 10-23 measured, what was tried and dropped, and the
 two routes left: guest threads on several cores, and faster generated code. The run-by-run evidence is in `RUN2_FINDINGS.md`, and
@@ -40,6 +40,7 @@ Scenes differ between runs; compare within a session where possible (`LSWTCS_ABC
     priority. Y and D (VdSwap not waiting) did not change that.
   - T (tile copies) gave no walk gain. Q (longer quantum) did not lower the thread switches, which come from guest waits.
   - O (polygon offset) is not used by the faulty stud draws. The polygon offset code stays: it was never applied before log19.
+- **Thread placement, runs 23-25:** R and RG are 10-15 % faster in heavy scenes and cost about as much audio (run 25: today's 13.9 FPS / 96 % filled, R 15.9 / 57 %, RG 15.1 / 80 % at 4000+ draws). The default is unchanged; the trade-off is the owner's. Details below.
 - **Thread placement (log23-log24):** guest threads start with mask 7 and priority 0x3B, like the render thread. R (render 0x2C),
   G (guest 0x2E) and C (guest on core 0) are under test; G and C exclude the XAudio thread since log24, because in run 23 they
   emptied the audio buffers (60-65 % filled). `LSWTCS_PLACEGUARD=1` repairs and logs a guest thread left off its core; it fired

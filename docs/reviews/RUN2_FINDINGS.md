@@ -971,3 +971,17 @@ C costs audio and gives nothing, and is dropped. R and G are within noise of tod
 **Audio in the heavy band is worse than before as FPS rises:** 57 % filled overall at 5000+ draws, against 89 % in run 22 at 11.5 FPS. The XAudio thread waits for the turn 28-40 % of the time. When the turn serves more game frames, the audio gets less of it. Route 1 (`CPU_ROADMAP.md`) would remove that conflict: the XAudio thread on its own core.
 
 **Run 25** (same build, profile only): `MAPXSHN`, `MAPXSHNR`, `MAPXSHNRG`, to settle R and G against audio.
+
+## Run 25: `0.0.30-log24` (profile `MAPXSHN,MAPXSHNR,MAPXSHNRG`), 2 November 2026
+
+`Gungan_A` to `E` once; no crash, no capture. Archived in `private/runs/run25-log24`.
+
+| State | 4000+ draws | 2500-4000 | 1300-2500 |
+| --- | --- | --- | --- |
+| Today's placement | 13.9 FPS, audio 96 % | 20.8 FPS, 84 % | 27.9 FPS, 95 % |
+| R | 15.9 (8 s only), 57 % | 23.5, 66 % | 24.2, 96 % |
+| RG | 15.1, 80 % | 25.8, 62 % | 29.5, 81 % |
+
+**R and G, runs 23-25 together.** In the heavy bands, R and RG are about 10-15 % faster than today's placement, and the audio is about that much worse. It is one trade-off, not a free gain: the XAudio thread shares the one guest turn, and whatever runs the game faster leaves it less. `[PARALLEL]` matches run 24 (the main thread waits about 50 % of the time).
+
+**Default left as it is.** Audio is one of the owner's first priorities, so trading it for frame rate is the owner's call. The route that removes the trade-off is moving the XAudio thread to a core of its own (route 1 in `CPU_ROADMAP.md`). The profile stays `MAPXSHN,MAPXSHNR,MAPXSHNRG` until then, to gather more of the same.

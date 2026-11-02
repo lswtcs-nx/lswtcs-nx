@@ -238,7 +238,7 @@ endif()
 if(LSW_DEKO_BACKEND)
     nx_generate_nacp(lswtcs.nacp NAME "TCS Deko Live" AUTHOR "LSWTCS port" VERSION "0.0.7")
 else()
-    nx_generate_nacp(lswtcs.nacp NAME "LSWTCS" AUTHOR "LSWTCS port" VERSION "0.0.37-log31")
+    nx_generate_nacp(lswtcs.nacp NAME "LSWTCS" AUTHOR "LSWTCS port" VERSION "0.0.38-log32")
 endif()
 nx_create_nro(lswtcs NACP lswtcs.nacp)
 

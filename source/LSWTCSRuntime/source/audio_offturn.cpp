@@ -1,12 +1,12 @@
-// A/B state U: the XAudio thread's voice processing, guest sub_827DDE40, runs off the guest turn, beside whichever guest thread holds it.
+// A/B state U: the XAudio thread's voice processing, guest sub_827DA6B8, runs off the guest turn, beside whichever guest thread holds it.
 // The first real step of running guest threads in parallel (docs/reviews/CPU_ROADMAP.md, route 1).
 //
-// Why this function: in run 31's heavy frames it was 57 % of the XAudio thread's turn (private/session-tools/thread_inclusive.py), and
-// run 27 showed that single small calls lose: 0.010 ms of mixing against 0.41 ms of turn handoffs, so log25's sub_827F5990 is gone.
-// sub_827F1258, one level down, is reached per voice through a dispatch table. This one is above that table.
-// What it reaches, from the recompiled code (private/session-tools/offturn_audit.py): only the XAudio thread on the run 31 stacks; spinlocks,
-// which state L makes real; two pure kernel stubs; and a critical section in sub_827D9DF8. Its indirect calls cannot be followed statically,
-// so any kernel stub not marked as free of the turn takes the turn back and the rest runs on it (kernel_stubs.cpp, offturn_rejoin).
+// Why this function: small calls lose to the handoff, about 0.5 ms each. log25's sub_827F5990 took 0.010 ms a call, and run 32's sub_827DDE40,
+// reached per voice at 1,000-5,000 calls a second, 0.043 ms: audio 31 % filled against 91 %, though FPS rose 7-12 % at 4000+ draws. This one holds
+// the per-voice loop itself and is called from sub_827DAB90, the XAudio thread's work for one audio tick (5.33 ms); the rate is logged.
+// What it reaches, from the recompiled code (private/session-tools/offturn_audit.py): only the XAudio thread on the run 32 stacks; spinlocks, which
+// state L makes real; and two pure kernel stubs. Its indirect calls cannot be followed statically, so any kernel stub not marked as free of the
+// turn takes the turn back and the rest runs on it (kernel_stubs.cpp, offturn_rejoin; 20 returns in run 32, for KeSetEvent).
 // On the 360 this ran on its own hardware thread beside the game; whatever it shares, the game guards with spinlocks there.
 // The risk left: the generated code drops sync/lwsync, so lock-free sharing with no lock around it is not ordered on ARM. Expect rare
 // corruption rather than crashes if that exists.
@@ -18,7 +18,7 @@
 #include <cstdio>
 #include <cstdlib>
 
-extern "C" PPC_FUNC(__imp__sub_827DDE40);
+extern "C" PPC_FUNC(__imp__sub_827DA6B8);
 extern "C" bool lswtcs_gil_offturn(void (*fn)(void*), void* arg);   // kernel_stubs.cpp: false if it came back to the turn on the way
 extern "C" __attribute__((weak)) void lsw_offcore_begin() {}   // Switch: platform_switch.cpp (core 2, priority 0x2B)
 extern "C" __attribute__((weak)) void lsw_offcore_end() {}
@@ -50,13 +50,13 @@ extern "C" void lsw_audio_offturn_counts(uint64_t* out) {   // [ABSTAT]; racy re
     out[0] = g_calls; out[1] = g_off; out[2] = g_stayed; out[3] = g_off_work_ns; out[4] = g_off_total_ns; out[5] = g_on_ns;
 }
 
-// Strong definition: replaces the recompiled sub_827DDE40 (a weak alias) for every caller and the call table.
-PPC_FUNC(sub_827DDE40) {
-    if (g_guest_off_turn) { __imp__sub_827DDE40(ctx, base); return; }
+// Strong definition: replaces the recompiled sub_827DA6B8 (a weak alias) for every caller and the call table.
+PPC_FUNC(sub_827DA6B8) {
+    if (g_guest_off_turn) { __imp__sub_827DA6B8(ctx, base); return; }
     ++g_calls;
     const uint64_t t0 = now_ns();
     if (!g_on.load(std::memory_order_relaxed) || !lsw_spin_all_real()) {
-        __imp__sub_827DDE40(ctx, base);
+        __imp__sub_827DA6B8(ctx, base);
         const uint64_t t1 = now_ns();
         g_on_ns += t1 - t0; ++g_on_calls;
         report(t1);
@@ -66,7 +66,7 @@ PPC_FUNC(sub_827DDE40) {
     const bool stayed = lswtcs_gil_offturn([](void* p) {
         Job& j = *static_cast<Job*>(p);
         const uint64_t a = now_ns();
-        __imp__sub_827DDE40(*j.ctx, j.base);
+        __imp__sub_827DA6B8(*j.ctx, j.base);
         j.work_ns = now_ns() - a;
     }, &job);
     const uint64_t t1 = now_ns();

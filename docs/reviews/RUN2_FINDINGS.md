@@ -1193,3 +1193,32 @@ Same code as log30 for U. The run is redesigned to answer more in one pass of th
 - **`[ABSTAT]`** at each state change: running totals of turn time by thread, thread switches, voice lock counts, quantum boundaries and off-turn calls, so they can be charged to a state exactly.
 - **`private/session-tools/ab_factorial.py`:** the effect of each letter by draw band and load-matched, with a 90 % interval from resampling visits. An interval across 0 means the run cannot say.
 - **Limits:** a crash loses the later states but names the state it happened in. If U corrupts something, the other states' numbers share that session. Compiler changes (route 2) still need two builds.
+
+## Run 32: `0.0.37-log31`, 2 November 2026: per-voice U rejected, R, G and Q show no gain
+
+`Gungan_A` to `E` once, 41 state visits; no crash. Archived in `private/runs/run32-log31`.
+
+| Letter | Load-matched speed at 1300+ draws (90 % interval) | Audio filled, with against without |
+| --- | --- | --- |
+| U | +1.0 % (-4.1 to +5.7) | 31 % against 91 % |
+| R | +0.8 % (-3.5 to +5.6) | 62 % against 61 % |
+| G | -3.4 % (-7.7 to +1.0) | 65 % against 58 % |
+| Q | -1.1 % (-5.5 to +3.7) | 69 % against 56 % |
+
+The audio numbers of R, G and Q are dominated by which states had U; without U: L 100 %, L+Q+G 90 %, L+R+G 85 %, L+R+Q 94 %.
+
+- **U as built loses:** `sub_827DDE40` is per voice, 1,000-5,000 calls a second, 0.043 ms of work against about 0.5 ms with the handoffs (163,023 of 163,043 calls stayed off the turn; 20 returned, all for `KeSetEvent`). The XAudio thread's turn fell from
+  about 3 s to 0.8 s per state, and raw FPS rose at 4000+ draws (+7 % at 4000-5000, +12 % at 5000+, intervals clear of 0, not load-matched), but the audio emptied.
+- **R, G, Q:** nothing measurable within about ±4 %. They stay out. Q does not explain run 31's second pass, which leaves the shaders ready as the likely cause, not shown.
+- **19 forced waits, U states only:** the XAudio thread off the turn lost every compare-and-swap for 200 ms while the main thread, on the turn, polled in a take-and-release loop (`sub_827D9DF8`; stub acquires 7x higher in those states). The main thread ran 235 ms of a 268 ms frame in the first one. Reading of the counters, not traced.
+- **Cosmetic:** held-time totals overflow when a thread off the turn sets `hold_t0` between another's read; fixed in log32.
+
+## `0.0.38-log32`
+
+- **U moves up to `sub_827DA6B8`,** which holds the per-voice loop and is called from `sub_827DAB90`, one audio tick's work. Only the XAudio thread on the stacks; only spinlocks and pure stubs in the static reach. Rate not known until run 33.
+- **A waiter off the turn gets way:** a thread on the turn holds back up to 50 us before taking a lock while one waits.
+- **Profile:** `MAPXSHNL,MAPXSHNLU,MPXSHNL,MPXSHNLU`, every 6 s, one pass. A off asks whether U makes audio-first unnecessary.
+
+**What run 33 decides:** U with audio at about the level without it and FPS up at 4000+ draws: keep U and look at the next thread. Audio still emptied: read the calls a second, then decide between a higher root and the whole thread off the turn. No gain and no harm: route 1 through XAudio is worth little, go to route 2.
+
+**Route 2 prerequisite found:** `private/session-tools/poll_loops.py`: 686 no-call, no-store backward loops whose address looks fixed, many of them list walks, but some true polls (`sub_822D2798`, `sub_822AF268`, `sub_82264240`). Plain guest memory could read those once and spin for ever, so they need to stay volatile. A build-wide change needs that exception first.

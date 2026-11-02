@@ -1386,6 +1386,7 @@ static inline uint64_t spin_now_ns() {
     return uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
 }
 static uint8_t* g_spin_base = nullptr;
+static std::atomic<int> g_spin_offturn_waiters{0};
 static int g_spin_depth_pub[LSW_SCHED_MAX];   // each id's g_spinlock_depth, for the report
 static std::atomic<uint64_t> g_spin_boundaries{0}, g_spin_q_skipped{0}, g_spin_q_yields{0};   // quantum boundaries; with a depth: no yield, yield
 static inline void spin_depth_publish() { const int id = g_sched_id; if (id >= 0 && id < LSW_SCHED_MAX) g_spin_depth_pub[id] = g_spinlock_depth; }
@@ -1416,12 +1417,19 @@ static void spin_acquire(uint8_t* base, uint32_t lock, uint32_t lr) {
     if (!spin_real() || !lock_ok) { ++g_spin_turn_depth; st.acq_lr = lr; st.acq_id = g_sched_id; return; }
     volatile uint32_t* w = reinterpret_cast<volatile uint32_t*>(PPC_HOST(lock));
     const uint32_t tag = spin_tag();
-    bool waited = false;
+    bool waited = false, flagged = false;
     uint32_t spins = 0;
     std::chrono::steady_clock::time_point t0;
+    // Run 32: a thread on the turn polling in a tight take-and-release loop (sub_827D9DF8, waiting for a voice) kept the word nearly all the time,
+    // and the XAudio thread off the turn lost every compare-and-swap for 200 ms. So it gives way, briefly, to a waiter off the turn.
+    if (!g_guest_off_turn && g_spin_offturn_waiters.load(std::memory_order_relaxed) > 0) {
+        const auto until = std::chrono::steady_clock::now() + std::chrono::microseconds(50);
+        while (g_spin_offturn_waiters.load(std::memory_order_relaxed) > 0 && std::chrono::steady_clock::now() < until) {}
+    }
     while (!__sync_bool_compare_and_swap(w, 0u, tag)) {
         if (!waited) t0 = std::chrono::steady_clock::now();
         waited = true;
+        if (g_guest_off_turn && !flagged) { flagged = true; g_spin_offturn_waiters.fetch_add(1, std::memory_order_relaxed); }
         if ((++spins & 63) == 0 && std::chrono::steady_clock::now() - t0 > std::chrono::milliseconds(200)) {
             const uint32_t word = *w;
             const bool ours = (word & 0xFFFFFF00u) == 0x4C535700u;
@@ -1447,6 +1455,7 @@ static void spin_acquire(uint8_t* base, uint32_t lock, uint32_t lr) {
             else sched_yield_turn();
         } else std::this_thread::yield();
     }
+    if (flagged) g_spin_offturn_waiters.fetch_sub(1, std::memory_order_relaxed);
     if (waited) {
         const auto dt = std::chrono::steady_clock::now() - t0;
         if (dt < std::chrono::milliseconds(1)) ++st.w1;
@@ -1478,8 +1487,9 @@ static void spin_release(uint8_t* base, uint32_t lock, uint32_t lr) {
         ++st.rel; st.rel_lr = lr; st.rel_id = g_sched_id;
         volatile uint32_t* w = reinterpret_cast<volatile uint32_t*>(PPC_HOST(lock));
         was_ours = __sync_bool_compare_and_swap(w, spin_tag(), 0u);
-        if (was_ours && st.hold_t0) {
-            const uint64_t held = spin_now_ns() - st.hold_t0;
+        const uint64_t hold_from = st.hold_t0, hold_to = spin_now_ns();
+        if (was_ours && hold_from && hold_to > hold_from) {   // another thread may have just taken the word and set hold_t0
+            const uint64_t held = hold_to - hold_from;
             st.hold_ns += held; ++st.hold_seen;
             if (held > st.hold_max) st.hold_max = held;
             st.hold_t0 = 0;

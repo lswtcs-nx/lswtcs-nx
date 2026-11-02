@@ -23,6 +23,7 @@
 
 extern "C" void dbg_ram(const char* fmt, ...);
 extern "C" void lswtcs_sched_snapshot();   // DIAG (kernel_stubs.cpp)
+extern "C" __attribute__((weak)) void lsw_walkoff_report() {}   // kernel_stubs.cpp: [WALKOFF]
 extern "C" __attribute__((weak)) void lsw_offcore_begin_prio(int) {}   // Switch: platform_switch.cpp
 extern "C" __attribute__((weak)) void lsw_prof_register(const char*, int) {}   // Switch: hw_profiler.cpp
 extern "C" __attribute__((weak)) int lsw_core3_begin(const char*) { return 0; }   // Switch: platform_switch.cpp (fourth core)
@@ -87,6 +88,7 @@ void worker_main() {
                     (unsigned long long)g_kicks.load(), (unsigned long long)g_locks.load(), (unsigned long long)g_clears.load(),
                     (unsigned long long)g_other.load(), (unsigned long long)g_works.load(), al, en);
             lswtcs_sched_snapshot();
+            lsw_walkoff_report();
             dbg_ram("[XMA] chain: DAA20=%llu DAB90=%llu F1258=%llu EF820=%llu EF920=%llu F0D30=%llu\n",
                     (unsigned long long)g_fn[0].load(), (unsigned long long)g_fn[1].load(), (unsigned long long)g_fn[2].load(),
                     (unsigned long long)g_fn[3].load(), (unsigned long long)g_fn[4].load(), (unsigned long long)g_fn[5].load());

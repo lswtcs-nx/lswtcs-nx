@@ -804,3 +804,19 @@ Neither happens with the walk on the turn, because then no other guest thread ru
 **What it could give.** In the heavy band the walk and recording are about 20 ms of a 75 ms frame with H. Off the turn, the main thread (44 % of the turn) and audio can run beside them, so the gain is at most the walk's share. The thread that kicked the walk still waits for it. Xenia's model goes further: its command processor is a thread of its own that reads the ring while every guest thread runs. That is the next step if this one holds.
 
 **Session:** `profiles/hardware-walk.env`, `MAPXSN,MAPXSNW,MAPXSHN,MAPXSHNW`, walk on core 1, separate from the main A/B session.
+
+## Run 16: `0.0.22-log16`, 2 November 2026
+
+Handheld at stock clocks, 10,950 frames in 401 s, `Map\Map` and `Gungan_A/B/C/E`, five full captures for material, no visual fault reported. Core mask `0x7`, so `lsw_core3_begin` stayed inert. Archived in `private/runs/run16-log16`.
+
+- **H: no sampled miss again** (`H MISS` never printed). Heavy frames (5000+ draws), median frame time by state: MAPXSHN 70 ms (25 frames only) against MAPXSN 87; MAPXSHNQ 79 against MAPXSNQ 84. H is ahead in both pairs, as in runs 12-15.
+- **Q is out.** In heavy windows the guest scheduler switched 1,500-2,200 times a second without Q and 1,700-4,100 with it, so the switches come from guest waits, not from quantum ends. No FPS gain either (above). The code stays, unused.
+- **N:** no mismatch.
+- **FPS** in the heaviest band 11.7 against 13.3 in run 15, but the scenes were heavier: the render thread's replay took 40-49 ms per heavy frame against 33-37 ms, and walk plus record reached 35 + 20 ms in some windows. The other bands match run 15.
+- **Audio** 97-100 % in every band, against 70-96 % in run 15. The cause was not found; no setting that touches audio changed except N everywhere, which is too small to explain it.
+
+## `0.0.23-log17`: W fixed, and logged in detail
+
+- The W fix described above, plus a W-only change: with W on, a walk that finds another one half done (its thread yielded on the turn inside a wait-register poll or the guest interrupt) leaves the ring to that walker instead of becoming a second walker. Without W this is only counted.
+- `[WALKOFF]` every 5 s while W walks: IBs off the turn, time off, the walker's wait to get the turn back (average and maximum), guest code run inside the walk, fences reported done during a half walk, second walkers, and the waits from the fix. When no walk has ended for 3 s while the game's write pointer is ahead (the stopped picture of runs 7 and 12), `NO WALK` and a line with the walker's state, the tile backlog and who holds the turn.
+- Main session `profiles/hardware-ab.env`: `MAPXSN,MAPXSHN`. W session `profiles/hardware-walk.env`: `MAPXSN,MAPXSNW,MAPXSHN,MAPXSHNW`, walk on core 1.

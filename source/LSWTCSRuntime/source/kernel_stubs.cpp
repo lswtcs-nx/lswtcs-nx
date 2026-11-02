@@ -1154,8 +1154,14 @@ static std::atomic<int> g_walk_off_sid{-1};       // scheduler id of the thread 
 static std::mutex g_walk_mtx;
 static std::condition_variable g_walk_cv;
 static std::atomic<uint64_t> g_walk_waits{0}, g_walk_rewaits{0};   // [GPUPAGES]: waits for that walker; waits again after one
+// [WALKOFF] (lsw_walkoff_report): what W does, every 5 s while it walks, and the walker's state when the ring stops being walked.
+static std::atomic<uint64_t> g_wo_ibs{0}, g_wo_off_ns{0}, g_wo_rejoin_ns{0}, g_wo_rejoin_max_ns{0}, g_wo_needturn{0}, g_wo_claims{0},
+                             g_wo_second{0}, g_wo_second_skipped{0};
+static std::atomic<int64_t> g_walk_end_ms{0};   // steady clock, end of the last ring walk
+static thread_local std::chrono::steady_clock::time_point t_walk_off_since;
 static void walk_off_enter() {
     if (t_walk_off || !gil_on() || g_sched_id < 0) return;
+    t_walk_off_since = std::chrono::steady_clock::now();
     { std::lock_guard<std::mutex> lk(g_walk_mtx); g_walk_off_sid.store(g_sched_id); }   // before the turn passes on
     sched_leave_turn(g_sched_id);
     static const int prio = [] { const char* e = getenv("LSWTCS_WALKOFF_PRIO"); return e ? int(strtol(e, nullptr, 0)) : 0x2D; }();
@@ -1168,19 +1174,26 @@ static void walk_off_leave() {
     if (!t_walk_off) return;
     t_walk_off = false;
     lsw_offcore_end();
+    const auto t0 = std::chrono::steady_clock::now();
     sched_rejoin_urgent(g_sched_id);
+    const uint64_t off = uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(t0 - t_walk_off_since).count());
+    const uint64_t rejoin = uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t0).count());
+    g_wo_off_ns += off;
+    g_wo_rejoin_ns += rejoin;
+    if (rejoin > g_wo_rejoin_max_ns.load(std::memory_order_relaxed)) g_wo_rejoin_max_ns.store(rejoin, std::memory_order_relaxed);
     { std::lock_guard<std::mutex> lk(g_walk_mtx); g_walk_off_sid.store(-1); }   // after: holding the turn again
     g_walk_cv.notify_all();
 }
 struct WalkNeedsTurn {   // guest code / guest waits inside an off-rotation walk: hold the turn meanwhile
     bool was = t_walk_off;
-    WalkNeedsTurn() { if (was) walk_off_leave(); }
+    WalkNeedsTurn() { if (was) { ++g_wo_needturn; walk_off_leave(); } }
     ~WalkNeedsTurn() { if (was) walk_off_enter(); }
 };
 // Ring-level IB of `len` dwords about to be walked by this thread: go off the rotation if it is worth it.
 static bool walk_off_ib_begin(uint32_t len) {
     static const uint32_t min_len = [] { const char* e = getenv("LSWTCS_WALKOFF_MIN"); return e ? uint32_t(atoi(e)) : 4096u; }();
     if (!walkoff_on() || len < min_len || t_walk_off || !gil_on() || g_sched_id < 0) return false;
+    ++g_wo_ibs;
     walk_off_enter();
     return true;
 }
@@ -5892,6 +5905,42 @@ static uint32_t pm4_tile_backlog() {
         if (PPC_LOAD_U32(slot)) b += PPC_LOAD_U32(slot + 56) - PPC_LOAD_U32(slot + 60); }
     return b;
 }
+// Every 5 s from the XMA worker (a host thread). A line when walks went off the turn in the window, or when no ring walk ended in
+// the last 3 s while the game's write pointer is ahead (the picture stopping, as with W in runs 7 and 12): then also who holds
+// the turn, the walker's state and the tile backlog.
+extern "C" void lsw_walkoff_report() {
+    if (!gil_on() || !g_rb_base || !g_rb_size) return;
+    static uint64_t last[8] = {};
+    const uint64_t now[8] = {g_wo_ibs.load(), g_wo_off_ns.load(), g_wo_rejoin_ns.load(), g_wo_needturn.load(), g_wo_claims.load(),
+                             g_wo_second.load(), g_walk_waits.load(), g_walk_rewaits.load()};
+    uint64_t d[8];
+    for (int i = 0; i < 8; ++i) { d[i] = now[i] - last[i]; last[i] = now[i]; }
+    const int64_t ms_now = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    const int64_t end = g_walk_end_ms.load();
+    uint8_t* base = g_base;
+    const uint32_t rbd = g_rb_size >> 2, w = PPC_LOAD_U32(0x7FC80714u) % rbd, r = g_rb_rptr_dwords % rbd;
+    const bool stuck = end && ms_now - end > 3000 && w != r;
+    static int stuck_lines = 0;
+    if (stuck && stuck_lines >= 20) return;
+    if (!d[0] && !stuck && !d[5]) return;
+    const uint64_t rmax = g_wo_rejoin_max_ns.exchange(0);
+    printf("[WALKOFF] 5 s: %llu IBs off the turn, %.1f ms off, rejoin %.2f ms avg %.2f max, guest code inside %llu, half-walk claims %llu, "
+           "second walkers %llu (skipped %llu total), waits %llu again %llu%s\n",
+           (unsigned long long)d[0], d[1] / 1e6, d[0] ? d[2] / 1e6 / d[0] : 0.0, rmax / 1e6, (unsigned long long)d[3], (unsigned long long)d[4],
+           (unsigned long long)d[5], (unsigned long long)g_wo_second_skipped.load(), (unsigned long long)d[6], (unsigned long long)d[7],
+           stuck ? " | NO WALK" : "");
+    if (stuck) {
+        ++stuck_lines;
+        char b[512]; int k;
+        { std::unique_lock<std::mutex> lk(g_sched_mtx);
+          k = snprintf(b, sizeof b, "[WALKOFF] no walk ended for %lld ms: wptr %u rptr %u, walking %d, walker off the turn %d, tile backlog %u, turn %d, runnable:",
+                       (long long)(ms_now - end), w, r, int(g_pm4_walking), g_walk_off_sid.load(), pm4_tile_backlog(), g_sched_turn);
+          for (int i = 0; i < g_sched_count && k < 480; ++i)
+              if (g_sched_alive[i]) k += snprintf(b + k, sizeof b - k, " %d%s", i, g_sched_runnable[i] ? "R" : "-"); }
+        printf("%s\n", b);
+    }
+    fflush(stdout);
+}
 static void pm4_process_ring_flat_impl(bool allow_drain);
 static void pm4_process_ring_flat() { pm4_process_ring_flat_impl(true); }
 // Called from guest GPU-progress waits (ring space): act as the CP and consume the ring now.
@@ -5899,6 +5948,7 @@ static void pm4_process_ring_flat() { pm4_process_ring_flat_impl(true); }
 static void pm4_walk_now(void* ctxp) {
     static int on = -1; if (on < 0) { const char* e = getenv("LSWTCS_REALGET"); on = (e && e[0] == '0') ? 0 : 1; }
     if (on) walk_wait_other();
+    if (on && g_pm4_walking) ++g_wo_claims;   // the walk is half done (its thread yielded on the turn): reported as caught up
     if (!on || g_pm4_walking || !g_rb_base || !g_rb_size || !ctxp) return;
     PPCContext* saved = g_interrupt_ctx;
     if (!g_interrupt_ctx) g_interrupt_ctx = static_cast<PPCContext*>(ctxp);
@@ -5908,6 +5958,10 @@ static void pm4_walk_now(void* ctxp) {
 static void pm4_process_ring_flat_impl(bool allow_drain) {
     if (!g_rb_base || !g_rb_size) return;
     walk_wait_other();
+    // A walk is half done and its thread yielded on the turn (a wait-register poll or the guest interrupt inside it): walking
+    // here would be a second walker over the same ring. With W on, leave the ring to that walker, which reads the write
+    // pointer again before it stops; without W, as before, only counted.
+    if (g_pm4_walking) { ++g_wo_second; if (walkoff_on()) { ++g_wo_second_skipped; return; } }
     const uint32_t rbd = g_rb_size >> 2;        // 8192 dwords
     // ── Exact consumption up to the real write pointer (LSWTCS_RINGWPTR=1) ─────────────
     // Xenia ExecutePrimaryBuffer(read_ptr, write_ptr): every ring packet is executed exactly
@@ -5988,6 +6042,7 @@ static void pm4_process_ring_flat_impl(bool allow_drain) {
         g_rb_rptr_dwords = pos;
         pm4_publish_rptr();
         g_pm4_walking = false;
+        g_walk_end_ms.store(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
         g_gpuprof[GP_WALK] += gp_now() - gp_walk0;
         static uint64_t calls = 0, tot_ibs = 0; ++calls; tot_ibs += ibs;
         if (calls <= 5 || (calls % 600) == 0)

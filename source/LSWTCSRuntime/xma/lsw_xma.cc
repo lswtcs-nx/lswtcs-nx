@@ -38,9 +38,10 @@ xe::apu::XmaContext* g_ctx[kContextCount] = {};
 uint32_t g_first = 0;                 // guest VA of context 0
 bool g_used[kContextCount] = {};
 std::mutex g_alloc_mx;
-// The worker's wakeup is its own. Run 10: a Win32 event goes through the one mutex and condition variable of all wait objects, and with the worker
-// on another core each kick fought for that mutex while holding the guest turn: 20.5 % of the heavy band's turn. A kick now takes a lock only when
-// the worker is really asleep. Either the kick sees `waiting` or the worker sees `pending` (both sequentially consistent), so no wakeup is lost.
+// The worker's wakeup is its own, and a kick takes no lock. Runs 10 and 11: a kick that locked anything the worker also holds spent 20 % of the heavy band's
+// turn there, first on the mutex of all wait objects, then on an empty lock of this one (disassembly of run 11's samples). A woken thread probably owns the
+// mutex before it gets a core, so the guest turn waited for busy core 2. Notifying without the mutex can lose a wakeup in the moment before the worker
+// waits; that costs at most the 4 ms timeout.
 std::mutex g_wake_mx;
 std::condition_variable g_wake_cv;
 std::atomic<bool> g_wake_pending{false}, g_worker_waiting{false};
@@ -52,9 +53,7 @@ std::atomic<bool> g_kick_async{false};
 
 void wake_worker() {
     g_wake_pending.store(true);
-    if (!g_worker_waiting.load()) return;
-    { std::lock_guard<std::mutex> lk(g_wake_mx); }
-    g_wake_cv.notify_one();
+    if (g_worker_waiting.load()) g_wake_cv.notify_one();
 }
 // Still wakes every 4 ms without a kick: a context waiting for output space has nothing to wake it.
 void worker_wait() {

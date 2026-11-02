@@ -1131,6 +1131,7 @@ static void sched_rejoin_urgent(int id) {
 // drain, wait-reg-mem polls). Other threads that want the ring walked (fence / ring-space waits, VdSwap) wait for
 // the walk to finish (walk_wait_other) instead of claiming the GPU caught up while it is still reading.
 extern "C" __attribute__((weak)) void lsw_offcore_begin_prio(int) {}   // Switch: platform_switch.cpp
+extern "C" __attribute__((weak)) void lsw_offcore_begin_on(int, int) {}
 extern "C" void lsw_offcore_end();
 static std::atomic<int> g_walkoff_state{-1};   // read when a walk begins, so a change applies from the next one (lsw_sched_ab_set)
 static bool walkoff_on() {
@@ -1150,7 +1151,9 @@ static void walk_off_enter() {
     if (t_walk_off || !gil_on() || g_sched_id < 0) return;
     sched_leave_turn(g_sched_id);
     static const int prio = [] { const char* e = getenv("LSWTCS_WALKOFF_PRIO"); return e ? int(strtol(e, nullptr, 0)) : 0x2D; }();
-    lsw_offcore_begin_prio(prio);
+    // Core 2 by default. Run 7's trial there shared it with shader compiles and Mesa's worker; LSWTCS_WALKOFF_CORE=1 puts it beside the render thread.
+    static const int core = [] { const char* e = getenv("LSWTCS_WALKOFF_CORE"); return e ? atoi(e) : 2; }();
+    lsw_offcore_begin_on(core, prio);
     t_walk_off = true;
 }
 static void walk_off_leave() {
@@ -4364,6 +4367,7 @@ static bool tile_skip_copy(uint32_t initiator,uint32_t dma_base,uint32_t dma_siz
     return true;
 }
 #else
+static const void* const g_tskip_repeat = nullptr;
 static inline void tile_skip_begin(uint32_t, uint32_t) {}
 static inline void tile_skip_end(uint32_t, uint32_t) {}
 #endif
@@ -5812,7 +5816,12 @@ static void pm4_process_ring_flat_impl(bool allow_drain) {
                     const size_t tl_d0 = tile_ib_log_begin(iba, ibl);
                     tile_skip_begin(iba, ibl);
                     const bool off = walk_off_ib_begin(ibl);
+                    // Off the rotation, guest threads run during the walk, so "memory cannot change inside an epoch" holds only until they do: a new one per IB narrows it.
+                    if (off) gpu_shm_new_epoch(0);
+                    const bool repeat_ib = g_tskip_repeat != nullptr;
+                    const uint64_t t_ib = repeat_ib ? gp_now() : 0;
                     pm4_extract_ib(iba, ibl, 0);
+                    if (repeat_ib) g_gpuprof[GP_WALK_REPEAT] += gp_now() - t_ib;
                     walk_off_ib_end(off);
                     tile_skip_end(iba, ibl);
                     if (g_pm4_exec_ibs) pm4_process_ib(iba, ibl, 0);
@@ -6398,9 +6407,9 @@ PPC_FUNC(__imp__VdSwap) {
                     ms(gp[GP_RTWAIT]), gp[GP_N_PAGEHASH] / 60.0, gp[GP_N_REHASH] / 60.0, gp[GP_N_MIDCHANGE] / 60.0, gp[GP_N_EPOCH] / 60.0,
                     gp[GP_N_EPOCH_ISR] / 60.0, (unsigned long long)gp[GP_N_MID_WALK], (unsigned long long)gp[GP_N_MID_ISR], (unsigned long long)gp[GP_N_MID_DRAIN]);
             { static const bool to_log = LSW_ENV_SET("LSWTCS_GPUPROFLOG");   // what the page hash costs, for tools/analyze_run.py
-              if (to_log) printf("[GPUPAGES] per frame: pages hashed %.0f, re-hashed in the same frame %.0f, changed mid-frame %.2f, epochs %.1f (isr %.1f), walk %.2f ms, record %.2f ms, skipped %.0f, sampled misses %llu\n",
+              if (to_log) printf("[GPUPAGES] per frame: pages hashed %.0f, re-hashed in the same frame %.0f, changed mid-frame %.2f, epochs %.1f (isr %.1f), walk %.2f ms, record %.2f ms, skipped %.0f, sampled misses %llu, repeat tiles %.2f ms\n",
                                  gp[GP_N_PAGEHASH] / 60.0, gp[GP_N_REHASH] / 60.0, gp[GP_N_MIDCHANGE] / 60.0, gp[GP_N_EPOCH] / 60.0, gp[GP_N_EPOCH_ISR] / 60.0,
-                                 ms(gp[GP_WALK]), ms(gp[GP_RECORD]), gp[GP_N_HASH_SKIP] / 60.0, (unsigned long long)gp[GP_N_HASH_MISS]); }
+                                 ms(gp[GP_WALK]), ms(gp[GP_RECORD]), gp[GP_N_HASH_SKIP] / 60.0, (unsigned long long)gp[GP_N_HASH_MISS], ms(gp[GP_WALK_REPEAT])); }
             dbg_ram("[GPUPROF] guest ISR inside walk=%.2fms | replay: arena->upload=%.2f diag=%.2f prepass=%.2f pso=%.2f bind=%.2f (texsrc=%.2f srv=%.2f smp=%.2f) rt=%.2f draw=%.2f\n",
                     ms(gp[GP_IRQ]), ms(gp[GP_RP_ARENA]), ms(gp[GP_RP_DIAG]), ms(gp[GP_RP_PREPASS]), ms(gp[GP_RP_PSO]), ms(gp[GP_RP_BIND]),
                     ms(gp[GP_RP_TEXSRC]), ms(gp[GP_RP_SRV]), ms(gp[GP_RP_SMP]), ms(gp[GP_RP_RT]), ms(gp[GP_RP_DRAW]));

@@ -527,6 +527,8 @@ One sample decides nothing, and any reduction in that effect is a quality decisi
 
 ## Smoke in Episode I chapter 2: what is known, and options for the owner
 
+**Corrected by run 11, below: the 61 ms was not this shader's steady cost.** It costs about 4 to 7 ms in settled frames, and the heaviest band is limited by the CPU. The fill estimate and the table here stay as the record of what was assumed, and no reduction is needed for now.
+
 The tester sees it in `Gungan_C`, as fog and smoke sheets near the waterfall and in the forest. The shader is `CEF661992D489E4B`.
 
 **Measured.**
@@ -552,9 +554,9 @@ The tester sees it in `Gungan_C`, as fog and smoke sheets near the waterfall and
 | Lower resolution for smoke only (off-screen particles) | Up to a quarter of the fill | Soft edges against geometry | Large. These draws write depth and a second target, which a lower-resolution pass cannot simply reproduce |
 | Draw fewer smoke quads | Direct | Visible thinning | Small, but a change of content; last resort |
 
-## `0.0.17-log11`: fixes from run 10, not yet run on hardware
+## `0.0.17-log11`: fixes from run 10, first run on hardware is run 11 below
 
-Run 10's analysis leads to this batch. Compiled and validated only.
+Run 10's analysis leads to this batch. This section was written before it ran on a console.
 
 - **XMA wakeup** (`lsw_xma.cc`). The worker has its own mutex, condition variable and flags, and a kick takes the lock only if the worker is asleep. Expected: `svcArbitrateLock` back near run 8's 0.7 % of the heavy turn. What FPS that returns is the main question of the next run.
 - **P's comparison** (`gl_bridge.cc`). Floats compare by bits. A real difference now prints which value, both bit patterns and the shader keys, and still turns reuse off. If no mismatch appears, this run gives the first real reading of P in gameplay.
@@ -568,3 +570,74 @@ Run 10's analysis leads to this batch. Compiled and validated only.
 **Considered and left out.** `fill_fetch_derived` (1.6 % of the heavy turn in run 10): all of run 10's gameplay ran it per draw because P was off, and P's reuse avoids it on many draws. A dirty mask per fetch slot could remove the rest, but a missed write would show as a wrong LOD and P's check could not catch it unless it recomputed everything, which is not worth about 1 %.
 
 **Reading the next run.** A warm shader cache is expected, so compile time should be near 49 s; if not, the inference in run 10 was wrong. `tools/analyze_run.py` prints milliseconds per Mpx for the costliest programs.
+
+## Run 11: first hardware run of `0.0.17-log11`, 2 November 2026
+
+Handheld at stock clocks, 9,180 frames in 375 s, no crash, stderr empty, six full captures, all taken for material and none for a fault. Levels: `Map\Map`, `Gungan_A`, `Gungan_B`. Archived in `private/runs/run11-log11`. About 60 s at 5000 draws or more. State slices are short and land on different scenes, so per-state numbers are indications.
+
+**The lock is still there, and the cause is now exact.** `svcArbitrateLock` is 20.0 % of the heavy turn (22.2 in run 10), 19.6 points of it on the audio thread. All sampled call sites of the mapped return address, offset 0x224 in `lswtcs_xma_mmio_store`, are the empty `lock_guard` on `g_wake_mx` in `wake_worker`, by disassembly. So this version's fix moved the wait instead of removing it. A likely reason, from how the kernel's condition variable works and not measured: a waking thread owns the mutex as soon as it is signalled or times out, before it gets a core, so the kick waits until the worker is scheduled on busy core 2. Run 10's stack named `SetEvent`, and the same effect there would explain it.
+Fix: notify without the mutex. A wakeup lost in the small window before the wait costs at most the 4 ms timeout.
+
+**The heaviest band is limited by the CPU.** At 4000 draws or more: frame 91 ms, replay 36 ms, GPU wait 0, and the scheduler's idle share is near 0 % during those stretches. `[GLSPAN]` shows draws to present of about 31 ms at the median. So the 20 % lock acts directly on that band, though how much FPS it returns stays to be seen.
+
+**The smoke was misread.** `CEF661992D489E4B` over 14 samples: 84 and 39 ms in the two frames beside a texture load (`[GLSTALL]` replay 3735: 1,410 ms, of it 422 decode and 893 upload), then 4 to 7 ms in settled heavy frames, with 0.2 to 0.8 Mpx passing. Run 10's sample, replay 10800 at t≈350, came just as the game went from 64 draws to about 5000, so it probably was the same kind of frame; its texture load was not checked. Other programs show the same pattern: 45.84 ms over 54 draws with 0.00 Mpx (`8C2CA6604C9FBA06`), 26.27 ms over 6 draws with 0.00 Mpx (`5F9BA8D0CD24F9D6`). So a large per-program figure in `[GLGPU]` can be a wait charged to whichever draw follows it, and is not fill. Passed samples leave out discarded and depth-failed pixels, so this does not count overdraw, but it bounds what the smoke costs. Whole frames pass 10 to 14 Mpx in levels.
+
+**P works, and the alarm was probably false.** 7.9 M calls, 5.37 M reuses (68 %), 20,983 checks, no mismatch, against one after 326,400 reuses before comparing by bits. Heavy frames, medians of 13 to 21 samples: walk 15.6 ms and record 12.0 ms with P (MAPXS), against 19.6 and 15.6 without (MAXS). `prepare_full` 1.7 → 0.7 % and `fill_fetch_derived` 1.6 → 1.0 % of the heavy turn.
+
+**Captures.** The save windows are gone: 99 to 104 MB of images in 13.9 to 15.6 s (23 to 31 MB on the card), against about 100 s. Writing takes 2.1 to 3.4 s and opening, sizing and closing 3.6 to 5.3 s; the rest is mostly encoding. The session's frames of 500 ms or more: 12, against 101 in run 10. What remains is one freeze of 2 to 4.4 s at the moment of each capture, on the render thread's read-backs, which is the tool's own cost.
+The pause between writes shows nothing: frames of 200 ms or more in the following 16 s were 6, 4 and 2, 3, 6 across paced and unpaced, on different scenes, and the two kinds overlap. Since the kick waits above no longer point to the file system, the starvation hypothesis has lost its evidence, though this does not disprove it. The pause should go. Only 5 `[CAPSAVE]` lines for 6 captures: the session ended inside the last save or it merged with another; not checked.
+
+**H.** Hashed 1276 against 2107 pages, re-hashed 99 against 1090, sampled misses 0 again. Walk and record did not clearly improve over MAPXS here (16.3 and 11.3 against 15.6 and 12.0), while XXH3 is 8.9 % of the heavy turn. Still the owner's decision.
+
+**Shader cache.** 32 s of worker time against 196 s, as inferred from run 10, and no compile failure.
+
+**FPS by recorded draws**, gaps of 1 s or more removed, run 10 outside its capture saves:
+
+| Draws | Run 10 FPS | Run 10 median ms | Run 11 FPS | Run 11 median ms | Run 10 audio | Run 11 audio |
+|---|---:|---:|---:|---:|---:|---:|
+| 300-800 | 25.1 | 36 | 31.2 | 31 | 80 % | 84 % |
+| 800-1300 | 20.0 | 46 | 21.6 | 42 | 76 % | 79 % |
+| 1300-1900 | 20.2 | 46 | 20.8 | 40 | 82 % | 87 % |
+| 2500-3100 | 16.6 | 56 | 19.1 | 50 | 57 % | 71 % |
+| 3100-4000 | 14.3 | 70 | 15.6 | 58 | 49 % | 69 % |
+| 4000-5000 | 11.9 | 78 | 12.3 | 75 | 69 % | 61 % |
+| 5000+ | 9.5 | 100 | 10.1 | 96 | 59 % | 52 % |
+
+Some rows are short (6 to 16 s). The audio queue was empty 6.67 % of the time, longest 819 ms, against 5.25 % and 851 ms, in a session with more heavy play for its length. Audio in heavy scenes is still far from real time.
+
+**Next:** notify without the mutex, remove the pause, and look at the remaining record path: XXH3 8.9, `pm4_extract_ib` 7.5 %.
+
+## CPU plan after run 11
+
+The limit in heavy scenes is one thing: guest threads run one at a time on core 0, and that core has no idle time. Cores 1 and 2 have room (render 29 %, XMA 14 %, Mesa's worker 14 %, averaged over the session). So a faster Deko3D renderer would not lift these scenes until this does.
+
+**Where the turn goes, heaviest band, run 11.** At about 91 ms per frame, by `[SCHEDPROF]`, roughly a third each:
+
+| Thread | Share of turn | What it does |
+|---|---:|---|
+| Main (`guest_00000000/0`) | 32.7 % | 78 % guest code, spread thin; 14 % of it is also PM4 walking |
+| Command thread (`822D2AB0`) | 32.7 % | 99 % host: the PM4 walk and draw records. XXH3 20 %, `pm4_extract_ib` 21 % of this thread |
+| Audio (`827DB318`) | 28.6 % | 68 % of it waiting on the lock; the rest is mostly guest mixing |
+
+So the game's own code is about a third of the turn. The rest is this port's overhead, which is good news: most of it does not depend on the generated code.
+
+**Options, by expected gain.** Percentages are of the heavy turn, from samples. None is measured as an FPS gain, and they do not simply add.
+
+| Option | Turn it can free | Risk | Status |
+|---|---:|---|---|
+| XMA kick without a lock | up to 20 % | Low | `0.0.18-log12` |
+| PM4 walk off the turn (W) | up to about 30 % | High: rejected in run 7, cause unknown | Second, separate session in `0.0.18-log12` |
+| Not re-walking repeated tile IBs | perhaps 5 % | Medium: a wrong viewport in a later tile | `0.0.18-log12` measures it (`repeat tiles` in `[GPUPAGES]`); replaces the 2 % guessed for `0.0.16-log10` |
+| Page hash per frame (H) | up to about 4 % | Owner's: can miss a page changed mid-frame | In A/B, sampled misses 0 in two runs |
+| Page hashes on a helper core, valid for the epoch they ran in | up to about 5 % | Medium, complex: most epochs are short | Not started. Sound only with the walk on the turn |
+| Native audio mixers `sub_827E51D0`, `sub_827F5990` | 2 to 3 % | Low with a compare mode; `tools/gen_native_reverb.py` is the pattern | Next batch, if audio stays heavy |
+| LTO, then direct calls, PGO | about 3 % of the frame, if bo2-360-nx's 10 % holds on the guest third | Build memory, a retrain per change | After the host overhead |
+| Plain guest memory instead of volatile | unknown, bo2-360-nx's 5.8 % was shared with other changes | Medium to high | After an audit |
+| Guest threads truly in parallel | largest | Largest: the scheduler keeps this game stable | Owner's decision, not routine work |
+| Higher CPU clock | direct | None technical; run conditions change | Owner's decision |
+
+**One caution on the lock.** Audio runs at about 52 % of real time in the heaviest band. Its work is per second of sound, so as it catches up it takes back part of what the lock frees: better audio, and less FPS than the 20 % suggests.
+
+**Why W is worth one more look, and why apart.** Run 7's trial ran on core 2 with shader compiles and Mesa's worker on a cold cache, and the walk assumed memory cannot change inside an epoch, which is false off the turn. Both may explain its faults; neither is shown. `profiles/hardware-walk.env` cycles MAPXS and MAPXSW, on core 1 with a new epoch per IB. It remains a test, not a recommendation, and running guest code beside the walk still needs the owner's view before it could ever be default.
+
+**`0.0.18-log12`:** the kick notifies without the mutex, the capture pause is gone, `LSWTCS_WALKOFF_CORE` and the repeat-tile timer are added. Next run: lock share, FPS and audio by band against run 11, repeat-tile time; then W's session: black rows in history frames, `[GSPIKE]`, FPS against MAPXS.

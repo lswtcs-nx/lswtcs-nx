@@ -123,12 +123,9 @@ std::deque<Job> g_jobs;
 size_t g_job_bytes = 0;
 constexpr size_t kJobBytesMax = size_t(192) << 20;   // beyond this the caller drops the work
 
-// What one capture's files cost, for [CAPSAVE]. Only the background thread touches these. Whether SD writes starve the GPU's kicks is a hypothesis from
-// run 10 (file system and nvservices may share the system core), so every other capture pauses after each write for as long as the write took: the two
-// kinds can then be compared by the slow frames during their saves.
-struct CaptureCost { uint64_t written, writes, write_ns, longest_ns, file_ns, pause_ns; };
+// What one capture's files cost, for [CAPSAVE]. Only the background thread touches these.
+struct CaptureCost { uint64_t written, writes, write_ns, longest_ns, file_ns; };
 CaptureCost g_cost;
-bool g_capture_paced = false;
 inline uint64_t now_ns() { return armTicksToNs(armGetSystemTick()); }
 
 void job_main() {
@@ -137,7 +134,7 @@ void job_main() {
     svcSetThreadCoreMask(CUR_THREAD_HANDLE, 1, 1u << 1);
     svcSetThreadPriority(CUR_THREAD_HANDLE, 0x3A);
     lsw_prof_register("bg_files", -1);
-    uint64_t done = 0, batch_ns = 0, batch_bytes = 0, last_end_ns = 0;
+    uint64_t done = 0, batch_ns = 0, batch_bytes = 0;
     for (;;) {
         Job job;
         {
@@ -149,8 +146,6 @@ void job_main() {
         if (job.capture && !batch_bytes) {
             batch_ns = now_ns();
             g_cost = CaptureCost{};
-            // A queue that ran dry in the middle of one capture is still that capture.
-            if (batch_ns - last_end_ns > 10000000000ull) g_capture_paced = !g_capture_paced;
         }
         job.run();
         ++done;
@@ -162,12 +157,11 @@ void job_main() {
             empty = g_jobs.empty();
         }
         if (empty && batch_bytes) {
-            printf("[CAPSAVE] all capture files written (%llu so far): %.0f MB in %.1f s; %.0f MB on the card, %llu writes, %.1f s writing, longest %.0f ms, %.1f s open/size/close, %.1f s paused (%s)\n",
+            printf("[CAPSAVE] all capture files written (%llu so far): %.0f MB in %.1f s; %.0f MB on the card, %llu writes, %.1f s writing, longest %.0f ms, %.1f s open/size/close\n",
                    (unsigned long long)done, batch_bytes / 1048576.0, (now_ns() - batch_ns) / 1e9, g_cost.written / 1048576.0, (unsigned long long)g_cost.writes,
-                   g_cost.write_ns / 1e9, g_cost.longest_ns / 1e6, g_cost.file_ns / 1e9, g_cost.pause_ns / 1e9, g_capture_paced ? "paced" : "not paced");
+                   g_cost.write_ns / 1e9, g_cost.longest_ns / 1e6, g_cost.file_ns / 1e9);
             fflush(stdout);
             batch_bytes = 0;
-            last_end_ns = now_ns();
         }
     }
 }
@@ -195,11 +189,6 @@ bool lsw_capture_write(int fd, const uint8_t* data, size_t size) {
     ++g_cost.writes;
     g_cost.write_ns += took;
     g_cost.longest_ns = std::max(g_cost.longest_ns, took);
-    if (g_capture_paced) {
-        const uint64_t pause = std::min<uint64_t>(took, 50000000);
-        svcSleepThread(int64_t(pause));
-        g_cost.pause_ns += pause;
-    }
     return true;
 }
 void lsw_capture_close(int fd, size_t final_size) {

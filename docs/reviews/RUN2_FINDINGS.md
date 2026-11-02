@@ -1007,3 +1007,28 @@ C costs audio and gives nothing, and is dropped. R and G are within noise of tod
 - The ceiling is small: about 21 % of the XAudio thread's turn, roughly 3-4 % of the heavy-frame turn. What it tests is the
   mechanism (guest code beside the turn holder) and whether it eases the audio.
 - States `MAPXSHN`, `MAPXSHNU`, `MAPXSHNRG`, `MAPXSHNRGU`: U crossed with RG, whose gain cost audio in runs 23-25.
+
+## Run 26: `0.0.31-log25`, 2 November 2026
+
+`Gungan_A` to `C` and back to the hub; no crash, no capture. Archived in `private/runs/run26-log25`.
+
+- **U never left the turn.** No profile sample passed through the off-turn path, and `[AUDIOOFF]` printed nothing: it printed every
+  20,000th off-turn call. The mixer's caller chain takes the XAudio voice lock (`sub_827F1258`: `KeRaiseIrqlToDpcLevel`,
+  `KeAcquireSpinLockAtRaisedIrql`), so the guard kept every call on the turn.
+- **That guard was right.** `KeAcquireSpinLockAtRaisedIrql` and `KfAcquireSpinLock` took nothing: they counted a depth and relied on
+  the one guest turn for exclusion. A thread holding such a "lock" that left the turn would let another enter the same section.
+- FPS and audio by state are within noise of each other, as expected with U inert (at 4000+ draws: today's 15.1 FPS, U 14.9, RG
+  14.1, RGU 15.6). U's audio read 99 % filled there, against 56-72 % for the others, over 15 s; with U inert, that is the scene.
+- `[PARALLEL]` again: the main thread waits 41-50 % of the time and XAudio 40-44 %.
+
+## `0.0.32-log26`: real guest spinlocks (state L)
+
+- **L:** the spinlock stubs take the guest lock word by compare-and-swap, with a tag for this thread. A waiter spins and hands the
+  turn on meanwhile, or only yields the core if it is off the turn. A release clears the word whenever it holds this thread's tag,
+  whatever L is at that moment. A lock taken while L was off stays held through the turn, and keeps its holder on the turn.
+- **Known risk.** At the moment L switches on, a thread holding a turn-only lock and a thread taking it for real could both be inside.
+  The states change every 15 s and the sections are short; for a test only.
+- **U** may now leave the turn under a spinlock when every lock this thread holds is real.
+- `[AUDIOOFF]` prints every 2,000 calls with the off-turn count, the cost per call, and real locks taken and waited for.
+- States `MAPXSHN`, `MAPXSHNL`, `MAPXSHNLU`, `MAPXSHNRGLU`. L alone shows the cost of real locks; LU the first guest code beside
+  the turn; RGLU whether that gives back the audio RG cost.

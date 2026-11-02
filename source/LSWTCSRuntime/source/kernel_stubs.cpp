@@ -1280,6 +1280,53 @@ thread_local unsigned g_spin_dbg[8];   // DIAG: calls per site (0 KfAcq 1 KfRel 
 static int spinguard_on() { static int s=-1; if(s<0){ const char* e=getenv("LSWTCS_SPINGUARD"); s=(e&&e[0]=='0')?0:1; } return s; }
 extern "C" void lswtcs_spin_enter() { if (spinguard_on()) g_spinlock_depth++; }
 extern "C" void lswtcs_spin_leave() { if (spinguard_on() && g_spinlock_depth > 0) g_spinlock_depth--; }
+// A/B state L: guest spinlocks (KfAcquireSpinLock, KeAcquireSpinLockAtRaisedIrql, KeTryTo...) are really taken: the lock word gets
+// this thread's tag by compare-and-swap, and a waiter spins, handing the turn on while it does. Until log26 the stubs only counted
+// the depth and relied on the one guest turn for exclusion (the holder is not preempted for 8 quanta), so no guest code holding a
+// spinlock could leave the turn. Run 26: the second audio mixer is always called under the XAudio voice lock (sub_827F1258), so state
+// U never ran it off the turn. A lock taken while L was off stays "turn-held" (g_spin_turn_depth) and keeps its holder on the turn.
+// A release clears the word whenever it holds this thread's tag, whatever L is now. Switching L on while another thread holds a
+// turn-held lock opens a short window where both could enter; the states change every 15 s, so this is a known test-only risk.
+static std::atomic<bool> g_spin_real{false};
+extern "C" void lsw_spin_real_set(int on) { g_spin_real.store(on != 0, std::memory_order_relaxed); }
+thread_local int g_spin_turn_depth = 0;   // spinlocks this thread holds only through the turn
+static std::atomic<uint64_t> g_spin_real_taken{0}, g_spin_real_waits{0};
+static void sched_yield_turn();
+static inline uint32_t spin_tag() { return 0x4C535700u | uint32_t(g_sched_id + 2); }   // nonzero, any byte order
+static bool spin_lock_ok(uint32_t lock) { return lock >= 0x80000000u && lock < 0xC0000000u && !(lock & 3); }
+static void spin_acquire(uint8_t* base, uint32_t lock) {
+    lswtcs_spin_enter();
+    if (!g_spin_real.load(std::memory_order_relaxed) || !spin_lock_ok(lock)) { ++g_spin_turn_depth; return; }
+    volatile uint32_t* w = reinterpret_cast<volatile uint32_t*>(PPC_HOST(lock));
+    const uint32_t tag = spin_tag();
+    bool waited = false;
+    while (!__sync_bool_compare_and_swap(w, 0u, tag)) {
+        waited = true;
+        if (!g_guest_off_turn && g_sched_id >= 0 && g_sched_turn == g_sched_id) sched_yield_turn();
+        else std::this_thread::yield();
+    }
+    ++g_spin_real_taken;
+    if (waited) ++g_spin_real_waits;
+}
+static bool spin_try(uint8_t* base, uint32_t lock) {
+    if (!g_spin_real.load(std::memory_order_relaxed) || !spin_lock_ok(lock)) { lswtcs_spin_enter(); ++g_spin_turn_depth; return true; }
+    volatile uint32_t* w = reinterpret_cast<volatile uint32_t*>(PPC_HOST(lock));
+    if (!__sync_bool_compare_and_swap(w, 0u, spin_tag())) return false;
+    lswtcs_spin_enter();
+    ++g_spin_real_taken;
+    return true;
+}
+static void spin_release(uint8_t* base, uint32_t lock) {
+    lswtcs_spin_leave();
+    if (spin_lock_ok(lock)) {
+        volatile uint32_t* w = reinterpret_cast<volatile uint32_t*>(PPC_HOST(lock));
+        if (__sync_bool_compare_and_swap(w, spin_tag(), 0u)) return;
+    }
+    if (g_spin_turn_depth > 0) --g_spin_turn_depth;
+}
+// For audio_offturn.cpp: true when every spinlock this thread holds is really taken (so it may leave the turn while holding them).
+extern "C" bool lsw_spin_all_real() { return g_spin_turn_depth == 0; }
+extern "C" void lsw_spin_report(uint64_t* taken, uint64_t* waits) { *taken = g_spin_real_taken.load(); *waits = g_spin_real_waits.load(); }
 static std::atomic<int> g_qdiv_ab{0};
 extern "C" void lsw_quantum_div_set(int n) { g_qdiv_ab.store(n, std::memory_order_relaxed); }
 extern "C" void lswtcs_gil_quantum() {
@@ -1447,8 +1494,8 @@ PPC_FUNC(__imp__RtlInitializeCriticalSectionAndSpinCount) {
 
 // ── Spinlocks ─────────────────────────────────────────────────────────────────
 extern "C" void lswtcs_spin_enter(); extern "C" void lswtcs_spin_leave();
-PPC_FUNC(__imp__KfAcquireSpinLock) { PPC_FUNC_PROLOGUE(); ++g_spin_dbg[0]; lswtcs_spin_enter(); ctx.r3.u32 = 0; }  // returns old IRQL
-PPC_FUNC(__imp__KfReleaseSpinLock) { PPC_FUNC_PROLOGUE(); ++g_spin_dbg[1]; lswtcs_spin_leave(); }
+PPC_FUNC(__imp__KfAcquireSpinLock) { PPC_FUNC_PROLOGUE(); ++g_spin_dbg[0]; spin_acquire(base, ctx.r3.u32); ctx.r3.u32 = 0; }  // returns old IRQL
+PPC_FUNC(__imp__KfReleaseSpinLock) { PPC_FUNC_PROLOGUE(); ++g_spin_dbg[1]; spin_release(base, ctx.r3.u32); }
 
 // ── TLS ───────────────────────────────────────────────────────────────────────
 // Per-thread (correct: KeTls* is thread-local on the 360). This is now SAFE because
@@ -6996,7 +7043,7 @@ PPC_FUNC(__imp__XeCryptShaUpdate)           { PPC_FUNC_PROLOGUE(); }
 PPC_FUNC(__imp__XexGetModuleHandle)         { PPC_FUNC_PROLOGUE(); LSW_XSTUB_LOG(); ctx.r3.u32 = 0; }
 PPC_FUNC(__imp__XexGetProcedureAddress)     { PPC_FUNC_PROLOGUE(); LSW_XSTUB_LOG(); ctx.r3.u32 = 0; }
 PPC_FUNC(__imp__ExRegisterTitleTerminateNotification) { PPC_FUNC_PROLOGUE(); ctx.r3.u32 = 0; }
-PPC_FUNC(__imp__KeAcquireSpinLockAtRaisedIrql) { PPC_FUNC_PROLOGUE(); ++g_spin_dbg[2]; lswtcs_spin_enter(); ctx.r3.u32 = 0; }
+PPC_FUNC(__imp__KeAcquireSpinLockAtRaisedIrql) { PPC_FUNC_PROLOGUE(); ++g_spin_dbg[2]; spin_acquire(base, ctx.r3.u32); ctx.r3.u32 = 0; }
 PPC_FUNC(__imp__KeInitializeSemaphore) {
     PPC_FUNC_PROLOGUE();
     // r3=*KSEMAPHORE, r4=count, r5=limit. X_KSEMAPHORE = DISPATCHER_HEADER(16) + limit(+16).
@@ -7044,8 +7091,8 @@ PPC_FUNC(__imp__KeReleaseSemaphore) {
     kw_notify();
     ctx.r3.u32 = prev;
 }
-PPC_FUNC(__imp__KeReleaseSpinLockFromRaisedIrql) { PPC_FUNC_PROLOGUE(); ++g_spin_dbg[4]; lswtcs_spin_leave(); }
-PPC_FUNC(__imp__KeTryToAcquireSpinLockAtRaisedIrql) { PPC_FUNC_PROLOGUE(); ++g_spin_dbg[5]; lswtcs_spin_enter(); ctx.r3.u32 = 1; }  // always "acquires" under the GIL
+PPC_FUNC(__imp__KeReleaseSpinLockFromRaisedIrql) { PPC_FUNC_PROLOGUE(); ++g_spin_dbg[4]; spin_release(base, ctx.r3.u32); }
+PPC_FUNC(__imp__KeTryToAcquireSpinLockAtRaisedIrql) { PPC_FUNC_PROLOGUE(); ++g_spin_dbg[5]; ctx.r3.u32 = spin_try(base, ctx.r3.u32) ? 1 : 0; }  // without L: always "acquires" under the GIL
 PPC_FUNC(__imp__KfLowerIrql) { PPC_FUNC_PROLOGUE(); ++g_spin_dbg[6]; ctx.r3.u32 = 0; }  // not counted (see KeRaiseIrqlToDpcLevel)
 PPC_FUNC(__imp__MmGetPhysicalAddress) { PPC_FUNC_PROLOGUE(); /* virt == phys in our port */ }
 PPC_FUNC(__imp__XAudioGetVoiceCategoryVolume) { PPC_FUNC_PROLOGUE(); ctx.r3.u32 = 0; }

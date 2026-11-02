@@ -72,6 +72,10 @@ What has to change before two guest threads may run at once, from reading the co
    allocator (has a host mutex), file I/O stubs, the scheduler's own counters and `lswtcs_gil_ctr`.
 5. **Atomics** already map to host compare-and-swap (`LSW_GUEST_CAS`), and guest critical sections to host mutexes, which helps.
 
+**Spinlocks were exclusion by the turn alone** until log26: the `KfAcquireSpinLock` / `KeAcquireSpinLockAtRaisedIrql` stubs
+only counted a depth. State L (log26) takes the lock word for real; any guest code that leaves the turn while holding a spinlock needs
+it. This is item 2 of the list above, done for spinlocks only.
+
 **Started in log25 (state U, `audio_offturn.cpp`):** one pure guest function of the XAudio thread, `sub_827F5990`, runs off the turn
 on core 2 while other guest threads hold it. The pattern applies to any guest function that touches only its own buffers: check the
 recompiled body for imports, spinlocks, atomics and calls, override the weak symbol, and run it inside `lswtcs_gil_blocking_urgent`

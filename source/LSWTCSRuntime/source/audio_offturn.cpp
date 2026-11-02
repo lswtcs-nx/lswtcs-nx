@@ -23,6 +23,8 @@ extern "C" __attribute__((weak)) void lsw_offcore_begin() {}   // Switch: platfo
 extern "C" __attribute__((weak)) void lsw_offcore_end() {}
 extern thread_local int g_spinlock_depth;   // kernel_stubs.cpp
 extern thread_local bool g_guest_off_turn;  // kernel_stubs.cpp
+extern "C" bool lsw_spin_all_real();        // kernel_stubs.cpp: every spinlock held is really taken (state L)
+extern "C" void lsw_spin_report(uint64_t* taken, uint64_t* waits);
 
 namespace {
 std::atomic<bool> g_on{[] { const char* e = getenv("LSWTCS_AUDIOOFF"); return e && e[0] == '1'; }()};
@@ -38,8 +40,22 @@ extern "C" void lsw_audio_offturn_set(int on) { g_on.store(on != 0, std::memory_
 // Strong definition: replaces the recompiled sub_827F5990 (a weak alias).
 PPC_FUNC(sub_827F5990) {
     ++g_calls;
-    if (!g_on.load(std::memory_order_relaxed) || g_guest_off_turn) { __imp__sub_827F5990(ctx, base); return; }
-    if (g_spinlock_depth > 0) { ++g_locked; __imp__sub_827F5990(ctx, base); return; }
+    if (!g_on.load(std::memory_order_relaxed) || g_guest_off_turn) {
+        __imp__sub_827F5990(ctx, base);
+        if ((g_calls % 2000) == 0) { printf("[AUDIOOFF] %llu calls (U off now), %llu off the turn so far\n", (unsigned long long)g_calls, (unsigned long long)g_off); fflush(stdout); }
+        return;
+    }
+    // Under a spinlock only when it is really taken (state L); a lock held only through the turn keeps the call on the turn.
+    if (g_spinlock_depth > 0 && !lsw_spin_all_real()) {
+        ++g_locked;
+        __imp__sub_827F5990(ctx, base);
+        if ((g_calls % 2000) == 0) {
+            printf("[AUDIOOFF] %llu calls, %llu off the turn, %llu kept on: a spinlock held through the turn\n", (unsigned long long)g_calls,
+                   (unsigned long long)g_off, (unsigned long long)g_locked);
+            fflush(stdout);
+        }
+        return;
+    }
     Job job{&ctx, base, 0};
     const uint64_t t0 = now_ns();
     lswtcs_gil_blocking_urgent([](void* p) {
@@ -55,10 +71,14 @@ PPC_FUNC(sub_827F5990) {
     ++g_off;
     g_dsp_ns += job.dsp_ns;
     g_off_ns += now_ns() - t0;
-    if ((g_off % 20000) == 0) {
-        printf("[AUDIOOFF] %llu calls, %llu off the turn (%llu kept on: a spinlock held), per call %.3f ms mixing, %.3f ms with the handoffs\n",
-               (unsigned long long)g_calls, (unsigned long long)g_off, (unsigned long long)g_locked, g_dsp_ns / 1e6 / g_off,
-               g_off_ns / 1e6 / g_off);
+    // Run 26 printed nothing (every 20,000th call, and none went off): now every 2,000 calls, off or not.
+    if ((g_calls % 2000) == 0) {
+        uint64_t taken = 0, waits = 0;
+        lsw_spin_report(&taken, &waits);
+        printf("[AUDIOOFF] %llu calls, %llu off the turn (%llu kept on: a spinlock held through the turn), per call %.3f ms mixing, "
+               "%.3f ms with the handoffs | real spinlocks taken %llu, waited %llu\n",
+               (unsigned long long)g_calls, (unsigned long long)g_off, (unsigned long long)g_locked, g_off ? g_dsp_ns / 1e6 / g_off : 0.0,
+               g_off ? g_off_ns / 1e6 / g_off : 0.0, (unsigned long long)taken, (unsigned long long)waits);
         fflush(stdout);
     }
 }

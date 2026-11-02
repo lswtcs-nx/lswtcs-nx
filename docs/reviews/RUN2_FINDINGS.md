@@ -786,3 +786,21 @@ Handheld at stock clocks, 10,020 frames in 389 s, levels `Map\Map`, `Gungan_A/B/
 - **Reading it:** `[GPUPAGES]` for an H miss; FPS per band by state; the guest-turn handoff rate and `[AUDIO]` fill under Q; `[NX] process core mask` and `[CORE3]`.
 
 **Guest threads on several cores: not attempted, and why.** All guest threads take one turn on core 0 (the cooperative scheduler). Letting two run at once looks possible in part: guest atomics are real compare-and-swap, and guest critical sections map to host mutexes. But the kernel stubs (events, semaphores, thread state, the GPU ring) assume only one guest thread runs, and the recompiled code relies on the turn for memory ordering the 360 gave by `lwsync`/`sync`. Lifting that is an audit of every kernel stub and of barrier translation, with data races that show up only as rare corruption. It is an architectural decision for the owner. The least risky first step would be one thread that touches little shared state, the audio thread (12 % of the heavy turn), on its own core.
+
+## `0.0.23-log17` (draft): why W stopped the picture, and the fix
+
+**What W does.** The thread that walks the ring (VdSwap, or a guest wait for GPU progress) leaves the guest turn for each large IB and walks it on core 1, so the other guest threads run meanwhile. Guest code inside the walk (the GPU interrupt, wait-register polls) takes the turn back first (`WalkNeedsTurn`). Other threads that need the ring walked wait for the walker (`walk_wait_other`).
+
+**The fault, found by reading the code, not yet confirmed on hardware.** `g_walk_off_sid` was cleared at the end of each IB, and a waiter woken by that went on as soon as it got the turn back, without checking again. It gets the turn when the walker leaves it, which is usually for the next IB. So it found a walk still going on, and:
+- a GPU wait (`pm4_walk_now`, behind BlockOnFence, ring-space and phase waits) took its re-entrant path and reported the awaited fence or ring space done while the walker had not read it yet. The game then reuses that memory, which is what a black tile band and a frozen picture would look like;
+- a VdSwap that waited started a second walker over the same ring, with the same globals.
+
+Neither happens with the walk on the turn, because then no other guest thread runs during it. The tile worker stuck in `KeWaitForSingleObject` in run 12 fits a lost or corrupted tile list, but that link is not shown.
+
+**The fix.** `g_walk_off_sid` is now set exactly while the walker is off the turn: set before it leaves, cleared after it has the turn back, also around `WalkNeedsTurn`. A waiter checks again every time it holds the turn. Other threads then see what they see with the walk on the turn. `[GPUPAGES]` counts `walk-off waits` and `again`: the second number is how often the old code would have gone on wrongly.
+
+**Not covered.** With the walk on the turn, a wait-register poll inside the walk yields the turn with the walk half done, and a VdSwap then could start a second walker; the fix keeps that as it was. Guest threads now also write memory while it is walked. The 360's GPU had the same contract, but the H page hash (new epoch per IB in W) may see more mid-frame changes.
+
+**What it could give.** In the heavy band the walk and recording are about 20 ms of a 75 ms frame with H. Off the turn, the main thread (44 % of the turn) and audio can run beside them, so the gain is at most the walk's share. The thread that kicked the walk still waits for it. Xenia's model goes further: its command processor is a thread of its own that reads the ring while every guest thread runs. That is the next step if this one holds.
+
+**Session:** `profiles/hardware-walk.env`, `MAPXSN,MAPXSNW,MAPXSHN,MAPXSHNW`, walk on core 1, separate from the main A/B session.

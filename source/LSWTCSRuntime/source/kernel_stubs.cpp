@@ -1143,12 +1143,20 @@ extern "C" void lsw_sched_ab_set(int audioprio, int walkoff) {
     g_audioprio_mode.store(audioprio ? 1 : 0, std::memory_order_relaxed);
     g_walkoff_state.store(walkoff ? 1 : 0, std::memory_order_relaxed);
 }
+// Runs 7 and 12 (W rejected): the walker cleared g_walk_off_sid only at the end of an IB, and a waiter woken by that went on
+// once it got the turn back, without looking again. It gets the turn when the walker leaves it, which is usually for the next
+// IB, so it found the walk going on: pm4_walk_now then took its re-entrant path and reported the awaited fence done while the
+// walker had not read it, and VdSwap's walk started a second walker over the same ring. Now g_walk_off_sid is set exactly while
+// the walker is off the rotation (also not during WalkNeedsTurn), and a waiter checks again each time it holds the turn, so the
+// other threads see what they would see with the walk on the turn.
 static thread_local bool t_walk_off = false;      // this thread is walking off the rotation right now
-static std::atomic<int> g_walk_off_sid{-1};       // scheduler id of the thread with an off-rotation walk in progress
+static std::atomic<int> g_walk_off_sid{-1};       // scheduler id of the thread off the rotation in a walk, -1 = none
 static std::mutex g_walk_mtx;
 static std::condition_variable g_walk_cv;
+static std::atomic<uint64_t> g_walk_waits{0}, g_walk_rewaits{0};   // [GPUPAGES]: waits for that walker; waits again after one
 static void walk_off_enter() {
     if (t_walk_off || !gil_on() || g_sched_id < 0) return;
+    { std::lock_guard<std::mutex> lk(g_walk_mtx); g_walk_off_sid.store(g_sched_id); }   // before the turn passes on
     sched_leave_turn(g_sched_id);
     static const int prio = [] { const char* e = getenv("LSWTCS_WALKOFF_PRIO"); return e ? int(strtol(e, nullptr, 0)) : 0x2D; }();
     // Core 2 by default. Run 7's trial there shared it with shader compiles and Mesa's worker; LSWTCS_WALKOFF_CORE=1 puts it beside the render thread.
@@ -1161,6 +1169,8 @@ static void walk_off_leave() {
     t_walk_off = false;
     lsw_offcore_end();
     sched_rejoin_urgent(g_sched_id);
+    { std::lock_guard<std::mutex> lk(g_walk_mtx); g_walk_off_sid.store(-1); }   // after: holding the turn again
+    g_walk_cv.notify_all();
 }
 struct WalkNeedsTurn {   // guest code / guest waits inside an off-rotation walk: hold the turn meanwhile
     bool was = t_walk_off;
@@ -1171,24 +1181,23 @@ struct WalkNeedsTurn {   // guest code / guest waits inside an off-rotation walk
 static bool walk_off_ib_begin(uint32_t len) {
     static const uint32_t min_len = [] { const char* e = getenv("LSWTCS_WALKOFF_MIN"); return e ? uint32_t(atoi(e)) : 4096u; }();
     if (!walkoff_on() || len < min_len || t_walk_off || !gil_on() || g_sched_id < 0) return false;
-    g_walk_off_sid.store(g_sched_id);
     walk_off_enter();
     return true;
 }
 static void walk_off_ib_end(bool began) {
-    if (!began) return;
-    walk_off_leave();
-    { std::lock_guard<std::mutex> lk(g_walk_mtx); g_walk_off_sid.store(-1); }
-    g_walk_cv.notify_all();
+    if (began) walk_off_leave();
 }
 // Called by any thread before it walks the ring or relies on it being walked: if another thread's walk is off the
 // rotation, wait (off the rotation too) until it is done.
 static void walk_wait_other() {
-    const int w = g_walk_off_sid.load();
-    if (w < 0 || w == g_sched_id) return;
-    GilYield y;
-    std::unique_lock<std::mutex> lk(g_walk_mtx);
-    g_walk_cv.wait(lk, [] { const int v = g_walk_off_sid.load(); return v < 0 || v == g_sched_id; });
+    for (bool again = false;; again = true) {
+        const int w = g_walk_off_sid.load();
+        if (w < 0 || w == g_sched_id) return;
+        ++(again ? g_walk_rewaits : g_walk_waits);
+        GilYield y;   // released last: the turn is taken back after the lock below, then the walker is checked again
+        std::unique_lock<std::mutex> lk(g_walk_mtx);
+        g_walk_cv.wait(lk, [] { const int v = g_walk_off_sid.load(); return v < 0 || v == g_sched_id; });
+    }
 }
 
 // DIAG: one-line scheduler snapshot (turn holder, alive/runnable ids), called from a host thread.
@@ -6547,9 +6556,10 @@ PPC_FUNC(__imp__VdSwap) {
                     ms(gp[GP_RTWAIT]), gp[GP_N_PAGEHASH] / 60.0, gp[GP_N_REHASH] / 60.0, gp[GP_N_MIDCHANGE] / 60.0, gp[GP_N_EPOCH] / 60.0,
                     gp[GP_N_EPOCH_ISR] / 60.0, (unsigned long long)gp[GP_N_MID_WALK], (unsigned long long)gp[GP_N_MID_ISR], (unsigned long long)gp[GP_N_MID_DRAIN]);
             { static const bool to_log = LSW_ENV_SET("LSWTCS_GPUPROFLOG");   // what the page hash costs, for tools/analyze_run.py
-              if (to_log) printf("[GPUPAGES] per frame: pages hashed %.0f, re-hashed in the same frame %.0f, changed mid-frame %.2f, epochs %.1f (isr %.1f), walk %.2f ms, record %.2f ms, skipped %.0f, sampled misses %llu, repeat tiles %.2f ms\n",
+              if (to_log) printf("[GPUPAGES] per frame: pages hashed %.0f, re-hashed in the same frame %.0f, changed mid-frame %.2f, epochs %.1f (isr %.1f), walk %.2f ms, record %.2f ms, skipped %.0f, sampled misses %llu, repeat tiles %.2f ms, walk-off waits %llu (again %llu)\n",
                                  gp[GP_N_PAGEHASH] / 60.0, gp[GP_N_REHASH] / 60.0, gp[GP_N_MIDCHANGE] / 60.0, gp[GP_N_EPOCH] / 60.0, gp[GP_N_EPOCH_ISR] / 60.0,
-                                 ms(gp[GP_WALK]), ms(gp[GP_RECORD]), gp[GP_N_HASH_SKIP] / 60.0, (unsigned long long)gp[GP_N_HASH_MISS], ms(gp[GP_WALK_REPEAT]));
+                                 ms(gp[GP_WALK]), ms(gp[GP_RECORD]), gp[GP_N_HASH_SKIP] / 60.0, (unsigned long long)gp[GP_N_HASH_MISS], ms(gp[GP_WALK_REPEAT]),
+                                 (unsigned long long)g_walk_waits.load(), (unsigned long long)g_walk_rewaits.load());
               if (to_log) { tskip_report(); fflush(stdout); } }
             dbg_ram("[GPUPROF] guest ISR inside walk=%.2fms | replay: arena->upload=%.2f diag=%.2f prepass=%.2f pso=%.2f bind=%.2f (texsrc=%.2f srv=%.2f smp=%.2f) rt=%.2f draw=%.2f\n",
                     ms(gp[GP_IRQ]), ms(gp[GP_RP_ARENA]), ms(gp[GP_RP_DIAG]), ms(gp[GP_RP_PREPASS]), ms(gp[GP_RP_PSO]), ms(gp[GP_RP_BIND]),

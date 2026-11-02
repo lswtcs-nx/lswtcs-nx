@@ -919,3 +919,17 @@ That is the likely mechanism of runs 19-20 (a loader thread stuck above the rend
 
 - Off-core returns name the lowest core of the saved mask as the ideal core, instead of -1, and log a failed return.
 - A/B states for thread placement, as a ladder over the session: `MAPXSHN`, `R` (render thread 0x2C), `RG` (also guest threads at 0x2E), `RGC` (also guest threads on core 0 only). The placement guard follows the state.
+
+## Run 23: `0.0.29-log23`, 2 November 2026
+
+One pass through `Gungan_A` to `E`, no crash, no capture. Archived in `private/runs/run23-log23`.
+
+- **Faster than run 22 in every band** (10-20 %): 14.0 against 11.5 FPS at 5000+ draws (p95 88 against 129 ms), 29.1 against 26.2 at 800-1300 draws. Today's placement (`MAPXSHN`) got no heavy frames this time, so the comparison is with run 22 over the same level, and partly with the other states.
+- **By state at 4000+ draws** (14-15 s each, thin): R 13.6 FPS (p95 101), RG 13.9 (p95 89), RGC 14.9 (p95 78). At 1300-2500 draws: today's 24.6, R 25.7, RG 27.8, RGC 28.4. No state had more long frames than another (0-2 of 500 ms or more).
+- **Audio got worse with G and C:** filled 96 % with R alone in the heavy band, 65 % with RG, 60 % with RGC. `[THREADS]` shows G and C moved the XAudio thread (`827DB318`) too: to core 0 at 0x2E, where it otherwise moves between core 2 at 0x2B (the native reverb) and its start.
+- The off-core return fix held: no failed return was logged. The placement guard still fired 30 times, for the file loader and the XAudio thread, as in run 22.
+
+## `0.0.30-log24`
+
+- G and C leave the XAudio thread's placement alone.
+- States `MAPXSHN`, `MAPXSHNRG`, `MAPXSHNRC`, `MAPXSHNRGC`: G and C crossed, both with R, against today's placement.

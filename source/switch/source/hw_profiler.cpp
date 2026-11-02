@@ -51,7 +51,10 @@ Target g_targets[kMaxThreads];
 // thread, the second shader-compile worker on core 0 and nearly the lowest there is.
 std::atomic<int> g_guest_prio{0}, g_guest_core0{0};
 void guest_place_apply(Target& t) {
-    const int prio = g_guest_prio.load(), core0 = g_guest_core0.load();
+    // Run 23: with G and C the audio buffers ran empty far more in the heavy band (60-65 % filled, against 96 % with R alone). The
+    // game's XAudio render thread keeps its own placement: it does its mixing off the turn on core 2 (native reverb) anyway.
+    const bool audio = strstr(t.name, "827DB318") != nullptr;
+    const int prio = audio ? 0 : g_guest_prio.load(), core0 = audio ? 0 : g_guest_core0.load();
     t.home_prio = prio ? prio : t.start_prio;
     t.home_core = core0 ? 0 : t.start_core;
     t.home_mask = core0 ? 1 : t.start_mask;

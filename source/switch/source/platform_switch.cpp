@@ -145,6 +145,7 @@ extern "C" bool lsw_offcore_active(Handle h) {
 extern "C" void lsw_offcore_begin_on(int target_core, int new_prio) {
     s32 core = 0; u64 mask = 0;
     if (R_FAILED(svcGetThreadCoreMask(&core, &mask, CUR_THREAD_HANDLE))) { g_offcore_prev_core = -1; return; }
+    if (core < 0) core = 0;   // "saved" is now only a flag that a return is due; the mask names the cores
     s32 prio = 0;
     g_offcore_prev_prio = R_SUCCEEDED(svcGetThreadPriority(&prio, CUR_THREAD_HANDLE)) ? prio : -1;
     g_offcore_prev_core = core; g_offcore_prev_mask = mask;
@@ -155,7 +156,14 @@ extern "C" void lsw_offcore_begin_on(int target_core, int new_prio) {
 extern "C" void lsw_offcore_begin_prio(int new_prio) { lsw_offcore_begin_on(2, new_prio); }
 extern "C" void lsw_offcore_end() {
     if (g_offcore_prev_core < 0) return;
-    svcSetThreadCoreMask(CUR_THREAD_HANDLE, g_offcore_prev_core, g_offcore_prev_mask);
+    // Run 22: guest threads start with ideal core -1 and mask 7 (cores 0-2), and putting back "-1" sometimes left the thread where
+    // the move had put it ([OFFCORE] saved core 1 prio 0x30: the file loader stuck beside the render thread at a higher priority).
+    // The lowest core of the saved mask is named as the ideal core instead.
+    const s32 home = g_offcore_prev_core >= 0 ? g_offcore_prev_core : -1;
+    const s32 ideal = g_offcore_prev_mask ? s32(__builtin_ctzll(g_offcore_prev_mask)) : 0;
+    const Result rc = svcSetThreadCoreMask(CUR_THREAD_HANDLE, ideal, g_offcore_prev_mask);
+    (void)home;
+    if (R_FAILED(rc) && g_offcore_logs.fetch_add(1) < 12) { printf("[OFFCORE] return failed: rc 0x%X\n", rc); fflush(stdout); }
     if (g_offcore_prev_prio >= 0) svcSetThreadPriority(CUR_THREAD_HANDLE, g_offcore_prev_prio);
     if (g_offcore_logs.fetch_add(1) < 12) {
         s32 core = -9, prio = -1; u64 mask = 0;

@@ -898,3 +898,24 @@ The tester asked for one session per run with more in it. Log21 was not run; log
 - **Placement guard** (`LSWTCS_PLACEGUARD=1`, in the profiler thread): once a second, a guest thread that is not in an off-core move but no longer has the core mask or priority it started with gets them back, and `[PLACEMENT]` prints what it had. If the render slowdown of runs 19 and 20 comes from a thread left on core 1, phase 2 shows the guard firing and no slowdown. If the slowdown stays with no `[PLACEMENT]` line, the cause is elsewhere.
 - `[THREADS]` and `[OFFCORE]` from log21; each `[GLPROF]` line now ends with the A/B state.
 - `profiles/hardware-walk.env` is no longer staged.
+
+## Run 22: `0.0.28-log22`, 2 November 2026, one session in two phases
+
+Two passes through `Gungan_A` to `E`, phase 2 from the return to the hub at replay 8263, no crash, no capture. Archived in `private/runs/run22-log22`.
+
+**The render slowdown of runs 19 and 20 was not W.** `MAPXSHN` ran the same in both phases (13.1 and 14.0 FPS at 5000+ draws, render 33-38 ms per heavy frame, `plan` 3.0 ms per 1000 draws in phase 1).
+
+**Thread placement, as `[THREADS]` shows it:**
+- Every guest thread has ideal core -1, mask 7 (cores 0-2) and priority 0x3B. The render thread is on core 1 at 0x3B too, so a guest thread may run on its core at the same priority.
+- `bg_files` (0x3A) and the file loader's off-turn LZ2K decompression (core 1, 0x30) rank above the render thread on its own core.
+- The guard fired 30 times. 11 were the file loader (`82508C48`) left on core 1 at 0x30 after its decompression: `[OFFCORE]` shows the saved placement was already core 1/0x30, so an earlier return had not taken. Restoring "ideal core -1" does not always move the thread back.
+- The other 19 were the audio guest thread (`827DB318`), which lives on core 2 at 0x2B through the native reverb's moves.
+
+That is the likely mechanism of runs 19-20 (a loader thread stuck above the render thread on core 1). Why it showed only with W there is not known.
+
+**W is out.** Phase 2 at 5000+ draws: `MAPXSHN` 14.0 FPS; `MAPXSHNWY` 8.7 FPS with the render thread at 82 ms (the walk on core 1 beside it); `MAPXSHNWYK` 8.8 FPS with the render at 27 ms, yet slower. Off the turn, on a shared core and at a low priority, the walk takes longer, and the game still waits for it (fences, ring space, the tile drain). The GPU's command processing stays on the guest turn; a real gain would need the guest threads themselves in parallel.
+
+## `0.0.29-log23`
+
+- Off-core returns name the lowest core of the saved mask as the ideal core, instead of -1, and log a failed return.
+- A/B states for thread placement, as a ladder over the session: `MAPXSHN`, `R` (render thread 0x2C), `RG` (also guest threads at 0x2E), `RGC` (also guest threads on core 0 only). The placement guard follows the state.

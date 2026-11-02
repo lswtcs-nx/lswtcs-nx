@@ -58,6 +58,8 @@ extern "C" void lsw_quantum_div_set(int n);                    // kernel_stubs.c
 extern "C" void lsw_walk_ab_set(int nowait, int nodrain);           // kernel_stubs.cpp: Y and D (with W)
 extern "C" void lsw_walk_core_set(int core);                         // kernel_stubs.cpp: K (with W) walks on core 2; 0 = LSWTCS_WALKOFF_CORE
 extern "C" int lsw_ab_phase();                                       // native_crt.cpp: 2 after the first return to the hub
+extern "C" void lsw_guest_place_set(int prio, int core0);            // hw_profiler.cpp: G and C
+s32 g_render_prio_start = 0x3B;                                      // the render thread's own priority, read when it starts
 extern "C" void lsw_audio_stats(uint64_t* played, uint64_t* empty_ns);   // audio_switch.cpp: frames.log columns
 extern "C" void lsw_log_async_path(char* out, size_t capacity, const char* name);   // log_async.cpp
 extern "C" void lsw_prof_register(const char* name, int sched_id);   // hw_profiler.cpp
@@ -2122,6 +2124,10 @@ void ab_cycle_tick() {
     lsw_sched_ab_set(has('A'), has('W'));
     lsw_walk_ab_set(has('Y'), has('D'));
     lsw_walk_core_set(has('K') ? 2 : 0);
+    // R: the render thread at 0x2C instead of 0x3B (run 22: the lowest but one, equal to the guest threads, which may run on its core,
+    // and below the file loader's off-turn decompression there). G and C: guest thread priority and core (hw_profiler.cpp).
+    svcSetThreadPriority(CUR_THREAD_HANDLE, has('R') ? 0x2C : g_render_prio_start);
+    lsw_guest_place_set(has('G') ? 0x2E : 0, has('C') ? 1 : 0);
     lsw_prep_memo_set(has('P'));
     lsw_shm_frame_hash_set(has('H'));
     lsw_xma_async_set(has('X'));
@@ -3568,6 +3574,7 @@ void swap_job(void*) {
 
 void render_thread_main() {
     pin_to_core(1, "render thread");
+    { s32 p = 0; if (R_SUCCEEDED(svcGetThreadPriority(&p, CUR_THREAD_HANDLE))) g_render_prio_start = p; }
     lsw_prof_register("render", -1);
     lsw_core_load_start();
     g_gl_ok = egl_init();

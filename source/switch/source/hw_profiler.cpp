@@ -36,12 +36,28 @@ constexpr uint64_t kStallTicks = 19200000;
 struct Target {
     char name[24];
     Handle handle;
+    s32 start_core; u64 start_mask; s32 start_prio;   // guest threads: as they started
     int sched_id;   // -1 for a host thread
-    s32 home_core; u64 home_mask; s32 home_prio;   // placement when it registered (guest threads: their start)
+    s32 home_core; u64 home_mask; s32 home_prio;   // placement wanted: as it registered, or as A/B states G and C set it
     uint64_t cpu_ns_last;
     uint64_t samples;
 };
+}  // namespace
+extern "C" bool lsw_offcore_active(Handle h);   // platform_switch.cpp
+namespace {
 Target g_targets[kMaxThreads];
+// A/B states G (guest threads at priority 0x2E: above the low-priority helpers that share their cores, below render with R, Mesa
+// and audio) and C (guest threads on core 0 only). Run 22: every guest thread had mask 7 and priority 0x3B, the same as the render
+// thread, the second shader-compile worker on core 0 and nearly the lowest there is.
+std::atomic<int> g_guest_prio{0}, g_guest_core0{0};
+void guest_place_apply(Target& t) {
+    const int prio = g_guest_prio.load(), core0 = g_guest_core0.load();
+    t.home_prio = prio ? prio : t.start_prio;
+    t.home_core = core0 ? 0 : t.start_core;
+    t.home_mask = core0 ? 1 : t.start_mask;
+    svcSetThreadCoreMask(t.handle, t.home_core, t.home_mask);
+    svcSetThreadPriority(t.handle, t.home_prio);
+}
 std::atomic<int> g_target_count{0};
 std::atomic<uint32_t> g_draws{0};
 std::atomic<uint64_t> g_last_frame_tick{0};
@@ -186,9 +202,6 @@ bool end_window(FILE* f, uint64_t start_ns, uint64_t now_ns) {
     return true;
 }
 
-}  // namespace
-extern "C" bool lsw_offcore_active(Handle h);   // platform_switch.cpp
-namespace {
 // LSWTCS_PLACEGUARD=1: once a second, a guest thread that is not in an off-core move but no longer has the core mask or priority
 // it started with gets them back, and [PLACEMENT] says what it had. Runs 19 and 20: after W, the render thread lost half its
 // wall time on core 1 for the same CPU time; this both tests and repairs the suspected cause (a thread left there).
@@ -255,6 +268,11 @@ extern "C" void lsw_prof_register(const char* name, int sched_id) {
     t.sched_id = sched_id;
     if (R_FAILED(svcGetThreadCoreMask(&t.home_core, &t.home_mask, t.handle))) t.home_core = -9;
     if (R_FAILED(svcGetThreadPriority(&t.home_prio, t.handle))) t.home_prio = -1;
+    if (t.home_core < 0 && t.home_core != -9) t.home_core = t.home_mask ? s32(__builtin_ctzll(t.home_mask)) : 0;
+    if (sched_id >= 0) {
+        t.start_core = t.home_core; t.start_mask = t.home_mask; t.start_prio = t.home_prio;
+        guest_place_apply(t);
+    }
     t.cpu_ns_last = 0;
     t.samples = 0;
     g_target_count.compare_exchange_strong(expected, i + 1, std::memory_order_acq_rel);
@@ -264,6 +282,20 @@ extern "C" void lsw_prof_register_guest(int sched_id, uint32_t entry) {
     char name[24];
     snprintf(name, sizeof name, "guest_%08X", entry);
     lsw_prof_register(name, sched_id);
+}
+extern "C" void lsw_guest_place_set(int prio, int core0) {
+    if (g_guest_prio.load() == prio && g_guest_core0.load() == core0) return;
+    g_guest_prio.store(prio);
+    g_guest_core0.store(core0);
+    const int count = g_target_count.load(std::memory_order_acquire);
+    for (int i = 0; i < count; ++i)
+        if (g_targets[i].sched_id >= 0 && g_targets[i].home_core != -9 && g_targets[i].home_prio >= 0 && !lsw_offcore_active(g_targets[i].handle))
+            guest_place_apply(g_targets[i]);
+        else if (g_targets[i].sched_id >= 0 && g_targets[i].home_core != -9) {   // off its core now: the guard sets it later
+            g_targets[i].home_prio = prio ? prio : g_targets[i].start_prio;
+            g_targets[i].home_core = core0 ? 0 : g_targets[i].start_core;
+            g_targets[i].home_mask = core0 ? 1 : g_targets[i].start_mask;
+        }
 }
 extern "C" void lsw_prof_note_draws(uint32_t draws) {
     g_draws.store(draws, std::memory_order_relaxed);

@@ -3168,8 +3168,23 @@ static inline void reg_changed_range(uint32_t reg, uint32_t n) {
     if (reg < 0x4900 && reg + n > 0x4800) ++g_lsw_reg_gens.fetch;
     if (reg < 0x4A00 && reg + n > 0x4900) ++g_lsw_reg_gens.boolloop;
 }
+// Hash of the whole register file, kept up to date by the writes below: XOR over registers of mix(register, value), with zero values
+// contributing nothing, so the all-zero start is 0. Walk-time tile skipping (state T) compares it at each draw: equal hashes mean the draw
+// sees the registers tile 0's draw saw, short of a 64-bit collision. The per-tile registers and the two written directly are left out.
+static uint64_t g_reg_hash = 0;
+static inline uint64_t reg_mix(uint32_t reg, uint32_t value) {
+    if (!value) return 0;
+    uint64_t x = ((uint64_t(reg) << 32) | value) * 0x9E3779B97F4A7C15ull;
+    x ^= x >> 29; x *= 0xBF58476D1CE4E5B9ull; x ^= x >> 32;
+    return x;
+}
+static inline void reg_hash_update(uint32_t reg, uint32_t old_value, uint32_t new_value) {
+    if ((reg >= 0x2080 && reg <= 0x2082) || reg == 0x2319 || reg == 0x21FC || reg == 0x21F9) return;
+    g_reg_hash ^= reg_mix(reg, old_value) ^ reg_mix(reg, new_value);
+}
 static inline void reg_set(uint32_t reg, uint32_t value) {
     if (g_xe_regs[reg] == value) return;
+    reg_hash_update(reg, g_xe_regs[reg], value);
     g_xe_regs[reg] = value;
     reg_changed_range(reg, 1);
 }
@@ -4242,6 +4257,7 @@ struct TileIbRec {
     std::vector<uint32_t> entry;       // register file at tile 0's IB entry, then VS / PS address and size
     std::vector<uint8_t> set_before;   // 1: changed between that entry and the IB's first draw (the IB sets it)
     std::vector<uint32_t> draws;       // per draw packet of tile 0: its record index, or UINT32_MAX if not recorded
+    std::vector<uint64_t> hashes;      // per draw packet of tile 0: tskip_draw_hash at that draw
     uint64_t bin_select = 0;
     bool first_draw_seen = false;
 };
@@ -4264,9 +4280,53 @@ static inline uint32_t tskip_state(uint32_t i) {
     switch (i - 0x6000) { case 0: return g_vs_addr; case 1: return g_vs_size; case 2: return g_ps_addr; default: return g_ps_size; }
 }
 static inline bool tskip_per_tile(uint32_t i) { return (i >= 0x2080 && i <= 0x2082) || i == 0x2319; }
+// A/B state T: per-draw check instead of the entry check. Runs 10 to 12 (Episode I chapter 2): the entry check refused the repeats of
+// every heavy frame ("repeat tiles" 0.00 ms), so the later tiles were walked and recorded in full, while the replay merged them and
+// drew tile 0's records only. The entry check asks more than a copy needs: a register that differs at entry but is written before any
+// draw reads it changes nothing. Under T a repeat starts without it; each draw is copied only if the register hash, the shaders and the
+// draw packet equal tile 0's at the same draw, and from the first draw that differs the rest of the IB is recorded in full. One repeat
+// in 16 is recorded in full anyway and each hash-matched draw compared with tile 0's record (shaders, state, constants, ranges, indices;
+// not the viewport-derived system constants): a difference prints [TILESKIP] FALSE MATCH and turns T off for the session.
+static std::atomic<bool> g_tskip_relaxed_on{false};
+static bool g_tskip_broken = false;
+static bool g_tskip_relaxed = false, g_tskip_check = false, g_tskip_abort = false;   // the current repeat
+static uint64_t g_tsk_relaxed_ibs = 0, g_tsk_aborts = 0, g_tsk_check_draws = 0, g_tsk_check_equal = 0, g_tsk_false = 0;
+static std::unordered_map<uint32_t, uint64_t> g_tsk_reject_regs;   // entry check: first differing register of each refusal
+static inline uint64_t tskip_draw_hash(uint32_t initiator, uint32_t dma_base, uint32_t dma_size, const uint8_t* inline_idx, uint32_t inline_words) {
+    return g_reg_hash ^ reg_mix(0x6000, g_vs_addr) ^ reg_mix(0x6001, g_vs_size) ^ reg_mix(0x6002, g_ps_addr) ^ reg_mix(0x6003, g_ps_size) ^
+           reg_mix(0x6004, initiator) ^ reg_mix(0x6005, dma_base) ^ reg_mix(0x6006, dma_size) ^
+           reg_mix(0x6007, uint32_t(reinterpret_cast<uintptr_t>(inline_idx))) ^ reg_mix(0x6008, inline_words);
+}
+// What a tile copy would take from tile 0's record, compared with a full record of the same draw.
+static bool tskip_same_content(const LswGpuFrame& f, const LswGpuDrawRec& a, const LswGpuDrawRec& b) {
+    auto block = [&](uint32_t oa, uint32_t ob, size_t n) {
+        return !n || (size_t(oa) + n <= f.arena.size() && size_t(ob) + n <= f.arena.size() && !std::memcmp(f.arena.data() + oa, f.arena.data() + ob, n));
+    };
+    auto fields = [&](size_t from, size_t to) { return !std::memcmp(reinterpret_cast<const uint8_t*>(&a) + from, reinterpret_cast<const uint8_t*>(&b) + from, to - from); };
+    if (!fields(offsetof(LswGpuDrawRec, kind), offsetof(LswGpuDrawRec, rs_src))) return false;   // targets, MRT, blend, stencil
+    if (a.vs_key != b.vs_key || a.ps_key != b.ps_key || a.gs_type != b.gs_type || a.topology != b.topology || a.vertex_count != b.vertex_count ||
+        a.ib_count != b.ib_count || a.ib_32bit != b.ib_32bit || a.ib_shm != b.ib_shm || a.cb_sys_size != b.cb_sys_size ||
+        a.cb_vsf_size != b.cb_vsf_size || a.cb_psf_size != b.cb_psf_size || a.range_count != b.range_count) return false;
+    if (a.blendcontrol != b.blendcontrol || a.color_mask != b.color_mask || a.depthcontrol != b.depthcontrol || a.sc_mode_cntl != b.sc_mode_cntl) return false;
+    if (!fields(offsetof(LswGpuDrawRec, ps_tex_count), offsetof(LswGpuDrawRec, tile_repeat))) return false;   // textures, samplers
+    if (!block(a.cb_vsf_off, b.cb_vsf_off, a.cb_vsf_size) || !block(a.cb_psf_off, b.cb_psf_off, a.cb_psf_size) ||
+        !block(a.cb_bool_off, b.cb_bool_off, 40 * 4) || !block(a.cb_fetch_off, b.cb_fetch_off, 192 * 4)) return false;
+    if ((a.cb_derived_off != 0) != (b.cb_derived_off != 0) || (a.cb_derived_off && !block(a.cb_derived_off, b.cb_derived_off, 32 * 16))) return false;
+    for (uint32_t i = 0; i < a.range_count; ++i) {
+        const LswGpuRange& x = f.ranges[a.first_range + i];
+        const LswGpuRange& y = f.ranges[b.first_range + i];
+        if (x.phys != y.phys || x.size != y.size) return false;
+    }
+    if (a.ib_count) {
+        if (a.ib_shm) return a.ib_off == b.ib_off;
+        return block(a.ib_off, b.ib_off, size_t(a.ib_count) * (a.ib_32bit ? 4 : 2));
+    }
+    return true;
+}
 // Ring-level IB about to be walked.
 static void tile_skip_begin(uint32_t addr, uint32_t len) {
     g_tskip_capture = g_tskip_repeat = nullptr;
+    g_tskip_relaxed = false;
     if (!tskip_on() || len < 64) return;
     if (g_tskip_frame != g_shm_frame) { g_tskip_ibs.clear(); g_tskip_frame = g_shm_frame; }
     const uint64_t key = (uint64_t(addr) << 32) | len;
@@ -4281,9 +4341,18 @@ static void tile_skip_begin(uint32_t addr, uint32_t len) {
     }
     TileIbRec& r = it->second;
     if (!r.first_draw_seen || r.bin_select == g_bin_select) return;   // no draws to reuse / not another tile
+    if (g_tskip_relaxed_on.load(std::memory_order_relaxed)) {
+        g_tskip_repeat = &r;
+        g_tskip_q = 0;
+        g_tskip_relaxed = true;
+        g_tskip_abort = false;
+        g_tskip_check = (++g_tsk_relaxed_ibs % 16) == 0;
+        return;
+    }
     for (uint32_t i = 0; i < kTskipRegs; ++i) {
         if (r.set_before[i] || tskip_per_tile(i) || tskip_state(i) == r.entry[i]) continue;
         ++g_tskip_ibs_rejected;
+        ++g_tsk_reject_regs[i];
         static int nl = 0; if (++nl <= 20)
             dbg_ram("[TILESKIP] IB %08X/%u not skipped: register 0x%04X %08X at entry, tile 0 had %08X\n", addr, len, i, tskip_state(i), r.entry[i]);
         return;
@@ -4305,8 +4374,9 @@ static void tile_skip_end(uint32_t addr, uint32_t len) {
                 (unsigned long long)g_tskip_ibs_rejected, (unsigned long long)g_tskip_copies, (unsigned long long)g_tskip_mismatch);
 }
 // A draw packet of a first run: note the record it produced (and, at the first one, what the IB set itself).
-static void tile_skip_note(bool rec, size_t before) {
+static void tile_skip_note(bool rec, size_t before, uint64_t draw_hash) {
     TileIbRec& r = *g_tskip_capture;
+    r.hashes.push_back(draw_hash);
     if (!r.first_draw_seen) {
         r.set_before.resize(kTskipRegs);
         for (uint32_t i = 0; i < kTskipRegs; ++i) r.set_before[i] = tskip_state(i) != r.entry[i];
@@ -4366,7 +4436,47 @@ static bool tile_skip_copy(uint32_t initiator,uint32_t dma_base,uint32_t dma_siz
     ++g_tskip_copies;
     return true;
 }
+// A draw packet of a repeat under state T (see g_tskip_relaxed_on).
+static bool tile_skip_relaxed(uint32_t initiator, uint32_t dma_base, uint32_t dma_size, const uint8_t* inline_idx, uint32_t inline_words,
+                              uint32_t edram_mode) {
+    TileIbRec& r = *g_tskip_repeat;
+    const uint32_t q = g_tskip_q;
+    const bool match = !g_tskip_abort && q < r.hashes.size() && r.hashes[q] == tskip_draw_hash(initiator, dma_base, dma_size, inline_idx, inline_words);
+    if (!match && !g_tskip_abort) { g_tskip_abort = true; ++g_tsk_aborts; }
+    if (match && !g_tskip_check) return tile_skip_copy(initiator, dma_base, dma_size, inline_idx, inline_words);
+    ++g_tskip_q;
+    LswGpuFrame& f = g_gpu_frame_build;
+    const size_t before = f.draws.size();
+    const bool rec = gpu_record_draw_impl(initiator, dma_base, dma_size, inline_idx, inline_words, edram_mode);
+    if (match && rec && r.draws[q] != UINT32_MAX && f.draws.size() > before) {
+        ++g_tsk_check_draws;
+        if (tskip_same_content(f, f.draws[r.draws[q]], f.draws.back())) ++g_tsk_check_equal;
+        else {
+            ++g_tsk_false;
+            g_tskip_broken = true;
+            g_tskip_relaxed_on.store(false, std::memory_order_relaxed);
+            printf("[TILESKIP] FALSE MATCH at draw %u of a repeat (VS %016llX, PS %016llX): T turned off for this session\n", q,
+                   (unsigned long long)f.draws.back().vs_key, (unsigned long long)f.draws.back().ps_key);
+            fflush(stdout);
+        }
+    }
+    return rec;
+}
+extern "C" void lsw_tile_relaxed_set(int on) { g_tskip_relaxed_on.store(on != 0 && !g_tskip_broken, std::memory_order_relaxed); }
+// [TILESKIP] line beside [GPUPAGES]: totals so far.
+static void tskip_report() {
+    std::vector<std::pair<uint32_t, uint64_t>> top(g_tsk_reject_regs.begin(), g_tsk_reject_regs.end());
+    std::sort(top.begin(), top.end(), [](const auto& a, const auto& b) { return a.second > b.second; });
+    char regs[160]; int k = 0; regs[0] = 0;
+    for (size_t i = 0; i < top.size() && i < 6 && k < 140; ++i) k += snprintf(regs + k, sizeof regs - k, " %04X:%llu", top[i].first, (unsigned long long)top[i].second);
+    printf("[TILESKIP] repeats by the entry check %llu, refused %llu (first differing register:%s); under T %llu, stopped by a hash %llu; draws copied %llu; "
+           "checked %llu, equal %llu, false matches %llu\n", (unsigned long long)g_tskip_ibs_repeated, (unsigned long long)g_tskip_ibs_rejected, regs,
+           (unsigned long long)g_tsk_relaxed_ibs, (unsigned long long)g_tsk_aborts, (unsigned long long)g_tskip_copies, (unsigned long long)g_tsk_check_draws,
+           (unsigned long long)g_tsk_check_equal, (unsigned long long)g_tsk_false);
+}
 #else
+extern "C" void lsw_tile_relaxed_set(int) {}
+static inline void tskip_report() {}
 static const void* const g_tskip_repeat = nullptr;
 static inline void tile_skip_begin(uint32_t, uint32_t) {}
 static inline void tile_skip_end(uint32_t, uint32_t) {}
@@ -4386,12 +4496,15 @@ static bool gpu_record_draw(uint32_t initiator, uint32_t dma_base, uint32_t dma_
     // active ownership records this draw's actual inputs instead.
     if(lsw_deko_recording_resources())repeat_inputs=false;
 #endif
-    if (repeat_inputs) {
+    if (repeat_inputs && g_tskip_relaxed) {
+        rec = tile_skip_relaxed(initiator, dma_base, dma_size, inline_idx, inline_words, edram_mode);
+    } else if (repeat_inputs) {
         rec = tile_skip_copy(initiator,dma_base,dma_size,inline_idx,inline_words);
     } else {
         const size_t before = g_gpu_frame_build.draws.size();
+        const uint64_t draw_hash = g_tskip_capture ? tskip_draw_hash(initiator, dma_base, dma_size, inline_idx, inline_words) : 0;
         rec = gpu_record_draw_impl(initiator, dma_base, dma_size, inline_idx, inline_words, edram_mode);
-        if (g_tskip_capture) tile_skip_note(rec, before);
+        if (g_tskip_capture) tile_skip_note(rec, before, draw_hash);
     }
 #else
     bool rec = gpu_record_draw_impl(initiator, dma_base, dma_size, inline_idx, inline_words, edram_mode);
@@ -4880,20 +4993,25 @@ template <typename RD> static bool pm4_bin_packet(uint32_t hdr, uint32_t op, uin
     return false;
 }
 // Byte-swapped block copy of a register write (run 8: the largest single loop of the walker).
-static inline bool pm4_regs_copy(uint32_t* dst, const uint32_t* src, uint32_t n) {
+static inline bool pm4_regs_copy(uint32_t reg, const uint32_t* src, uint32_t n) {
+    uint32_t* dst = &g_xe_regs[reg];
     uint32_t any = 0;
 #ifdef __aarch64__
-    uint32x4_t differs = vdupq_n_u32(0);
-    for (; n >= 4; n -= 4, dst += 4, src += 4) {
+    for (; n >= 4; n -= 4, dst += 4, src += 4, reg += 4) {
         const uint32x4_t v = vreinterpretq_u32_u8(vrev32q_u8(vld1q_u8(reinterpret_cast<const uint8_t*>(src))));
-        differs = vorrq_u32(differs, veorq_u32(v, vld1q_u32(dst)));
+        const uint32x4_t old = vld1q_u32(dst);
+        if (vmaxvq_u32(veorq_u32(v, old))) {   // a changed block: the register hash needs each changed value
+            uint32_t o[4], w[4];
+            vst1q_u32(o, old); vst1q_u32(w, v);
+            for (int k = 0; k < 4; ++k) if (o[k] != w[k]) reg_hash_update(reg + k, o[k], w[k]);
+            any = 1;
+        }
         vst1q_u32(dst, v);
     }
-    any = vmaxvq_u32(differs);
 #endif
     for (uint32_t i = 0; i < n; i++) {
         const uint32_t v = __builtin_bswap32(src[i]);
-        any |= dst[i] ^ v;
+        if (dst[i] != v) { reg_hash_update(reg + i, dst[i], v); any = 1; }
         dst[i] = v;
     }
     return any != 0;
@@ -4955,7 +5073,7 @@ static void pm4_extract_ib(uint32_t phys_addr, uint32_t dword_count, int depth) 
                 // Fast path (shader constants: thousands of registers a frame): byte-swapped block copy, then the
                 // per-register hooks only where they act (regset_note: 0x2000-0x23FF and 0x4800-0x4805;
                 // pm4_reg_side_effect: 0x578-0x57F). Same result as the loop below, ~1/3 of the walker's samples.
-                if (pm4_regs_copy(&g_xe_regs[reg], ib_host + pos + 1, n)) reg_changed_range(reg, n);
+                if (pm4_regs_copy(reg, ib_host + pos + 1, n)) reg_changed_range(reg, n);
                 if (g_cw_on && reg < 0x4400 && reg + n > 0x4000)
                     for (uint32_t r = std::max(reg, 0x4000u); r < std::min(reg + n, 0x4400u); ++r)
                         cw_note(r, 0x100, phys_addr + (pos + 1 + (r - reg)) * 4, reg, n, pos);
@@ -5130,7 +5248,7 @@ static void pm4_extract_ib(uint32_t phys_addr, uint32_t dword_count, int depth) 
                     if (rbase >= 0x4000 && first + size <= 0x6000 && src >= 0x80000000u && uint64_t(src) + uint64_t(size) * 4 <= 0xA0000000ull &&
                         !g_cw_on && g_imlog_left_fwd() <= 0) {
                         // Constants, the usual case: as the type 0 path above.
-                        if (size && pm4_regs_copy(&g_xe_regs[first], reinterpret_cast<const uint32_t*>(lsw_host(src)), size)) reg_changed_range(first, size);
+                        if (size && pm4_regs_copy(first, reinterpret_cast<const uint32_t*>(lsw_host(src)), size)) reg_changed_range(first, size);
                     } else if (rbase && src >= 0x80000000u && src < 0xA0000000u) {
                         for (uint32_t i = 0; i < size; ++i) {
                             uint32_t r = rbase + index + i;
@@ -6409,7 +6527,8 @@ PPC_FUNC(__imp__VdSwap) {
             { static const bool to_log = LSW_ENV_SET("LSWTCS_GPUPROFLOG");   // what the page hash costs, for tools/analyze_run.py
               if (to_log) printf("[GPUPAGES] per frame: pages hashed %.0f, re-hashed in the same frame %.0f, changed mid-frame %.2f, epochs %.1f (isr %.1f), walk %.2f ms, record %.2f ms, skipped %.0f, sampled misses %llu, repeat tiles %.2f ms\n",
                                  gp[GP_N_PAGEHASH] / 60.0, gp[GP_N_REHASH] / 60.0, gp[GP_N_MIDCHANGE] / 60.0, gp[GP_N_EPOCH] / 60.0, gp[GP_N_EPOCH_ISR] / 60.0,
-                                 ms(gp[GP_WALK]), ms(gp[GP_RECORD]), gp[GP_N_HASH_SKIP] / 60.0, (unsigned long long)gp[GP_N_HASH_MISS], ms(gp[GP_WALK_REPEAT])); }
+                                 ms(gp[GP_WALK]), ms(gp[GP_RECORD]), gp[GP_N_HASH_SKIP] / 60.0, (unsigned long long)gp[GP_N_HASH_MISS], ms(gp[GP_WALK_REPEAT]));
+              if (to_log) { tskip_report(); fflush(stdout); } }
             dbg_ram("[GPUPROF] guest ISR inside walk=%.2fms | replay: arena->upload=%.2f diag=%.2f prepass=%.2f pso=%.2f bind=%.2f (texsrc=%.2f srv=%.2f smp=%.2f) rt=%.2f draw=%.2f\n",
                     ms(gp[GP_IRQ]), ms(gp[GP_RP_ARENA]), ms(gp[GP_RP_DIAG]), ms(gp[GP_RP_PREPASS]), ms(gp[GP_RP_PSO]), ms(gp[GP_RP_BIND]),
                     ms(gp[GP_RP_TEXSRC]), ms(gp[GP_RP_SRV]), ms(gp[GP_RP_SMP]), ms(gp[GP_RP_RT]), ms(gp[GP_RP_DRAW]));

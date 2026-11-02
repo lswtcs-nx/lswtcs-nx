@@ -684,3 +684,20 @@ W stays out. Moving the walk off the turn would need the waits and interrupts of
 1. Print why walk-time tile skipping rejects ring-level IBs in this level, with counters per frame. If the repeats can be skipped safely, it is the largest CPU gain left that keeps one guest thread at a time.
 2. Native audio mixers `sub_827E51D0` and `sub_827F5990`, with a compare mode: about 5 % of the heavy turn now.
 3. H remains the owner's decision.
+
+## `0.0.19-log13`: repeated tiles checked draw by draw (state T), not yet run on hardware
+
+**Why.** In the heavy band the command thread (PM4 walk and draw records) is about 40 % of the guest turn. The game draws its world once per EDRAM tile, three times in Episode I chapter 2, and the replay merges the tiles and draws tile 0's records only, so recording tiles 1 and 2 serves mostly to prove they match. Walk-time tile skipping exists for that, but `repeat tiles` read 0.00 ms in run 12: its entry check refused the repeats. Exact pc samples (`private/session-tools/hot_lines.py`) put the refusal path itself among the walker's hot lines. The refused register is unknown because the reason went to `dbg_ram`, which no session keeps.
+
+**What changes.**
+
+- A hash of the whole register file is kept current on every write of the walk (`reg_set`, `pm4_regs_copy`): XOR of a 64-bit mix of register and value, zero values contributing nothing. The per-tile registers and the two written directly are left out.
+- State T: a repeat starts without the entry check. Each draw is copied from tile 0's only if the register hash, the shader addresses and sizes and the draw packet equal tile 0's at the same draw. From the first draw that differs, the rest of the IB is recorded in full, so a copy is never taken against different registers short of a 64-bit collision.
+- One repeat in 16 under T is recorded in full anyway, and each draw whose hash matched is compared with tile 0's record: targets, blend, stencil, shaders, constants (vertex, pixel, bool and loop, fetch, derived), vertex ranges, indices, textures and samplers. The viewport-derived system constants are not compared, since tile copies patch them. A difference prints `[TILESKIP] FALSE MATCH` and turns T off for the session.
+- `[TILESKIP]` beside `[GPUPAGES]`: repeats by the entry check, refusals and the first differing register of each, repeats under T and how many a hash stopped, draws copied, and the full checks.
+
+**What it does not cover.** Guest memory read through the copies (vertex data, indices, shader microcode) is tile 0's. It could change between tiles only when guest code runs between them, as the existing skip already assumed; the full checks would see it in the sampled repeats.
+
+**A/B.** `MAPXS,MAPXST,MAPXSTV,MAPXSH,MAPXSTH`. MAPXST against MAPXS measures the gain; MAPXSTV checks the picture with T on; MAPXSTH is both CPU savings together.
+
+**Reading the next run.** `repeat tiles` and `walk`/`record` per frame by state; `[TILESKIP]` false matches must stay 0; FPS and audio by band against run 12. If T holds, the next candidates are the native audio mixers (about 5 % of the turn) and, larger and harder, page hashing (about 10 %): either H, which is the owner's decision, or tracking guest writes to vertex pages with memory protection, which would replace hashing by proof but is a large change.

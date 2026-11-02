@@ -65,6 +65,10 @@ void load_env_file(const char* path) {
     }
     fclose(f);
     printf("[NX] %d env settings from %s\n", n, path);
+    // Which cores this launch may use: 0x7 for a normal homebrew launch, 0xF only from a title whose NPDM allows core 3 (the
+    // fourth-core route of bo2-360-nx, an owner decision). Logged so the launch route of each session is on record.
+    { u64 mask = 0; const Result rc = svcGetInfo(&mask, InfoType_CoreMask, CUR_PROCESS_HANDLE, 0);
+      printf("[NX] process core mask 0x%llX (rc 0x%X)\n", (unsigned long long)mask, rc); }
 }
 }  // namespace
 

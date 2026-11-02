@@ -172,7 +172,7 @@ if(LSW_DEKO_BACKEND)
 endif()
 set(RT "${LSW_ROOT}/LSWTCSRuntime/source")
 add_executable(lswtcs
-    "${RT}/main.cpp" "${RT}/kernel_stubs.cpp" "${RT}/gpu_ringbuf.cpp" "${RT}/native_lz2k.cpp" "${RT}/native_reverb.cpp"
+    "${RT}/main.cpp" "${RT}/kernel_stubs.cpp" "${RT}/gpu_ringbuf.cpp" "${RT}/native_lz2k.cpp" "${RT}/native_reverb.cpp" "${RT}/native_mixer.cpp"
     "${RT}/native_crt.cpp" "${RT}/lsw_net_host.cpp"
     source/platform_switch.cpp source/win32_switch.cpp source/null_backends.cpp source/linux_shim.cpp
     source/log_async.cpp source/hw_monitor.cpp source/hw_profiler.cpp
@@ -238,7 +238,7 @@ endif()
 if(LSW_DEKO_BACKEND)
     nx_generate_nacp(lswtcs.nacp NAME "TCS Deko Live" AUTHOR "LSWTCS port" VERSION "0.0.7")
 else()
-    nx_generate_nacp(lswtcs.nacp NAME "LSWTCS" AUTHOR "LSWTCS port" VERSION "0.0.20-log14")
+    nx_generate_nacp(lswtcs.nacp NAME "LSWTCS" AUTHOR "LSWTCS port" VERSION "0.0.21-log15")
 endif()
 nx_create_nro(lswtcs NACP lswtcs.nacp)
 

@@ -743,3 +743,24 @@ Handheld at stock clocks, 10,290 frames in 403 s, levels `Map\Map`, `Gungan_A/B/
 **FPS** against run 13 is the same within noise in every band (12.5 against 12.4 at 5000+).
 
 **Next.** Native audio mixers (about 5 % of the turn), then a trial of LTO on the runtime and generated code. Take H to the owner with the measurements from runs 10 to 14.
+
+## What the 360 version targets, and the fourth core
+
+**30 FPS on the 360, by the game's own code.** No published frame-rate analysis of the 360 version was found. The executable's frame timing (`kernel_stubs.cpp`, the frame-time floor) says it plainly: the nominal frame length word starts at 1/60, and `sub_8229D8B8` sets it to 1/30, or 1/25 in PAL mode, which is 60 Hz and 50 Hz displays with a swap every second refresh. The port lets the game run up to 60 FPS (`LSWTCS_FPS_CAP=60`) with game time following real time. So 30 FPS steady matches the original, and 60 FPS in heavy scenes is beyond it. With one guest thread at a time at 1020 MHz, the game's own code and audio take about 30-35 ms per heavy frame even with no port overhead, and the GPU about 30 ms.
+
+**The fourth core, as bo2-360-nx does it.** From its public source (`sdk/src/ui/switch_core3.cpp`, techniques only):
+
+- It needs a forwarder title whose NPDM allows cores 0-3; a normal homebrew launch gets cores 0-2.
+- It wraps `svcSetThreadCoreMask` and `svcSetThreadPriority`, because new threads otherwise take the whole process mask.
+- It moves named threads, its mixer and XMA decoder, to core 3, all at the lowest priority. Other threads stay on 0-2.
+- A meter moves everything back if those threads use more than 85 % of core 3 for 2 s. Its author reports a Switch Lite hard freeze from system services starved on that core, which is why the meter exists.
+- Measured there: +16 % on a Lite, +11.9 % on an OLED.
+
+Here the limit is the guest turn on core 0, which core 3 does not lift by itself. What could move there is the XMA worker, the audio output and the profiler, now on core 2 beside Mesa's worker. That would help the render side and Mesa, not the turn. Installing a forwarder title and risking a freeze are the owner's and the tester's decisions. `0.0.21-log15` only logs the process core mask (`[NX] process core mask`) so that each session records its launch route.
+
+## `0.0.21-log15`: native audio mixer (state N), not yet run on hardware
+
+- `native_mixer.cpp` replaces the gain-ramp mixer `sub_827E51D0` (about 19 % of the audio thread's samples) in state N. It computes as the recompiled code does. That includes the build's fused multiply-add: the guest version's disassembly has four FMLA in its loop, so the native one uses `vfmaq_f32` there and keeps the gain additions separate.
+- Every 64th call the guest code runs on the real buffer and the native code on a copy, and the bytes are compared. The first difference prints `[NATIVEMIX] MISMATCH` and leaves the guest code in place for the session. The equality is not tested on a PC.
+- A/B: `MAPXS,MAPXSN,MAPXSH,MAPXSHN`, so N, H and both together are compared in one session.
+- Reading it: `[NATIVEMIX]` must show no mismatch; the audio thread's share of the heavy turn by state; FPS and audio by band.

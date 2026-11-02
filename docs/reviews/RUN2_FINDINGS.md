@@ -720,3 +720,9 @@ Handheld at stock clocks, 8,610 frames in 326 s, levels `Map\Map`, `Gungan_A/B/C
 - Leave the coherency registers (`0x0A2F` to `0x0A31`) out of both the entry check and the hash.
 - Print which field a false match differed in.
 - Turn T off after three false matches instead of one, so a level load alone does not end the test.
+
+## `0.0.20-log14`: T with the coherency registers left out, not yet run on hardware
+
+The cache-coherency registers `0x0A29` to `0x0A31` (`COHER_SIZE/BASE/STATUS` for PM4, RT and host, by Xenia's register table) are left out of the tile entry check and of the register hash. A false match now names the field that differed and the level, and the third turns T off instead of the first. Same A/B states as `0.0.19-log13`. Compiled and validated; the draw-identity and PNG tests pass.
+
+Reading it: under T, `stopped by a hash` should now be a small part of the repeats and `draws copied` large; `repeat tiles` and `walk` per frame by state; any `FALSE MATCH` with its field. If differences show up only in vertex constants, indices or vertex ranges during loads, that is guest memory changing between tiles.

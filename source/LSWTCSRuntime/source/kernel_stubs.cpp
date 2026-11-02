@@ -3178,8 +3178,11 @@ static inline uint64_t reg_mix(uint32_t reg, uint32_t value) {
     x ^= x >> 29; x *= 0xBF58476D1CE4E5B9ull; x ^= x >> 32;
     return x;
 }
+// The cache-coherency registers (COHER_*_PM4 / _RT / _HOST, 0x0A29-0x0A31): the game's coherency packets set them around resolves, and no draw
+// reads them. Run 13: every refusal of the tile entry check was on 0x0A2F, and the hash stopped T at the first draw of nearly every repeat.
+static inline bool reg_not_draw_state(uint32_t reg) { return reg >= 0x0A29 && reg <= 0x0A31; }
 static inline void reg_hash_update(uint32_t reg, uint32_t old_value, uint32_t new_value) {
-    if ((reg >= 0x2080 && reg <= 0x2082) || reg == 0x2319 || reg == 0x21FC || reg == 0x21F9) return;
+    if ((reg >= 0x2080 && reg <= 0x2082) || reg == 0x2319 || reg == 0x21FC || reg == 0x21F9 || reg_not_draw_state(reg)) return;
     g_reg_hash ^= reg_mix(reg, old_value) ^ reg_mix(reg, new_value);
 }
 static inline void reg_set(uint32_t reg, uint32_t value) {
@@ -4279,14 +4282,15 @@ static inline uint32_t tskip_state(uint32_t i) {
     if (i < 0x6000) return g_xe_regs[i];
     switch (i - 0x6000) { case 0: return g_vs_addr; case 1: return g_vs_size; case 2: return g_ps_addr; default: return g_ps_size; }
 }
-static inline bool tskip_per_tile(uint32_t i) { return (i >= 0x2080 && i <= 0x2082) || i == 0x2319; }
+static inline bool tskip_per_tile(uint32_t i) { return (i >= 0x2080 && i <= 0x2082) || i == 0x2319 || reg_not_draw_state(i); }
 // A/B state T: per-draw check instead of the entry check. Runs 10 to 12 (Episode I chapter 2): the entry check refused the repeats of
 // every heavy frame ("repeat tiles" 0.00 ms), so the later tiles were walked and recorded in full, while the replay merged them and
 // drew tile 0's records only. The entry check asks more than a copy needs: a register that differs at entry but is written before any
 // draw reads it changes nothing. Under T a repeat starts without it; each draw is copied only if the register hash, the shaders and the
 // draw packet equal tile 0's at the same draw, and from the first draw that differs the rest of the IB is recorded in full. One repeat
 // in 16 is recorded in full anyway and each hash-matched draw compared with tile 0's record (shaders, state, constants, ranges, indices;
-// not the viewport-derived system constants): a difference prints [TILESKIP] FALSE MATCH and turns T off for the session.
+// not the viewport-derived system constants): a difference prints [TILESKIP] FALSE MATCH with the field, and the third turns T off for the session.
+extern "C" void lsw_level_name(char* out, size_t capacity);   // native_crt.cpp
 static std::atomic<bool> g_tskip_relaxed_on{false};
 static bool g_tskip_broken = false;
 static bool g_tskip_relaxed = false, g_tskip_check = false, g_tskip_abort = false;   // the current repeat
@@ -4298,30 +4302,29 @@ static inline uint64_t tskip_draw_hash(uint32_t initiator, uint32_t dma_base, ui
            reg_mix(0x6007, uint32_t(reinterpret_cast<uintptr_t>(inline_idx))) ^ reg_mix(0x6008, inline_words);
 }
 // What a tile copy would take from tile 0's record, compared with a full record of the same draw.
-static bool tskip_same_content(const LswGpuFrame& f, const LswGpuDrawRec& a, const LswGpuDrawRec& b) {
+static const char* tskip_content_differs(const LswGpuFrame& f, const LswGpuDrawRec& a, const LswGpuDrawRec& b) {
     auto block = [&](uint32_t oa, uint32_t ob, size_t n) {
         return !n || (size_t(oa) + n <= f.arena.size() && size_t(ob) + n <= f.arena.size() && !std::memcmp(f.arena.data() + oa, f.arena.data() + ob, n));
     };
     auto fields = [&](size_t from, size_t to) { return !std::memcmp(reinterpret_cast<const uint8_t*>(&a) + from, reinterpret_cast<const uint8_t*>(&b) + from, to - from); };
-    if (!fields(offsetof(LswGpuDrawRec, kind), offsetof(LswGpuDrawRec, rs_src))) return false;   // targets, MRT, blend, stencil
-    if (a.vs_key != b.vs_key || a.ps_key != b.ps_key || a.gs_type != b.gs_type || a.topology != b.topology || a.vertex_count != b.vertex_count ||
-        a.ib_count != b.ib_count || a.ib_32bit != b.ib_32bit || a.ib_shm != b.ib_shm || a.cb_sys_size != b.cb_sys_size ||
-        a.cb_vsf_size != b.cb_vsf_size || a.cb_psf_size != b.cb_psf_size || a.range_count != b.range_count) return false;
-    if (a.blendcontrol != b.blendcontrol || a.color_mask != b.color_mask || a.depthcontrol != b.depthcontrol || a.sc_mode_cntl != b.sc_mode_cntl) return false;
-    if (!fields(offsetof(LswGpuDrawRec, ps_tex_count), offsetof(LswGpuDrawRec, tile_repeat))) return false;   // textures, samplers
-    if (!block(a.cb_vsf_off, b.cb_vsf_off, a.cb_vsf_size) || !block(a.cb_psf_off, b.cb_psf_off, a.cb_psf_size) ||
-        !block(a.cb_bool_off, b.cb_bool_off, 40 * 4) || !block(a.cb_fetch_off, b.cb_fetch_off, 192 * 4)) return false;
-    if ((a.cb_derived_off != 0) != (b.cb_derived_off != 0) || (a.cb_derived_off && !block(a.cb_derived_off, b.cb_derived_off, 32 * 16))) return false;
+    if (!fields(offsetof(LswGpuDrawRec, kind), offsetof(LswGpuDrawRec, rs_src))) return "targets, blend or stencil";
+    if (a.vs_key != b.vs_key || a.ps_key != b.ps_key || a.gs_type != b.gs_type) return "shaders";
+    if (a.topology != b.topology || a.vertex_count != b.vertex_count || a.ib_count != b.ib_count || a.ib_32bit != b.ib_32bit || a.ib_shm != b.ib_shm) return "draw size";
+    if (a.cb_sys_size != b.cb_sys_size || a.cb_vsf_size != b.cb_vsf_size || a.cb_psf_size != b.cb_psf_size || a.range_count != b.range_count) return "block sizes";
+    if (a.blendcontrol != b.blendcontrol || a.color_mask != b.color_mask || a.depthcontrol != b.depthcontrol || a.sc_mode_cntl != b.sc_mode_cntl) return "fixed-function state";
+    if (!fields(offsetof(LswGpuDrawRec, ps_tex_count), offsetof(LswGpuDrawRec, tile_repeat))) return "textures or samplers";
+    if (!block(a.cb_vsf_off, b.cb_vsf_off, a.cb_vsf_size)) return "vertex constants";
+    if (!block(a.cb_psf_off, b.cb_psf_off, a.cb_psf_size)) return "pixel constants";
+    if (!block(a.cb_bool_off, b.cb_bool_off, 40 * 4)) return "bool and loop constants";
+    if (!block(a.cb_fetch_off, b.cb_fetch_off, 192 * 4)) return "fetch constants";
+    if ((a.cb_derived_off != 0) != (b.cb_derived_off != 0) || (a.cb_derived_off && !block(a.cb_derived_off, b.cb_derived_off, 32 * 16))) return "derived fetch values";
     for (uint32_t i = 0; i < a.range_count; ++i) {
         const LswGpuRange& x = f.ranges[a.first_range + i];
         const LswGpuRange& y = f.ranges[b.first_range + i];
-        if (x.phys != y.phys || x.size != y.size) return false;
+        if (x.phys != y.phys || x.size != y.size) return "vertex ranges";
     }
-    if (a.ib_count) {
-        if (a.ib_shm) return a.ib_off == b.ib_off;
-        return block(a.ib_off, b.ib_off, size_t(a.ib_count) * (a.ib_32bit ? 4 : 2));
-    }
-    return true;
+    if (a.ib_count && (a.ib_shm ? a.ib_off != b.ib_off : !block(a.ib_off, b.ib_off, size_t(a.ib_count) * (a.ib_32bit ? 4 : 2)))) return "indices";
+    return nullptr;
 }
 // Ring-level IB about to be walked.
 static void tile_skip_begin(uint32_t addr, uint32_t len) {
@@ -4450,13 +4453,16 @@ static bool tile_skip_relaxed(uint32_t initiator, uint32_t dma_base, uint32_t dm
     const bool rec = gpu_record_draw_impl(initiator, dma_base, dma_size, inline_idx, inline_words, edram_mode);
     if (match && rec && r.draws[q] != UINT32_MAX && f.draws.size() > before) {
         ++g_tsk_check_draws;
-        if (tskip_same_content(f, f.draws[r.draws[q]], f.draws.back())) ++g_tsk_check_equal;
+        const char* what = tskip_content_differs(f, f.draws[r.draws[q]], f.draws.back());
+        if (!what) ++g_tsk_check_equal;
         else {
-            ++g_tsk_false;
-            g_tskip_broken = true;
-            g_tskip_relaxed_on.store(false, std::memory_order_relaxed);
-            printf("[TILESKIP] FALSE MATCH at draw %u of a repeat (VS %016llX, PS %016llX): T turned off for this session\n", q,
-                   (unsigned long long)f.draws.back().vs_key, (unsigned long long)f.draws.back().ps_key);
+            // Three, not one: run 13's single difference came inside a level load, where guest memory changes between tiles.
+            if (++g_tsk_false >= 3) { g_tskip_broken = true; g_tskip_relaxed_on.store(false, std::memory_order_relaxed); }
+            char level[96];
+            lsw_level_name(level, sizeof level);
+            printf("[TILESKIP] FALSE MATCH in %s at draw %u of a repeat (VS %016llX, PS %016llX, level %s)%s\n", what, q,
+                   (unsigned long long)f.draws.back().vs_key, (unsigned long long)f.draws.back().ps_key, level,
+                   g_tskip_broken ? ": T turned off for this session" : "");
             fflush(stdout);
         }
     }

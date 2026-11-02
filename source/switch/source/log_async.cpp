@@ -20,6 +20,7 @@
 #include <thread>
 
 extern "C" void lsw_prof_register(const char* name, int sched_id);   // hw_profiler.cpp
+extern "C" int lsw_core3_begin(const char* name);                      // platform_switch.cpp: fourth core, when there is one
 
 namespace {
 struct Stream {
@@ -55,6 +56,7 @@ bool stream_write(Stream& s) {
 }
 
 void writer_main(void*) {
+    lsw_core3_begin("log_writer");
     lsw_prof_register("log_writer", -1);
     for (;;) {
         bool any = false;
@@ -133,6 +135,7 @@ void job_main() {
     // worker, one full capture was not done a minute later (run 7), and leaving the game lost the rest.
     svcSetThreadCoreMask(CUR_THREAD_HANDLE, 1, 1u << 1);
     svcSetThreadPriority(CUR_THREAD_HANDLE, 0x3A);
+    lsw_core3_begin("bg_files");
     lsw_prof_register("bg_files", -1);
     uint64_t done = 0, batch_ns = 0, batch_bytes = 0;
     for (;;) {

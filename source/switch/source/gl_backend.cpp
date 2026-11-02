@@ -54,6 +54,7 @@ extern "C" void lsw_xma_async_set(int on);                      // lsw_xma.cc: X
 extern "C" void lsw_lz2k_off_turn_set(int on);                  // native_lz2k.cpp: X
 extern "C" void lsw_tile_relaxed_set(int on);                  // kernel_stubs.cpp: T
 extern "C" void lsw_native_mix_set(int on);                    // native_mixer.cpp: N
+extern "C" void lsw_quantum_div_set(int n);                    // kernel_stubs.cpp: Q (a guest thread switch every 4th quantum)
 extern "C" void lsw_audio_stats(uint64_t* played, uint64_t* empty_ns);   // audio_switch.cpp: frames.log columns
 extern "C" void lsw_log_async_path(char* out, size_t capacity, const char* name);   // log_async.cpp
 extern "C" void lsw_prof_register(const char* name, int sched_id);   // hw_profiler.cpp
@@ -2006,7 +2007,7 @@ uint32_t g_frame_groups = 0, g_frame_copies = 0;
 
 // LSWTCS_ABCYCLE=seconds: cycles through LSWTCS_ABSTATES during play, so one session compares settings over the same
 // scenes without a restart per setting. Each state is any of M (tile merging on), A (audio threads first in the guest
-// scheduler, LSWTCS_AUDIOPRIO), W (PM4 walk off the rotation, LSWTCS_WALKOFF), T (tile repeats checked per draw, kernel_stubs.cpp), N (native audio mixer, native_mixer.cpp) and V (LSWTCS_GLUNTILECHECK runs, its
+// scheduler, LSWTCS_AUDIOPRIO), W (PM4 walk off the rotation, LSWTCS_WALKOFF), T (tile repeats checked per draw, kernel_stubs.cpp), N (native audio mixer, native_mixer.cpp), Q (guest scheduler quantum 4x longer) and V (LSWTCS_GLUNTILECHECK runs, its
 // hitches kept out of the other states' numbers); "-" is none. Written to frames.log as
 // "# ab STATE"; tools/analyze_run.py compares the states. Off by default: without it nothing changes during play.
 std::string g_ab_state;
@@ -2052,6 +2053,7 @@ void ab_cycle_tick() {
     lsw_lz2k_off_turn_set(has('X'));
     lsw_tile_relaxed_set(has('T'));
     lsw_native_mix_set(has('N'));
+    lsw_quantum_div_set(has('Q') ? 4 : 0);
     stitch_set(has('S'));
     ++g_ab_changes;
     printf("[ABCYCLE] state %s from replay %llu\n", g_ab_state.c_str(), (unsigned long long)g_replays);

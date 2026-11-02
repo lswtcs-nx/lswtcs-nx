@@ -25,6 +25,7 @@ extern "C" void dbg_ram(const char* fmt, ...);
 extern "C" void lswtcs_sched_snapshot();   // DIAG (kernel_stubs.cpp)
 extern "C" __attribute__((weak)) void lsw_offcore_begin_prio(int) {}   // Switch: platform_switch.cpp
 extern "C" __attribute__((weak)) void lsw_prof_register(const char*, int) {}   // Switch: hw_profiler.cpp
+extern "C" __attribute__((weak)) int lsw_core3_begin(const char*) { return 0; }   // Switch: platform_switch.cpp (fourth core)
 
 namespace {
 constexpr uint32_t kContextCount = 320;
@@ -70,6 +71,7 @@ void worker_main() {
     // On core 2 beside the audio output thread: a frame decodes in well under a millisecond, and on core 0 this thread
     // would compete with whichever guest thread holds the turn.
     lsw_offcore_begin_prio(0x2B);
+    lsw_core3_begin("xma");   // only with the fourth core
     lsw_prof_register("xma", -1);
     for (;;) {
         bool did = false;

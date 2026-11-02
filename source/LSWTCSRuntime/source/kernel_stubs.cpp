@@ -1233,6 +1233,8 @@ thread_local unsigned g_spin_dbg[8];   // DIAG: calls per site (0 KfAcq 1 KfRel 
 static int spinguard_on() { static int s=-1; if(s<0){ const char* e=getenv("LSWTCS_SPINGUARD"); s=(e&&e[0]=='0')?0:1; } return s; }
 extern "C" void lswtcs_spin_enter() { if (spinguard_on()) g_spinlock_depth++; }
 extern "C" void lswtcs_spin_leave() { if (spinguard_on() && g_spinlock_depth > 0) g_spinlock_depth--; }
+static std::atomic<int> g_qdiv_ab{0};
+extern "C" void lsw_quantum_div_set(int n) { g_qdiv_ab.store(n, std::memory_order_relaxed); }
 extern "C" void lswtcs_gil_quantum() {
     // Advance the deterministic virtual clock (no-op unless LSWTCS_VCLOCK). Done FIRST, before
     // any early-return, so guest time tracks fn-entry count purely (1024 entries / boundary).
@@ -1281,7 +1283,11 @@ extern "C" void lswtcs_gil_quantum() {
     // guest-fn entries). Coarser quanta = fewer yield points = fewer chances for a host-event-
     // woken thread to be sampled at a timing-dependent moment → more deterministic, while still
     // providing eventual liveness for guest spin-waits. Sweep to find determinism/liveness balance.
-    { static int qdiv = -1; if (qdiv < 0) { const char* e = getenv("LSWTCS_QDIV"); qdiv = (e ? atoi(e) : 1); if (qdiv < 1) qdiv = 1; }
+    // A/B state Q sets it during play (lsw_quantum_div_set): run 15's heavy band switched threads about 1,600 times a second, and each
+    // handoff is a kernel wake and sleep while no guest code runs.
+    { static int qdiv_env = -1; if (qdiv_env < 0) { const char* e = getenv("LSWTCS_QDIV"); qdiv_env = (e ? atoi(e) : 1); if (qdiv_env < 1) qdiv_env = 1; }
+      const int qdiv_ab = g_qdiv_ab.load(std::memory_order_relaxed);
+      const int qdiv = qdiv_ab > 0 ? qdiv_ab : qdiv_env;
       if (qdiv > 1) {
           // With LSWTCS_AUDIOPRIO a runnable audio thread waiting for the turn is never kept waiting by the divisor.
           const bool prio_waiting = audioprio_mode() == 1 && sched_prio_waiting(g_sched_id) >= 0;
@@ -4132,7 +4138,9 @@ extern "C" uint32_t lsw_gpu_shm_epoch() { return g_shm_epoch; }   // gl_bridge.c
 static std::atomic<bool> g_shm_frame_hash{false};
 static uint32_t g_shm_hash_tick = 0;
 static constexpr uint32_t kShmSettledFrames = 8;
-extern "C" void lsw_shm_frame_hash_set(int on) { g_shm_frame_hash.store(on != 0, std::memory_order_relaxed); }
+// A sampled miss means H would have kept a stale page: H stops for the session, as P does on a mismatch. Runs 10 to 15 sampled none.
+static bool g_shm_frame_hash_broken = false;
+extern "C" void lsw_shm_frame_hash_set(int on) { g_shm_frame_hash.store(on != 0 && !g_shm_frame_hash_broken, std::memory_order_relaxed); }
 static inline void gpu_shm_new_epoch(int src) { ++g_shm_epoch; ++g_gpuprof[GP_N_EPOCH]; if (src == 1) ++g_gpuprof[GP_N_EPOCH_ISR]; g_shm_epoch_src = src; }
 static void gpu_shm_invalidate(uint32_t phys) {   // a CP write landed here: rehash before trusting the page
     if (!g_shm_pages.empty() && phys < 0x20000000u) g_shm_pages[phys >> kShmPageShift].epoch = 0;
@@ -4203,7 +4211,15 @@ static void gpu_shm_track(LswGpuFrame& f, uint32_t a, uint32_t sz) {
                                 p << kShmPageShift, g_shm_epoch_src, copies.size() - 1);
                 } } }
             const bool changed = !pg.valid || pg.hash != h;
-            if (changed && settled) ++g_gpuprof[GP_N_HASH_MISS];
+            if (changed && settled) {
+                ++g_gpuprof[GP_N_HASH_MISS];
+                if (!g_shm_frame_hash_broken) {
+                    g_shm_frame_hash_broken = true;
+                    g_shm_frame_hash.store(false, std::memory_order_relaxed);
+                    printf("[GPUPAGES] H MISS: page %08X changed after %u unchanged frames; H off for this session\n", p << kShmPageShift, pg.stable);
+                    fflush(stdout);
+                }
+            }
             if (changed) pg.stable = 0;
             else if (pg.frame != g_shm_frame) ++pg.stable;
             pg.frame = g_shm_frame;

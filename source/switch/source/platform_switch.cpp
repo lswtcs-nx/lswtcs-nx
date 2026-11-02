@@ -145,6 +145,91 @@ extern "C" void lsw_offcore_end() {
     g_offcore_prev_core = -1;
 }
 
+// ── Fourth core (LSWTCS_CORE3=1), after bo2-360-nx's route, techniques only ──────────────────────────────────────────
+// Core 3 is usable only when the process core mask has it: a title whose NPDM allows cores 0-3. hbloader's NPDM stops at
+// core 2, so every homebrew launch logs mask 0x7 and nothing here happens. When it is there, threads that only do host work
+// move to core 3 at the lowest application priority (0x3F) on their own call (lsw_core3_begin): the XMA worker, the
+// background file writer, the log writer. The guest turn stays on core 0, so this frees cores 1 and 2 (render, Mesa), not
+// the turn. Core 3 also runs system services: bo2-360-nx reports a hard freeze of a Switch Lite from starving them, so a
+// meter checks once a second and sends every moved thread home for the rest of the session if they used more than 85 % of
+// the core for 2 seconds in a row ([CORE3]).
+namespace {
+struct Core3Thread { Handle handle; s32 home_core; u64 home_mask; s32 home_prio; u64 ticks_last; char name[16]; };
+Core3Thread g_core3[8];
+std::atomic<int> g_core3_count{0};
+std::atomic<bool> g_core3_on{false};
+Mutex g_core3_lock;
+bool core3_available() {
+    static const bool ok = [] {
+        const char* e = getenv("LSWTCS_CORE3");
+        u64 mask = 0;
+        return e && e[0] == '1' && R_SUCCEEDED(svcGetInfo(&mask, InfoType_CoreMask, CUR_PROCESS_HANDLE, 0)) && (mask & 8);
+    }();
+    return ok;
+}
+void core3_send_home() {
+    mutexLock(&g_core3_lock);
+    g_core3_on.store(false);
+    for (int i = 0; i < g_core3_count.load(); ++i) {
+        svcSetThreadCoreMask(g_core3[i].handle, g_core3[i].home_core, g_core3[i].home_mask);
+        if (g_core3[i].home_prio >= 0) svcSetThreadPriority(g_core3[i].handle, g_core3[i].home_prio);
+    }
+    mutexUnlock(&g_core3_lock);
+}
+void core3_meter(void*) {
+    int over = 0;
+    for (;;) {
+        svcSleepThread(1000000000);
+        if (!g_core3_on.load()) return;
+        u64 used = 0;
+        for (int i = 0; i < g_core3_count.load(); ++i) {
+            u64 t = 0;
+            if (R_FAILED(svcGetInfo(&t, InfoType_ThreadTickCount, g_core3[i].handle, UINT64_MAX))) continue;
+            used += t - g_core3[i].ticks_last;
+            g_core3[i].ticks_last = t;
+        }
+        const double share = double(armTicksToNs(used)) / 1e9;
+        over = share > 0.85 ? over + 1 : 0;
+        if (over >= 2) {
+            core3_send_home();
+            printf("[CORE3] moved threads used %.0f %% of core 3 for 2 s: back on their own cores for this session\n", share * 100);
+            fflush(stdout);
+            return;
+        }
+    }
+}
+}  // namespace
+// The calling thread moves to core 3 if the fourth core is on; returns whether it moved.
+extern "C" int lsw_core3_begin(const char* name) {
+    if (!core3_available()) return 0;
+    static std::once_flag started;
+    std::call_once(started, [] {
+        mutexInit(&g_core3_lock);
+        g_core3_on.store(true);
+        static Thread meter;
+        if (R_SUCCEEDED(threadCreate(&meter, core3_meter, nullptr, nullptr, 0x4000, 0x2A, 2))) threadStart(&meter);
+        printf("[CORE3] fourth core in use for host threads (meter on core 2)\n");
+        fflush(stdout);
+    });
+    if (!g_core3_on.load()) return 0;
+    mutexLock(&g_core3_lock);
+    const int i = g_core3_count.load();
+    if (i >= 8) { mutexUnlock(&g_core3_lock); return 0; }
+    Core3Thread& t = g_core3[i];
+    t.handle = threadGetCurHandle();
+    if (R_FAILED(svcGetThreadCoreMask(&t.home_core, &t.home_mask, t.handle))) { mutexUnlock(&g_core3_lock); return 0; }
+    if (R_FAILED(svcGetThreadPriority(&t.home_prio, t.handle))) t.home_prio = -1;
+    svcGetInfo(&t.ticks_last, InfoType_ThreadTickCount, t.handle, UINT64_MAX);
+    snprintf(t.name, sizeof t.name, "%s", name);
+    svcSetThreadPriority(t.handle, 0x3F);
+    const Result rc = svcSetThreadCoreMask(t.handle, 3, 1u << 3);
+    g_core3_count.store(i + 1);
+    mutexUnlock(&g_core3_lock);
+    printf("[CORE3] %s on core 3 (rc 0x%X)\n", name, rc);
+    fflush(stdout);
+    return R_SUCCEEDED(rc);
+}
+
 // DIAG: per-core load ([CPULOAD], printed with [GLPROF]). Horizon reports a core's idle ticks only to a thread running
 // on that core (InfoType_IdleTickCount, sub-id -1 = the caller's core), so one sampler thread per core, at the lowest
 // application priority, reads its core's counter every 100 ms. A sampler only misses its wake-up when its core has no

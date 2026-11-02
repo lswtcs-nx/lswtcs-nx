@@ -854,3 +854,22 @@ The cause found in the code: VdSwap set the global `g_interrupt_ctx` before wait
 - **Polygon offset, state O.** The GL backend never applied the Xenos polygon offset (`PA_SU_SC_MODE_CNTL` bits 11-13, `PA_SU_POLY_OFFSET_*`). It is now recorded per draw, as Xenia picks the face, and applied in state O: the slope scale in 1/16 subpixels, the offset times 2^24 on the float32 depth buffer, as Xenia's host-render-target path. Whether the studs use it is not known; the capture log now prints the mode register and both values (`scm=`, `po=`).
 - **`[GLPROBE]`** in full captures: after each draw into a scene-wide colour target, which of 32×18 screen cells changed. That names the draw that put the studs over the characters, and the outline draw.
 - Main session `MAPXSHN,MAPXSHNO`; W session `MAPXSHN,MAPXSHNW`.
+
+## Run 19: `0.0.25-log19`, 2 November 2026, two sessions
+
+**W works now.** The W session (`private/runs/run19w-log19`, `MAPXSHN,MAPXSHNW`) played through `Gungan_A` to `E` and back to the hub with no stop and no black band; `[WALKOFF]` counted no lost GPU interrupt. So the faults of runs 7, 12, 17 and 18 were the three races fixed in log17-log19.
+
+**But W gains little, and why.** In the heavy band W gave 9.9 FPS against 8.2 in the same session (p95 128 against 186 ms). The tile worker's share of the guest turn fell from about 36 % to 2 % while its CPU stayed at 26 %: its walk ran off the turn. Yet the guest scheduler sat idle 27-42 % of the time. VdSwap waited for that walk, then waited in its tile drain for the worker to empty its queue, so the main thread waited instead of running the next frame. The 360's VdSwap only queues the swap. Log20 tests that (states Y and D).
+
+**The whole W session rendered slowly** (render thread 88-90 ms per heavy frame in both states, against 35-38 ms in the main session), so its absolute FPS is not comparable with the main session. Replay cost per 1000 draws doubled after the first full capture in run 19's main session (6.8 → 14.0 ms in the same level). Earlier runs show smaller rises after captures, so captures, the new probe or both may leave the renderer slower. Not resolved; log20 turns the probe off unless set, and the main session asks for captures only at the end.
+
+**Studs over the characters (captures 5942, 6148, 6207).** The probe shows the studs and brick come from early draws (#51-#57, program 374, `vs 8B12FE19`, `ps AB23B41D`), opaque with depth test and write on. The characters come later. So the legs fail the depth test where the studs are: the studs' depth is nearer than it should be, or the characters' is farther. Those draws have `po=0/0` and no offset bits in `PA_SU_SC_MODE_CNTL`, so polygon offset (state O) is not the cause, and O is dropped. The stud pixel shader samples a cube map while a 2D texture is bound (`DIM-MISMATCH dim1/3`). That would read black and may be the dark outline the tester saw; it would not move depth. Log20 adds each draw's viewport depth range to the capture log.
+
+**Render thread in the main session's heavy band** (`[GLPROF]`): replay CPU 42-54 ms per frame, of which `plan` 12.5-13.7 ms, `fence` 4-8 ms, `bind` 2-10 ms, against about 40 ms of GPU. The render thread is close to being the limit after the guest turn, and `plan` is the largest single part.
+
+## `0.0.26-log20`
+
+- **Y** (with W): VdSwap does not wait for a walk under way, off the turn or half done on it; it leaves the ring to that walker, which reads the write pointer again before it stops. It also no longer sets and clears the interrupt context over a half walk. **D** (with W): VdSwap's own walk skips the tile drain. D can bring back what the drain was added for (the worker lagging behind recycled command buffers), so it is in the second session only.
+- `[WALKOFF]` adds `swaps left to a walk` and `swaps without drain`.
+- `[GLPROBE]` only with `LSWTCS_GLPROBE=1`; the capture log adds `z=min..max` per draw.
+- Main session `MAPXSHN,MAPXSHNW,MAPXSHNWY` (walk on core 1); second session `MAPXSHNWY,MAPXSHNWYD`.

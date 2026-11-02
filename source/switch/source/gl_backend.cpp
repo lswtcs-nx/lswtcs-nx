@@ -55,6 +55,7 @@ extern "C" void lsw_lz2k_off_turn_set(int on);                  // native_lz2k.c
 extern "C" void lsw_tile_relaxed_set(int on);                  // kernel_stubs.cpp: T
 extern "C" void lsw_native_mix_set(int on);                    // native_mixer.cpp: N
 extern "C" void lsw_quantum_div_set(int n);                    // kernel_stubs.cpp: Q (a guest thread switch every 4th quantum)
+extern "C" void lsw_walk_ab_set(int nowait, int nodrain);           // kernel_stubs.cpp: Y and D (with W)
 extern "C" void lsw_audio_stats(uint64_t* played, uint64_t* empty_ns);   // audio_switch.cpp: frames.log columns
 extern "C" void lsw_log_async_path(char* out, size_t capacity, const char* name);   // log_async.cpp
 extern "C" void lsw_prof_register(const char* name, int sched_id);   // hw_profiler.cpp
@@ -1225,7 +1226,8 @@ bool g_sc_invalidate_pending = false;
 // cells and read back, and the cells whose colour changed are printed ([GLPROBE], a 576-bit mask, row 0 first). It tells which draw
 // last wrote a region of the screenshot, such as the studs drawn over the characters in run 17 and 18. Slow: one GPU wait per draw.
 void capture_probe(uint32_t draw_index, const DrawTarget& dt) {
-    static const bool on = [] { const char* e = getenv("LSWTCS_GLPROBE"); return !(e && e[0] == '0'); }();
+    // Off unless set: run 19's renders were about twice as slow per draw after the first capture with it; not shown to be its fault.
+    static const bool on = [] { const char* e = getenv("LSWTCS_GLPROBE"); return e && e[0] == '1'; }();
     if (!on || dt.rt_w < 1280) return;
     constexpr int kW = 32, kH = 18;
     static GLuint fbo = 0, tex = 0;
@@ -2103,6 +2105,7 @@ void ab_cycle_tick() {
     const auto has = [](char c) { return g_ab_state.find(c) != std::string::npos; };
     g_ut_off_ab = !has('M');
     lsw_sched_ab_set(has('A'), has('W'));
+    lsw_walk_ab_set(has('Y'), has('D'));
     lsw_prep_memo_set(has('P'));
     lsw_shm_frame_hash_set(has('H'));
     lsw_xma_async_set(has('X'));
@@ -2620,14 +2623,14 @@ PresentSrc replay() {
         }
         if (g_capture_frame) {
             printf("[GLDRAWCAP] #%u prim %u gs %u n=%u ib=%u mode=%u pitch=%u msaa=%u col=%u/%u dep=%u nrt=%u blend=%08X cmask=%X "
-                   "zctl=%08X cull=%u vp=%.0f,%.0f,%.0fx%.0f sc=%u,%u..%u,%u ps=%s vs=%016llX ps=%016llX gs=%016llX prog=%u scm=%08X po=%g/%g |%s\n", draw_i - 1,
+                   "zctl=%08X cull=%u vp=%.0f,%.0f,%.0fx%.0f sc=%u,%u..%u,%u ps=%s vs=%016llX ps=%016llX gs=%016llX prog=%u scm=%08X po=%g/%g z=%.4f..%.4f |%s\n", draw_i - 1,
                    r.topology, r.gs_type, r.vertex_count,
                    r.ib_count, r.edram_mode, r.surf_info & 0x3FFF, (r.surf_info >> 16) & 3, r.color_info & 0xFFF,
                    (r.color_info >> 16) & 0xF, r.depth_info & 0xFFF, dt.nrt, r.blendcontrol, r.color_mask, r.depthcontrol,
                    r.sc_mode_cntl & 7, r.viewport[0], r.viewport[1], r.viewport[2], r.viewport[3],
                    r.scissor[0], r.scissor[1], r.scissor[2], r.scissor[3], ps ? "y" : "n",
                    (unsigned long long)vs->key, (unsigned long long)(ps ? ps->key : 0), (unsigned long long)(gs ? gs->key : 0), prog,
-                   r.sc_mode_cntl, r.poly_scale, r.poly_offset, g_unit_log.c_str());
+                   r.sc_mode_cntl, r.poly_scale, r.poly_offset, r.viewport[4], r.viewport[5], g_unit_log.c_str());
             dump_capture_glsl(vs);
             dump_capture_glsl(ps);
             dump_capture_glsl(gs);

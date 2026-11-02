@@ -1157,7 +1157,17 @@ static std::atomic<uint64_t> g_walk_waits{0}, g_walk_rewaits{0};   // [GPUPAGES]
 // [WALKOFF] (lsw_walkoff_report): what W does, every 5 s while it walks, and the walker's state when the ring stops being walked.
 static std::atomic<uint64_t> g_wo_ibs{0}, g_wo_off_ns{0}, g_wo_rejoin_ns{0}, g_wo_rejoin_max_ns{0}, g_wo_needturn{0}, g_wo_claims{0},
                              g_wo_second{0}, g_wo_second_skipped{0}, g_wo_drain_waits{0}, g_wo_drain_busy{0},
-                             g_isr_lost{0};   // GPU interrupts dropped for want of g_interrupt_ctx
+                             g_isr_lost{0},   // GPU interrupts dropped for want of g_interrupt_ctx
+                             g_wo_swap_skips{0}, g_wo_swap_nodrain{0};
+// A/B states Y and D (with W). Run 19's W session: the walk left the turn, but the guest was idle 27-42 % of the heavy band, because
+// VdSwap waited for the tile worker's walk (walk_wait_other) and then, in its tile drain, for the worker to empty its queue. The
+// 360's VdSwap only queues the swap; its GPU and the tile worker run beside the game. Y: VdSwap leaves the ring to a walk under way
+// (that walker reads the write pointer again before it stops). D: VdSwap's own walk does not wait for the tile worker's queue.
+static std::atomic<bool> g_swap_nowait{false}, g_swap_nodrain{false};
+extern "C" void lsw_walk_ab_set(int nowait, int nodrain) {
+    g_swap_nowait.store(nowait != 0, std::memory_order_relaxed);
+    g_swap_nodrain.store(nodrain != 0, std::memory_order_relaxed);
+}
 static std::atomic<int64_t> g_walk_end_ms{0};   // steady clock, end of the last ring walk
 static thread_local std::chrono::steady_clock::time_point t_walk_off_since;
 static void walk_off_enter() {
@@ -5924,12 +5934,12 @@ static uint32_t pm4_tile_backlog() {
 // the turn, the walker's state and the tile backlog.
 extern "C" void lsw_walkoff_report() {
     if (!gil_on() || !g_rb_base || !g_rb_size) return;
-    static uint64_t last[11] = {};
-    const uint64_t now[11] = {g_wo_ibs.load(), g_wo_off_ns.load(), g_wo_rejoin_ns.load(), g_wo_needturn.load(), g_wo_claims.load(),
+    static uint64_t last[13] = {};
+    const uint64_t now[13] = {g_wo_ibs.load(), g_wo_off_ns.load(), g_wo_rejoin_ns.load(), g_wo_needturn.load(), g_wo_claims.load(),
                               g_wo_second.load(), g_walk_waits.load(), g_walk_rewaits.load(), g_wo_drain_busy.load(), g_wo_drain_waits.load(),
-                              g_isr_lost.load()};
-    uint64_t d[11];
-    for (int i = 0; i < 11; ++i) { d[i] = now[i] - last[i]; last[i] = now[i]; }
+                              g_isr_lost.load(), g_wo_swap_skips.load(), g_wo_swap_nodrain.load()};
+    uint64_t d[13];
+    for (int i = 0; i < 13; ++i) { d[i] = now[i] - last[i]; last[i] = now[i]; }
     const int64_t ms_now = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
     const int64_t end = g_walk_end_ms.load();
     uint8_t* base = g_base;
@@ -5941,10 +5951,10 @@ extern "C" void lsw_walkoff_report() {
     if (!d[0] && !stuck && !d[5] && !d[8] && !d[10]) return;
     const uint64_t rmax = g_wo_rejoin_max_ns.exchange(0);
     printf("[WALKOFF] 5 s: %llu IBs off the turn, %.1f ms off, rejoin %.2f ms avg %.2f max, guest code inside %llu, half-walk claims %llu, "
-           "second walkers %llu (skipped %llu total), waits %llu again %llu, tile drain found a walk %llu (waited %llu), GPU interrupts lost %llu%s\n",
+           "second walkers %llu (skipped %llu total), waits %llu again %llu, tile drain found a walk %llu (waited %llu), GPU interrupts lost %llu, swaps left to a walk %llu, swaps without drain %llu%s\n",
            (unsigned long long)d[0], d[1] / 1e6, d[0] ? d[2] / 1e6 / d[0] : 0.0, rmax / 1e6, (unsigned long long)d[3], (unsigned long long)d[4],
            (unsigned long long)d[5], (unsigned long long)g_wo_second_skipped.load(), (unsigned long long)d[6], (unsigned long long)d[7],
-           (unsigned long long)d[8], (unsigned long long)d[9], (unsigned long long)d[10], stuck ? " | NO WALK" : "");
+           (unsigned long long)d[8], (unsigned long long)d[9], (unsigned long long)d[10], (unsigned long long)d[11], (unsigned long long)d[12], stuck ? " | NO WALK" : "");
     if (stuck) {
         ++stuck_lines;
         char b[512]; int k;
@@ -6512,10 +6522,23 @@ PPC_FUNC(__imp__VdSwap) {
         // Run 18's W session: VdSwap set g_interrupt_ctx while the tile worker's walk (pm4_walk_now) was off the turn, and that walk,
         // ending, put back the null it had saved. VdSwap then walked with no context, so the GPU interrupts in its part of the ring
         // were dropped, the tile list they queue never reached the worker, and the picture stopped while the game ran. Wait first.
-        walk_wait_other();
-        g_interrupt_ctx = &ctx;
-        pm4_process_ring_flat();   // self-paces off the ring NOP frontier; fills g_geom_verts
-        g_interrupt_ctx = nullptr;
+        const bool wo = walkoff_on();
+        if (wo && g_swap_nowait.load(std::memory_order_relaxed) && (g_walk_off_sid.load() >= 0 || g_pm4_walking)) {
+            ++g_wo_swap_skips;
+        } else {
+            walk_wait_other();
+            // A walk half done on the turn (its thread yielded inside it): with W, leave the ring to it, and its interrupt context
+            // alone (setting and then clearing it here would drop that walk's interrupts, as in run 18).
+            if (wo && g_pm4_walking) {
+                ++g_wo_swap_skips;
+            } else {
+                const bool nodrain = wo && g_swap_nodrain.load(std::memory_order_relaxed);
+                if (nodrain) ++g_wo_swap_nodrain;
+                g_interrupt_ctx = &ctx;
+                pm4_process_ring_flat_impl(!nodrain);   // self-paces off the ring NOP frontier; fills g_geom_verts
+                g_interrupt_ctx = nullptr;
+            }
+        }
     }
     // GEOM: snapshot for the present replay. The per-VdSwap ring walk only sometimes
     // overlaps a frame's draw IBs (draw submission isn't synced to VdSwap), so most frames

@@ -888,3 +888,13 @@ What grew is `plan` (tile-merge planning, mostly XXH3 hashing of each tile draw'
 
 - `[THREADS]` and `[OFFCORE]` as above. No behaviour change.
 - Main session: `MAPXSHN` only, as the baseline without W. Second session: `MAPXSHN,MAPXSHNWY`.
+
+## `0.0.28-log22`: one session in two phases, and a placement guard
+
+The tester asked for one session per run with more in it. Log21 was not run; log22 replaces it.
+
+- **Phases.** `LSWTCS_ABSTATES` applies until the player first comes back to the hub from a level (`[ABPHASE] phase 2`), then `LSWTCS_ABSTATES2`. The first pass through the chapter is `MAPXSHN` alone, a baseline nothing earlier in the session can have touched. The second pass cycles `MAPXSHN`, `MAPXSHNWY` and `MAPXSHNWYK`.
+- **K** (with W): the off-turn walk goes to core 2 instead of core 1, which holds the render thread.
+- **Placement guard** (`LSWTCS_PLACEGUARD=1`, in the profiler thread): once a second, a guest thread that is not in an off-core move but no longer has the core mask or priority it started with gets them back, and `[PLACEMENT]` prints what it had. If the render slowdown of runs 19 and 20 comes from a thread left on core 1, phase 2 shows the guard firing and no slowdown. If the slowdown stays with no `[PLACEMENT]` line, the cause is elsewhere.
+- `[THREADS]` and `[OFFCORE]` from log21; each `[GLPROF]` line now ends with the A/B state.
+- `profiles/hardware-walk.env` is no longer staged.

@@ -56,6 +56,8 @@ extern "C" void lsw_tile_relaxed_set(int on);                  // kernel_stubs.c
 extern "C" void lsw_native_mix_set(int on);                    // native_mixer.cpp: N
 extern "C" void lsw_quantum_div_set(int n);                    // kernel_stubs.cpp: Q (a guest thread switch every 4th quantum)
 extern "C" void lsw_walk_ab_set(int nowait, int nodrain);           // kernel_stubs.cpp: Y and D (with W)
+extern "C" void lsw_walk_core_set(int core);                         // kernel_stubs.cpp: K (with W) walks on core 2; 0 = LSWTCS_WALKOFF_CORE
+extern "C" int lsw_ab_phase();                                       // native_crt.cpp: 2 after the first return to the hub
 extern "C" void lsw_audio_stats(uint64_t* played, uint64_t* empty_ns);   // audio_switch.cpp: frames.log columns
 extern "C" void lsw_log_async_path(char* out, size_t capacity, const char* name);   // log_async.cpp
 extern "C" void lsw_prof_register(const char* name, int sched_id);   // hw_profiler.cpp
@@ -2073,19 +2075,32 @@ uint32_t g_ab_changes = 0;
 void ab_cycle_tick() {
     static const uint64_t period_ns = [] { const char* e = getenv("LSWTCS_ABCYCLE"); return uint64_t(e ? atoi(e) : 0) * 1000000000ull; }();
     if (!period_ns) return;
-    static const std::vector<std::string> states = [] {
+    auto parse = [](const char* e, const char* dflt) {
         std::vector<std::string> v;
-        const char* e = getenv("LSWTCS_ABSTATES");
-        std::string list = e ? e : "MA,M,A";
+        std::string list = e ? e : dflt;
         for (size_t at = 0; at <= list.size();) {
             const size_t comma = std::min(list.find(',', at), list.size());
             if (comma > at) v.push_back(list.substr(at, comma - at));
             at = comma + 1;
         }
         return v;
-    }();
+    };
+    // Two phases in one session: LSWTCS_ABSTATES until the player first comes back to the hub from a level, then LSWTCS_ABSTATES2
+    // (if set). Run 21's request: one session instead of two, with a clean first pass before anything that may leave a trace.
+    static const std::vector<std::string> states1 = parse(getenv("LSWTCS_ABSTATES"), "MA,M,A");
+    static const std::vector<std::string> states2 = parse(getenv("LSWTCS_ABSTATES2"), "");
+    static int phase_seen = 1;
     static uint64_t next_ns = 0;
     static size_t index = 0;
+    const int phase = states2.empty() ? 1 : lsw_ab_phase();
+    if (phase != phase_seen) {
+        phase_seen = phase;
+        index = 0;
+        next_ns = 0;
+        printf("[ABPHASE] phase %d from replay %llu\n", phase, (unsigned long long)g_replays);
+        fflush(stdout);
+    }
+    const std::vector<std::string>& states = phase == 2 ? states2 : states1;
     const uint64_t now = gp_now();
     if (states.empty() || now < next_ns) return;
     next_ns = now + period_ns;
@@ -2106,6 +2121,7 @@ void ab_cycle_tick() {
     g_ut_off_ab = !has('M');
     lsw_sched_ab_set(has('A'), has('W'));
     lsw_walk_ab_set(has('Y'), has('D'));
+    lsw_walk_core_set(has('K') ? 2 : 0);
     lsw_prep_memo_set(has('P'));
     lsw_shm_frame_hash_set(has('H'));
     lsw_xma_async_set(has('X'));
@@ -3645,9 +3661,9 @@ void render_thread_main() {
                     if (k < RP_PRESENT) staged += d;
                     len += snprintf(line + len, sizeof line - len, " %s=%.2f", kRpName[k], d / 1e6 / n);
                 }
-                printf("[GLPROF] per replay (%u): wall=%.2fms replay=%.2f (max %.1f, other=%.2f) |%s\n", n,
+                printf("[GLPROF] per replay (%u): wall=%.2fms replay=%.2f (max %.1f, other=%.2f) |%s ab=%s\n", n,
                        t_last ? (now - t_last) / 1e6 / n : 0.0, replay_ns / 1e6 / n, max_ns / 1e6,
-                       replay_ns > staged ? (replay_ns - staged) / 1e6 / n : 0.0, line);
+                       replay_ns > staged ? (replay_ns - staged) / 1e6 / n : 0.0, line, g_ab_state.empty() ? "-" : g_ab_state.c_str());
                 static uint64_t sc_last[SC_N];
                 double ch[SC_N];
                 for (int k = 0; k < SC_N; ++k) { ch[k] = double(g_sc_changes[k] - sc_last[k]) / n; sc_last[k] = g_sc_changes[k]; }

@@ -130,12 +130,25 @@ extern "C" void lsw_offcore_begin() { lsw_offcore_begin_prio(0x2B); }
 // glthread worker on core 2 and with it the render thread).
 // [OFFCORE]: the first few moves and returns, with what was saved and what the thread is left with.
 static std::atomic<int> g_offcore_logs{0};
+// Threads moved off their core right now (lsw_offcore_active), so the placement guard (hw_profiler.cpp) leaves them alone.
+static std::atomic<Handle> g_offcore_now[32];
+static void offcore_mark(Handle h, bool on) {
+    for (auto& s : g_offcore_now) {
+        Handle cur = s.load();
+        if (on ? cur == 0 : cur == h) { if (s.compare_exchange_strong(cur, on ? h : 0)) return; }
+    }
+}
+extern "C" bool lsw_offcore_active(Handle h) {
+    for (auto& s : g_offcore_now) if (s.load() == h) return true;
+    return false;
+}
 extern "C" void lsw_offcore_begin_on(int target_core, int new_prio) {
     s32 core = 0; u64 mask = 0;
     if (R_FAILED(svcGetThreadCoreMask(&core, &mask, CUR_THREAD_HANDLE))) { g_offcore_prev_core = -1; return; }
     s32 prio = 0;
     g_offcore_prev_prio = R_SUCCEEDED(svcGetThreadPriority(&prio, CUR_THREAD_HANDLE)) ? prio : -1;
     g_offcore_prev_core = core; g_offcore_prev_mask = mask;
+    offcore_mark(CUR_THREAD_HANDLE, true);
     svcSetThreadPriority(CUR_THREAD_HANDLE, new_prio);
     svcSetThreadCoreMask(CUR_THREAD_HANDLE, target_core, 1u << target_core);
 }
@@ -153,6 +166,7 @@ extern "C" void lsw_offcore_end() {
         fflush(stdout);
     }
     g_offcore_prev_core = -1;
+    offcore_mark(CUR_THREAD_HANDLE, false);
 }
 
 // ── Fourth core (LSWTCS_CORE3=1), after bo2-360-nx's route, techniques only ──────────────────────────────────────────

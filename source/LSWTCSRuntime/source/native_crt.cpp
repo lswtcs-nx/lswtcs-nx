@@ -130,6 +130,7 @@ namespace {
 std::mutex g_level_mx;
 char g_level[128];
 std::atomic<uint32_t> g_level_seq{0};
+std::atomic<int> g_ab_phase{1};
 // levels\%s\%s.gin, levels\%s\%s.giz (sub_823F6030), %sLevels\%s\%s, its .ai2 and its ai.pak (sub_824D1988, sub_824DBEA8)
 bool is_level_format(uint32_t format) {
     return format == 0x8202A2A4u || format == 0x8202A2C4u || format == 0x820335E4u || format == 0x820335FCu || format == 0x82033614u;
@@ -157,11 +158,18 @@ void note_level(uint8_t* base, uint32_t path) {
     if (strcmp(g_level, from) == 0) return;
     snprintf(g_level, sizeof g_level, "%s", from);
     g_level_seq.fetch_add(1, std::memory_order_release);
+    {   // A/B phase 2 (LSWTCS_ABSTATES2): from the first return to the hub (a level name starting "Map") after a level that is not
+        static bool seen_level = false;
+        const bool hub = strncmp(from, "Map", 3) == 0;
+        if (!hub) seen_level = true;
+        else if (seen_level && g_ab_phase.load() < 2) g_ab_phase.store(2);
+    }
     printf("[LEVEL] %s\n", g_level);
     fflush(stdout);
 }
 }  // namespace
 extern "C" uint32_t lsw_level_seq() { return g_level_seq.load(std::memory_order_acquire); }
+extern "C" int lsw_ab_phase() { return g_ab_phase.load(std::memory_order_acquire); }
 extern "C" void lsw_level_name(char* out, size_t capacity) {
     std::lock_guard<std::mutex> lk(g_level_mx);
     snprintf(out, capacity, "%s", g_level);

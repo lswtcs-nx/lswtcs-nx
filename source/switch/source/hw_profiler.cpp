@@ -37,6 +37,7 @@ struct Target {
     char name[24];
     Handle handle;
     int sched_id;   // -1 for a host thread
+    s32 home_core; u64 home_mask; s32 home_prio;   // placement when it registered (guest threads: their start)
     uint64_t cpu_ns_last;
     uint64_t samples;
 };
@@ -185,6 +186,36 @@ bool end_window(FILE* f, uint64_t start_ns, uint64_t now_ns) {
     return true;
 }
 
+}  // namespace
+extern "C" bool lsw_offcore_active(Handle h);   // platform_switch.cpp
+namespace {
+// LSWTCS_PLACEGUARD=1: once a second, a guest thread that is not in an off-core move but no longer has the core mask or priority
+// it started with gets them back, and [PLACEMENT] says what it had. Runs 19 and 20: after W, the render thread lost half its
+// wall time on core 1 for the same CPU time; this both tests and repairs the suspected cause (a thread left there).
+void placement_guard() {
+    static const bool on = [] { const char* e = getenv("LSWTCS_PLACEGUARD"); return e && e[0] == '1'; }();
+    if (!on) return;
+    static int lines = 0;
+    static uint64_t fixes = 0;
+    const int count = g_target_count.load(std::memory_order_acquire);
+    for (int i = 0; i < count; ++i) {
+        Target& t = g_targets[i];
+        if (t.sched_id < 0 || t.home_core == -9 || t.home_prio < 0) continue;
+        s32 core = -9, prio = -1; u64 mask = 0;
+        if (R_FAILED(svcGetThreadCoreMask(&core, &mask, t.handle)) || R_FAILED(svcGetThreadPriority(&prio, t.handle))) continue;
+        if (mask == t.home_mask && prio == t.home_prio) continue;
+        if (lsw_offcore_active(t.handle)) continue;
+        svcSetThreadCoreMask(t.handle, t.home_core, t.home_mask);
+        svcSetThreadPriority(t.handle, t.home_prio);
+        ++fixes;
+        if (lines++ < 30) {
+            printf("[PLACEMENT] %s had core %d mask %llx prio %x, put back to core %d mask %llx prio %x (%llu so far)\n", t.name, core,
+                   (unsigned long long)mask, prio, t.home_core, (unsigned long long)t.home_mask, t.home_prio, (unsigned long long)fixes);
+            fflush(stdout);
+        }
+    }
+}
+
 void profiler_main(void* arg) {
     const int64_t period_ns = int64_t(uintptr_t(arg)) * 1000000;
     char path[96];
@@ -196,6 +227,7 @@ void profiler_main(void* arg) {
     uint64_t window_start = armTicksToNs(armGetSystemTick()), tick = 0;
     for (;;) {
         svcSleepThread(period_ns);
+        if ((tick % 500) == 0) placement_guard();
         const uint32_t draws = g_draws.load(std::memory_order_relaxed);
         const uint64_t last_frame = g_last_frame_tick.load(std::memory_order_relaxed);
         const uint32_t band = last_frame && armGetSystemTick() - last_frame > kStallTicks ? 3 : draws < 300 ? 0 : draws < 1300 ? 1 : 2;
@@ -221,6 +253,8 @@ extern "C" void lsw_prof_register(const char* name, int sched_id) {
     snprintf(t.name, sizeof t.name, "%s", name);
     t.handle = threadGetCurHandle();
     t.sched_id = sched_id;
+    if (R_FAILED(svcGetThreadCoreMask(&t.home_core, &t.home_mask, t.handle))) t.home_core = -9;
+    if (R_FAILED(svcGetThreadPriority(&t.home_prio, t.handle))) t.home_prio = -1;
     t.cpu_ns_last = 0;
     t.samples = 0;
     g_target_count.compare_exchange_strong(expected, i + 1, std::memory_order_acq_rel);

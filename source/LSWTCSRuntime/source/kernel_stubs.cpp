@@ -1149,6 +1149,8 @@ extern "C" void lsw_sched_ab_set(int audioprio, int walkoff) {
 // walker had not read it, and VdSwap's walk started a second walker over the same ring. Now g_walk_off_sid is set exactly while
 // the walker is off the rotation (also not during WalkNeedsTurn), and a waiter checks again each time it holds the turn, so the
 // other threads see what they would see with the walk on the turn.
+static std::atomic<int> g_walk_core_ab{0};   // A/B state K: the off-turn walk on core 2 (beside Mesa's worker and audio) instead of core 1 (render)
+extern "C" void lsw_walk_core_set(int core) { g_walk_core_ab.store(core, std::memory_order_relaxed); }
 static thread_local bool t_walk_off = false;      // this thread is walking off the rotation right now
 static std::atomic<int> g_walk_off_sid{-1};       // scheduler id of the thread off the rotation in a walk, -1 = none
 static std::mutex g_walk_mtx;
@@ -1177,8 +1179,9 @@ static void walk_off_enter() {
     sched_leave_turn(g_sched_id);
     static const int prio = [] { const char* e = getenv("LSWTCS_WALKOFF_PRIO"); return e ? int(strtol(e, nullptr, 0)) : 0x2D; }();
     // Core 2 by default. Run 7's trial there shared it with shader compiles and Mesa's worker; LSWTCS_WALKOFF_CORE=1 puts it beside the render thread.
-    static const int core = [] { const char* e = getenv("LSWTCS_WALKOFF_CORE"); return e ? atoi(e) : 2; }();
-    lsw_offcore_begin_on(core, prio);
+    static const int core_env = [] { const char* e = getenv("LSWTCS_WALKOFF_CORE"); return e ? atoi(e) : 2; }();
+    const int core_ab = g_walk_core_ab.load(std::memory_order_relaxed);
+    lsw_offcore_begin_on(core_ab > 0 ? core_ab : core_env, prio);
     t_walk_off = true;
 }
 static void walk_off_leave() {

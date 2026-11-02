@@ -7,6 +7,9 @@
 #define LSW_DATA_DIR LSW_ROOT_DIR "/Convert 360/LSWTCS"
 #endif
 #include <set>
+#ifdef __aarch64__
+#include <arm_neon.h>
+#endif
 #include "../../Convert 360/LSWTCS/output/ppc_context.h"
 #include <cstdio>
 #include <cstdint>
@@ -2906,7 +2909,17 @@ PPC_FUNC(__imp__XMsgCancelIORequest)        { PPC_FUNC_PROLOGUE(); LSW_XSTUB_LOG
 // Trigger-file polls: at most one per 250 ms per call site. GetFileAttributesA is a filesystem query
 // (~10-20 us) and the old count-based limits (every 16 / 256 / 1024 calls) still fired several times a
 // frame on the walker and input paths (the sampling profile's ZwQueryAttributesFile).
-#define LSW_TRIGGER_DUE() ([] { static uint64_t next = 0; uint64_t now = GetTickCount64(); \
+// On the console the same query goes to the SD card and takes milliseconds, with the game holding the turn: 9 % and 12 % of
+// the main thread's and the walker's samples in run 8's heavy scenes. Off there unless LSWTCS_TRIGGERS=1.
+static bool lsw_file_triggers_on() {
+#ifdef __SWITCH__
+    static const bool on = [] { const char* e = getenv("LSWTCS_TRIGGERS"); return e && e[0] == '1'; }();
+    return on;
+#else
+    return true;
+#endif
+}
+#define LSW_TRIGGER_DUE() (lsw_file_triggers_on() && [] { static uint64_t next = 0; uint64_t now = GetTickCount64(); \
                                 if (now < next) return false; next = now + 250; return true; }())
 
 // ── PM4 ring buffer parser ─────────────────────────────────────────────────────
@@ -4079,6 +4092,7 @@ static uint32_t g_shm_epoch = 1;
 // Epoch sources (GPUPROF attribution of mid-frame page changes): 0 = walk start, 1 = after a guest
 // interrupt callback, 2 = after a tile-drain yield.
 static int g_shm_epoch_src = 0;
+extern "C" uint32_t lsw_gpu_shm_epoch() { return g_shm_epoch; }   // gl_bridge.cc: shader bytes cannot change within one
 static inline void gpu_shm_new_epoch(int src) { ++g_shm_epoch; ++g_gpuprof[GP_N_EPOCH]; if (src == 1) ++g_gpuprof[GP_N_EPOCH_ISR]; g_shm_epoch_src = src; }
 static void gpu_shm_invalidate(uint32_t phys) {   // a CP write landed here: rehash before trusting the page
     if (!g_shm_pages.empty() && phys < 0x20000000u) g_shm_pages[phys >> kShmPageShift].epoch = 0;
@@ -4276,7 +4290,9 @@ static bool tile_skip_copy(uint32_t initiator,uint32_t dma_base,uint32_t dma_siz
     const uint32_t idx = r.draws[g_tskip_q++];
     if (idx == UINT32_MAX) return false;   // tile 0 did not record this draw either
     LswGpuFrame& f = g_gpu_frame_build;
-    LswGpuDrawRec c = f.draws[idx];
+    f.draws.push_back(f.draws[idx]);   // built in place: a local copied in was 2 x 1760 B per tile copy (run 8: 3 % of the walker)
+    LswGpuDrawRec& c = f.draws.back();
+    const uint32_t self = uint32_t(f.draws.size() - 1);
     g_xe_regs[0x21FC] = initiator;          // as gpu_record_draw_impl, for the viewport calculation
     // This tile's viewport and scissor, and its own system constants (tile 0's with the viewport-derived fields
     // patched), so the copy also draws correctly when the replay does not untile its group: it used to be dropped
@@ -4291,7 +4307,7 @@ static bool tile_skip_copy(uint32_t initiator,uint32_t dma_base,uint32_t dma_siz
         lsw_gpu_viewport_scissor(g_xe_regs, c.ps_writes_depth, c.viewport, c.scissor);
     }
     c.tile_repeat = idx + 1;
-    if(gpu_inputcheck_on() && !f.input_check_exhausted && idx<f.input_signatures.size() && f.draws.size()<4096) {
+    if(gpu_inputcheck_on() && !f.input_check_exhausted && idx<f.input_signatures.size() && self<4096) {
         auto expected=f.input_signatures[idx];
         const bool ps_ok=g_ps_addr>=0x80000000u && g_ps_addr<0xa0000000u && g_ps_size && g_ps_size<0x4000;
         const uint32_t src=(initiator>>6)&3;
@@ -4309,13 +4325,12 @@ static bool tile_skip_copy(uint32_t initiator,uint32_t dma_base,uint32_t dma_siz
             if(c.cb_sys_size && c.cb_sys_size<=sizeof sys)
                 expected.system=XXH3_64bits_withSeed(sys,c.cb_sys_size,0x737973ull);
             if(expected.status==1 && actual.status==1)++f.input_check_reuses;
-            if(lsw_gpu_input_note(f.input_mismatch,uint32_t(f.draws.size()),idx,1,expected,actual,true))
-                gpu_inputcheck_dump(current,c,uint32_t(f.draws.size()),idx,initiator,dma_base,dma_size);
+            if(lsw_gpu_input_note(f.input_mismatch,self,idx,1,expected,actual,true))
+                gpu_inputcheck_dump(current,c,self,idx,initiator,dma_base,dma_size);
             // These are still the original reused draw's inputs; the diagnostic never substitutes current ones.
-            gpu_inputcheck_store(f,uint32_t(f.draws.size()),expected);
+            gpu_inputcheck_store(f,self,expected);
         } else ++f.input_check_skipped;
     } else if(gpu_inputcheck_on()) ++f.input_check_skipped;
-    f.draws.push_back(c);
     ++g_tskip_copies;
     return true;
 }
@@ -4830,6 +4845,14 @@ template <typename RD> static bool pm4_bin_packet(uint32_t hdr, uint32_t op, uin
     }
     return false;
 }
+// Byte-swapped block copy of a register write (run 8: the largest single loop of the walker).
+static inline void pm4_regs_copy(uint32_t* dst, const uint32_t* src, uint32_t n) {
+#ifdef __aarch64__
+    for (; n >= 4; n -= 4, dst += 4, src += 4)
+        vst1q_u8(reinterpret_cast<uint8_t*>(dst), vrev32q_u8(vld1q_u8(reinterpret_cast<const uint8_t*>(src))));
+#endif
+    for (uint32_t i = 0; i < n; i++) dst[i] = __builtin_bswap32(src[i]);
+}
 static void pm4_extract_ib(uint32_t phys_addr, uint32_t dword_count, int depth) {
     // IB rejects are counted and the first few logged (IBREJ): a silently skipped IB loses every
     // draw and resolve in it. Xenia masks IB pointers to physical (CpuToGpu: & 0x1FFFFFFF);
@@ -4887,8 +4910,7 @@ static void pm4_extract_ib(uint32_t phys_addr, uint32_t dword_count, int depth) 
                 // Fast path (shader constants: thousands of registers a frame): byte-swapped block copy, then the
                 // per-register hooks only where they act (regset_note: 0x2000-0x23FF and 0x4800-0x4805;
                 // pm4_reg_side_effect: 0x578-0x57F). Same result as the loop below, ~1/3 of the walker's samples.
-                const uint32_t* src = ib_host + pos + 1;
-                for (uint32_t i = 0; i < n; i++) g_xe_regs[reg + i] = __builtin_bswap32(src[i]);
+                pm4_regs_copy(&g_xe_regs[reg], ib_host + pos + 1, n);
                 if (g_cw_on && reg < 0x4400 && reg + n > 0x4000)
                     for (uint32_t r = std::max(reg, 0x4000u); r < std::min(reg + n, 0x4400u); ++r)
                         cw_note(r, 0x100, phys_addr + (pos + 1 + (r - reg)) * 4, reg, n, pos);
@@ -4897,7 +4919,10 @@ static void pm4_extract_ib(uint32_t phys_addr, uint32_t dword_count, int depth) 
                         regset_note(r, g_xe_regs[r]); pm4_reg_side_effect(r, g_xe_regs[r]);
                     }
                 };
-                hooks(0x578, 0x580); hooks(0x2000, 0x2400); hooks(0x4800, 0x4806);
+                // Tested here: most blocks touch none of these, and three calls per block were 5 % of the walker (run 8).
+                if (reg < 0x580 && reg + n > 0x578) hooks(0x578, 0x580);
+                if (reg < 0x2400 && reg + n > 0x2000) hooks(0x2000, 0x2400);
+                if (reg < 0x4806 && reg + n > 0x4800) hooks(0x4800, 0x4806);
             } else
             for (uint32_t i = 0; i < cnt && pos + 1 + i < dword_count; i++) {
                 uint32_t r = one_reg ? reg : reg + i;
@@ -6326,6 +6351,10 @@ PPC_FUNC(__imp__VdSwap) {
             dbg_ram("[GPUPROF] guest wait for render thread=%.2fms | vertex pages hashed=%.0f (re-hashed in same frame=%.0f, changed mid-frame=%.2f) epochs=%.1f (isr %.1f) per frame | mid-frame changes this window: walk=%llu isr=%llu drain=%llu\n",
                     ms(gp[GP_RTWAIT]), gp[GP_N_PAGEHASH] / 60.0, gp[GP_N_REHASH] / 60.0, gp[GP_N_MIDCHANGE] / 60.0, gp[GP_N_EPOCH] / 60.0,
                     gp[GP_N_EPOCH_ISR] / 60.0, (unsigned long long)gp[GP_N_MID_WALK], (unsigned long long)gp[GP_N_MID_ISR], (unsigned long long)gp[GP_N_MID_DRAIN]);
+            { static const bool to_log = LSW_ENV_SET("LSWTCS_GPUPROFLOG");   // what the page hash costs, for tools/analyze_run.py
+              if (to_log) printf("[GPUPAGES] per frame: pages hashed %.0f, re-hashed in the same frame %.0f, changed mid-frame %.2f, epochs %.1f (isr %.1f), walk %.2f ms, record %.2f ms\n",
+                                 gp[GP_N_PAGEHASH] / 60.0, gp[GP_N_REHASH] / 60.0, gp[GP_N_MIDCHANGE] / 60.0, gp[GP_N_EPOCH] / 60.0, gp[GP_N_EPOCH_ISR] / 60.0,
+                                 ms(gp[GP_WALK]), ms(gp[GP_RECORD])); }
             dbg_ram("[GPUPROF] guest ISR inside walk=%.2fms | replay: arena->upload=%.2f diag=%.2f prepass=%.2f pso=%.2f bind=%.2f (texsrc=%.2f srv=%.2f smp=%.2f) rt=%.2f draw=%.2f\n",
                     ms(gp[GP_IRQ]), ms(gp[GP_RP_ARENA]), ms(gp[GP_RP_DIAG]), ms(gp[GP_RP_PREPASS]), ms(gp[GP_RP_PSO]), ms(gp[GP_RP_BIND]),
                     ms(gp[GP_RP_TEXSRC]), ms(gp[GP_RP_SRV]), ms(gp[GP_RP_SMP]), ms(gp[GP_RP_RT]), ms(gp[GP_RP_DRAW]));

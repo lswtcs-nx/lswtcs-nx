@@ -118,7 +118,7 @@ std::mutex g_job_mx;
 std::condition_variable g_job_cv;
 std::deque<Job> g_jobs;
 size_t g_job_bytes = 0;
-constexpr size_t kJobBytesMax = size_t(192) << 20;   // beyond this the caller does the work itself
+constexpr size_t kJobBytesMax = size_t(192) << 20;   // beyond this the caller drops the work
 
 void job_main() {
     // Core 1, below the render thread: it waits for the GPU for much of a frame. On core 2, under the audio mix and Mesa's
@@ -144,7 +144,8 @@ void job_main() {
             g_job_bytes -= job.bytes;
             empty = g_jobs.empty();
         }
-        if (empty) {
+        if (empty && !batch_bytes) batch_ns = 0;   // a small job with no capture around it says nothing
+        if (empty && batch_bytes) {
             const double seconds = (armTicksToNs(armGetSystemTick()) - batch_ns) / 1e9;
             printf("[CAPSAVE] all capture files written (%llu so far): %.0f MB in %.1f s\n", (unsigned long long)done, batch_bytes / 1048576.0, seconds);
             fflush(stdout);
@@ -185,7 +186,13 @@ extern "C" void lsw_log_async_drain() {
     if (locked) mutexUnlock(&g_write_lock);
 }
 
-// Runs `run` on the background thread; false = over the memory bound, the caller keeps the work.
+size_t lsw_bg_queued_bytes() {
+    std::lock_guard<std::mutex> lk(g_job_mx);
+    return g_job_bytes;
+}
+
+// Runs `run` on the background thread, one job at a time, so its files do not compete for the SD card; false = over the
+// memory bound. `bytes` is what the job keeps in memory.
 bool lsw_bg_submit(size_t bytes, std::function<void()> run) {
     static std::once_flag started;
     std::call_once(started, [] { std::thread(job_main).detach(); });

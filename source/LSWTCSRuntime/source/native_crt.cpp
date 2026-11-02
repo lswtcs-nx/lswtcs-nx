@@ -28,7 +28,9 @@
 #include <atomic>
 #include <cstdint>
 #include <cstdlib>
+#include <cstdio>
 #include <cstring>
+#include <mutex>
 #include <vector>
 
 extern "C" void dbg_ram(const char* fmt, ...);
@@ -38,6 +40,7 @@ extern "C" PPC_FUNC(__imp__sub_82500A58);
 extern "C" PPC_FUNC(__imp__sub_82500958);
 extern "C" PPC_FUNC(__imp__sub_824F9068);
 extern "C" PPC_FUNC(__imp__sub_824F8F48);
+extern "C" PPC_FUNC(__imp__sub_8250F7E0);
 
 namespace {
 constexpr uint32_t kRegion = 0x20000000u;   // one guest view region (PPC_HOST table entry)
@@ -121,7 +124,54 @@ int64_t stristr_native(const uint8_t* hay, uint32_t hay_len, const uint8_t* need
 }
 }  // namespace
 
+// The level being loaded, for the logs: frames.log's "# level" lines and [LEVEL] in stdout. GAME.DAT hides file names from
+// the host, but the game formats each level's paths with sprintf, so the result is read after its own call returns.
+namespace {
+std::mutex g_level_mx;
+char g_level[128];
+std::atomic<uint32_t> g_level_seq{0};
+// levels\%s\%s.gin, levels\%s\%s.giz (sub_823F6030), %sLevels\%s\%s, its .ai2 and its ai.pak (sub_824D1988, sub_824DBEA8)
+bool is_level_format(uint32_t format) {
+    return format == 0x8202A2A4u || format == 0x8202A2C4u || format == 0x820335E4u || format == 0x820335FCu || format == 0x82033614u;
+}
+void note_level(uint8_t* base, uint32_t path) {
+    uint32_t len = 0;
+    const uint8_t* s = str_span(base, path, &len);
+    if (!s || !len) return;
+    char name[sizeof g_level];
+    size_t n = 0;
+    lsw_guest::read(s, len, [&] {
+        for (; n < len && n + 1 < sizeof name; ++n) name[n] = char(s[n]);
+    });
+    name[n] = 0;
+    // From the "levels\" part on, without the file name, so one level's files count once.
+    const char* from = name;
+    for (const char* q = name; *q; ++q)
+        if ((*q == 'l' || *q == 'L') && strncmp(q + 1, "evels\\", 6) == 0) { from = q + 7; break; }
+    char* cut = const_cast<char*>(strrchr(from, '\\'));
+    if (cut && strchr(cut, '.')) *cut = 0;
+    std::lock_guard<std::mutex> lk(g_level_mx);
+    if (strcmp(g_level, from) == 0) return;
+    snprintf(g_level, sizeof g_level, "%s", from);
+    g_level_seq.fetch_add(1, std::memory_order_release);
+    printf("[LEVEL] %s\n", g_level);
+    fflush(stdout);
+}
+}  // namespace
+extern "C" uint32_t lsw_level_seq() { return g_level_seq.load(std::memory_order_acquire); }
+extern "C" void lsw_level_name(char* out, size_t capacity) {
+    std::lock_guard<std::mutex> lk(g_level_mx);
+    snprintf(out, capacity, "%s", g_level);
+}
+
 // Strong definitions: replace the recompiled weak aliases for every caller and the call table.
+
+PPC_FUNC(sub_8250F7E0) {   // sprintf: the guest's own, with a look at the level paths
+    PPC_FUNC_PROLOGUE();
+    const uint32_t path = ctx.r3.u32, format = ctx.r4.u32;
+    __imp__sub_8250F7E0(ctx, base);
+    if (is_level_format(format)) note_level(base, path);
+}
 
 PPC_FUNC(sub_8250F2B0) {   // memcpy
     PPC_FUNC_PROLOGUE();

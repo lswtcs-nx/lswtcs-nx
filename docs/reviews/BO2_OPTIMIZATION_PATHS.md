@@ -17,8 +17,9 @@ generated code as TCS. Its renderer differs (Vulkan on NVK). `PORT_RESEARCH.md` 
   gain from LTO and PGO, so the two ports already disagree.
 - **Where it applies.** These paths help where the guest CPU sets the pace, as in run 7's heaviest level: GPU 54 ms and GPU idle
   47 ms of a 99 ms frame. Run 6's lighter levels were GPU-limited and would gain little.
-- **Order depends on `LSWTCS_HWPROF`.** `0.0.14-log8` adds that profiler, and no run has used it yet. Its first results may
-  reorder everything below, for example if one lock dominates.
+- **Order depends on `LSWTCS_HWPROF`.** Run 8 was the first profile (`RUN2_FINDINGS.md`). No lock dominates in the heavy level, so
+  the spin row below has no evidence behind it here. The first gains went to the port's own record path in `0.0.15-log9`. The guest
+  mixers `sub_827E51D0` and `sub_827F5990` are named candidates for native rewrites.
 
 ## Candidates
 
@@ -28,7 +29,7 @@ generated code as TCS. Its renderer differs (Vulkan on NVK). `PORT_RESEARCH.md` 
 | --- | --- | --- | --- |
 | Rewrite hot guest functions natively | 1.4-2x per call (decoder, culling, skinning) | Done for the CRT routines, LZ2K and reverb | Low per function; needs the profile to choose them |
 | Run a rewrite beside the original and compare, then keep a checked sample | Safety | Not present | Low; supports the row above |
-| Brief spin before a contended lock sleeps | About 75 % of samples were in `svcArbitrateLock` in its early profile | Not present; the main thread holds the turn with little CPU (31-44 % against 17-18 %), cause unknown | Low; only if the profile shows lock waits |
+| Brief spin before a contended lock sleeps | About 75 % of samples were in `svcArbitrateLock` in its early profile | Not present | Low; run 8 showed no such waits |
 | LTO | +9.8 % | Not used; `GameCode` is `-O2` in unity units | Build memory: 349 MB of generated C++ on the current 15 GB machine, with at most two jobs. May need a subset |
 | Direct, inlinable calls between guest functions | Named as the base for LTO | Calls go through `PPC_WEAK_FUNC`, which is `weak,noinline`, so LTO could not inline them | Medium: must keep the functions the runtime hooks |
 | PGO trained on the console | +9.0 % | Not used | Medium: needs a training session on hardware, and a retrain after code changes |
@@ -56,7 +57,7 @@ the limit and the owner approves. Its stated rule against speculative framework 
 
 ## Suggested order
 
-1. Read the first `LSWTCS_HWPROF` results and fix any single dominant wait.
+1. Read the first `LSWTCS_HWPROF` results and fix any single dominant wait. Done for run 8: the wait was this port's file polls.
 2. Add compare-beside-the-original, then rewrite what the profile names, audio included if it shows.
 3. Try LTO on a subset, on a console build compared with the current one in A/B or alternating runs. Add direct calls if it shows
    promise, then PGO.

@@ -115,7 +115,9 @@ uint64_t hash_ucode(const uint32_t* p, uint32_t n) {
 
 // Last shader per (ucode pointer, size, type) with a copy of its guest bytes: a draw reusing the shader
 // at the same address is checked with one memcmp instead of re-hashing (as the PC bridge).
-struct UcodeMemo { std::vector<uint32_t> be; SpirvShader* shader = nullptr; };
+// Within one memory epoch no guest code has run, so the same address needs no memcmp at all (3 % of the walker in run 8).
+struct UcodeMemo { std::vector<uint32_t> be; SpirvShader* shader = nullptr; uint32_t epoch = 0; };
+extern "C" uint32_t lsw_gpu_shm_epoch();
 
 SpirvShader* get_shader(xenos::ShaderType type, const uint32_t* ucode_be, uint32_t dwords) {
   Bridge& b = bridge();
@@ -123,8 +125,11 @@ SpirvShader* get_shader(xenos::ShaderType type, const uint32_t* ucode_be, uint32
   const uint64_t mkey = uint64_t(reinterpret_cast<uintptr_t>(ucode_be)) ^ (uint64_t(dwords) << 40) ^
                         (type == xenos::ShaderType::kPixel ? 0x8000000000000000ull : 0);
   UcodeMemo& memo = memo_map[mkey];
-  if (memo.shader && memo.be.size() == dwords && std::memcmp(memo.be.data(), ucode_be, dwords * 4u) == 0)
+  const uint32_t epoch = lsw_gpu_shm_epoch();
+  if (memo.shader && memo.be.size() == dwords && (memo.epoch == epoch || std::memcmp(memo.be.data(), ucode_be, dwords * 4u) == 0)) {
+    memo.epoch = epoch;
     return memo.shader;
+  }
   const uint64_t key = hash_ucode(ucode_be, dwords) ^ (type == xenos::ShaderType::kPixel ? 0x8000000000000000ull : 0);
   SpirvShader* raw;
   auto it = b.shaders.find(key);
@@ -147,6 +152,7 @@ SpirvShader* get_shader(xenos::ShaderType type, const uint32_t* ucode_be, uint32
   }
   memo.be.assign(ucode_be, ucode_be + dwords);
   memo.shader = raw;
+  memo.epoch = epoch;
   return raw;
 }
 

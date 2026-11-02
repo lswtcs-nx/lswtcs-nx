@@ -5,7 +5,10 @@
 //
 // One thread pauses a target (svcSetThreadActivity), reads its context, looks through its stack and resumes it. The target
 // may hold any lock while paused, so nothing between pause and resume allocates, prints or takes a lock. Samples go into
-// a fixed table, written to hwprof.txt every 60 s; tools/hwprof_report.py names them from the ELF.
+// a fixed table, written to hwprof.txt about every 60 s; tools/hwprof_report.py names them from the ELF.
+//
+// The writing happens on the background thread of log_async.cpp, from a second table. In run 8 this thread wrote through a
+// small FILE buffer while capture files were being saved, and six of the eight long freezes began around such a write.
 //
 // The call chain is a stack scan, not an unwind: the generated code has no frame pointers, so each word on the stack that
 // points just after a call in the code segment counts as a return address. Stale words can appear in it, so it says what
@@ -15,14 +18,20 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <functional>
+#include <memory>
+#include <vector>
 
+bool lsw_bg_submit(size_t bytes, std::function<void()> run);   // log_async.cpp
 extern "C" void lsw_log_path(char* out, size_t capacity, const char* name);
 extern "C" __attribute__((weak)) int lsw_sched_turn() { return -1; }
 
 namespace {
 constexpr int kMaxThreads = 48, kFrames = 8, kStackWords = 512;
 constexpr uint32_t kTableSize = 1u << 16;
-constexpr uint32_t kBands = 3;   // recorded draws of the current frame: under 300, under 1300, the rest
+// Recorded draws of the current frame: under 300, under 1300, the rest; or no frame for over a second, which says what a freeze waits on.
+constexpr uint32_t kBands = 4;
+constexpr uint64_t kStallTicks = 19200000;
 
 struct Target {
     char name[24];
@@ -34,13 +43,16 @@ struct Target {
 Target g_targets[kMaxThreads];
 std::atomic<int> g_target_count{0};
 std::atomic<uint32_t> g_draws{0};
+std::atomic<uint64_t> g_last_frame_tick{0};
 
 struct Entry {
     uint32_t count;
     uint8_t target, band, holds_turn, used;
     uint32_t frames[kFrames];   // offsets from the code base: pc, lr, then return addresses from the stack
 };
-Entry* g_table;
+Entry* g_table;   // being filled; the other one is empty, or being written while g_spare_busy
+Entry* g_spare;
+std::atomic<bool> g_spare_busy{false};
 uint32_t g_table_used;
 uint64_t g_table_dropped;
 uintptr_t g_code_base, g_code_end;
@@ -108,32 +120,55 @@ void sample_target(int index, int turn, uint32_t band) {
     }
 }
 
-void write_window(FILE* f, uint64_t start_ns, uint64_t now_ns) {
-    const uint64_t window_ns = now_ns - start_ns;
+struct ThreadLine { char name[24]; int sched_id; double cpu; uint64_t samples; };
+
+// On the background thread. `full` is cleared for its next turn.
+void write_window(FILE* f, uint64_t start_ns, uint64_t now_ns, uint64_t dropped, const std::vector<ThreadLine>& threads, Entry* full) {
     fprintf(f, "window %llu %llu dropped %llu\n", (unsigned long long)(start_ns / 1000000), (unsigned long long)(now_ns / 1000000),
-            (unsigned long long)g_table_dropped);
-    const int count = g_target_count.load(std::memory_order_acquire);
-    for (int i = 0; i < count; ++i) {
-        Target& t = g_targets[i];
-        uint64_t ticks = 0;
-        const bool have = R_SUCCEEDED(svcGetInfo(&ticks, InfoType_ThreadTickCount, t.handle, UINT64_MAX));
-        const uint64_t cpu = have ? armTicksToNs(ticks) : 0;
-        const double share = have && t.cpu_ns_last ? 100.0 * double(cpu - t.cpu_ns_last) / double(window_ns) : -1.0;
-        t.cpu_ns_last = cpu;
-        fprintf(f, "thread %d %s sched %d cpu %.1f samples %llu\n", i, t.name, t.sched_id, share, (unsigned long long)t.samples);
-        t.samples = 0;
-    }
+            (unsigned long long)dropped);
+    for (size_t i = 0; i < threads.size(); ++i)
+        fprintf(f, "thread %zu %s sched %d cpu %.1f samples %llu\n", i, threads[i].name, threads[i].sched_id, threads[i].cpu, (unsigned long long)threads[i].samples);
     for (uint32_t i = 0; i < kTableSize; ++i) {
-        Entry& e = g_table[i];
+        Entry& e = full[i];
         if (!e.used) continue;
         fprintf(f, "s %u %u %u %u", e.target, e.band, e.holds_turn, e.count);
         for (uint32_t frame : e.frames) { if (frame) fprintf(f, " %x", frame); else fprintf(f, " 0"); }
         fputc('\n', f);
         e.used = 0;
     }
+    fflush(f);
+    g_spare_busy.store(false, std::memory_order_release);
+}
+
+// False while the previous window is still queued behind capture files: this one then simply runs longer.
+bool end_window(FILE* f, uint64_t start_ns, uint64_t now_ns) {
+    if (g_spare_busy.load(std::memory_order_acquire)) return false;
+    const uint64_t window_ns = now_ns - start_ns;
+    auto threads = std::make_shared<std::vector<ThreadLine>>();
+    const int count = g_target_count.load(std::memory_order_acquire);
+    for (int i = 0; i < count; ++i) {
+        Target& t = g_targets[i];
+        uint64_t ticks = 0;
+        const bool have = R_SUCCEEDED(svcGetInfo(&ticks, InfoType_ThreadTickCount, t.handle, UINT64_MAX));
+        const uint64_t cpu = have ? armTicksToNs(ticks) : 0;
+        ThreadLine line{};
+        snprintf(line.name, sizeof line.name, "%s", t.name);
+        line.sched_id = t.sched_id;
+        line.cpu = have && t.cpu_ns_last ? 100.0 * double(cpu - t.cpu_ns_last) / double(window_ns) : -1.0;
+        line.samples = t.samples;
+        threads->push_back(line);
+        t.cpu_ns_last = cpu;
+        t.samples = 0;
+    }
+    Entry* const full = g_table;
+    const uint64_t dropped = g_table_dropped;
+    g_spare_busy.store(true, std::memory_order_release);
+    g_table = g_spare;
+    g_spare = full;
     g_table_used = 0;
     g_table_dropped = 0;
-    fflush(f);
+    if (!lsw_bg_submit(0, [=] { write_window(f, start_ns, now_ns, dropped, *threads, full); })) g_spare_busy.store(false, std::memory_order_release);
+    return true;
 }
 
 void profiler_main(void* arg) {
@@ -142,12 +177,14 @@ void profiler_main(void* arg) {
     lsw_log_path(path, sizeof path, "hwprof.txt");
     FILE* f = fopen(path, "w");
     if (!f) return;
-    fprintf(f, "hwprof 1 code %llx %llx\n", (unsigned long long)g_code_base, (unsigned long long)g_code_end);
+    setvbuf(f, nullptr, _IOFBF, 128 * 1024);
+    fprintf(f, "hwprof 2 code %llx %llx\n", (unsigned long long)g_code_base, (unsigned long long)g_code_end);
     uint64_t window_start = armTicksToNs(armGetSystemTick()), tick = 0;
     for (;;) {
         svcSleepThread(period_ns);
         const uint32_t draws = g_draws.load(std::memory_order_relaxed);
-        const uint32_t band = draws < 300 ? 0 : draws < 1300 ? 1 : 2;
+        const uint64_t last_frame = g_last_frame_tick.load(std::memory_order_relaxed);
+        const uint32_t band = last_frame && armGetSystemTick() - last_frame > kStallTicks ? 3 : draws < 300 ? 0 : draws < 1300 ? 1 : 2;
         const int turn = lsw_sched_turn();
         const int count = g_target_count.load(std::memory_order_acquire);
         // Whoever holds the turn each tick, everyone else every 4th: blocked threads are the question, not the volume.
@@ -155,7 +192,7 @@ void profiler_main(void* arg) {
         for (int i = 0; i < count; ++i)
             if (all || (g_targets[i].sched_id >= 0 && g_targets[i].sched_id == turn)) sample_target(i, turn, band);
         const uint64_t now = armTicksToNs(armGetSystemTick());
-        if (now - window_start >= 60000000000ull) { write_window(f, window_start, now); window_start = now; }
+        if (now - window_start >= 60000000000ull && end_window(f, window_start, now)) window_start = now;
     }
 }
 }  // namespace
@@ -180,7 +217,10 @@ extern "C" void lsw_prof_register_guest(int sched_id, uint32_t entry) {
     snprintf(name, sizeof name, "guest_%08X", entry);
     lsw_prof_register(name, sched_id);
 }
-extern "C" void lsw_prof_note_draws(uint32_t draws) { g_draws.store(draws, std::memory_order_relaxed); }
+extern "C" void lsw_prof_note_draws(uint32_t draws) {
+    g_draws.store(draws, std::memory_order_relaxed);
+    g_last_frame_tick.store(armGetSystemTick(), std::memory_order_relaxed);
+}
 
 extern "C" void lsw_hw_profiler_start() {
     const char* e = getenv("LSWTCS_HWPROF");
@@ -192,7 +232,8 @@ extern "C" void lsw_hw_profiler_start() {
     g_code_base = mi.addr;
     g_code_end = mi.addr + mi.size;
     g_table = static_cast<Entry*>(calloc(kTableSize, sizeof(Entry)));
-    if (!g_table) return;
+    g_spare = static_cast<Entry*>(calloc(kTableSize, sizeof(Entry)));
+    if (!g_table || !g_spare) return;
     static Thread t;
     // Above the audio output thread (0x2B) on its core, or a busy core would delay the samples: a sample is a few microseconds.
     const Result rc = threadCreate(&t, profiler_main, reinterpret_cast<void*>(uintptr_t(period_ms)), nullptr, 0x10000, 0x2A, 2);

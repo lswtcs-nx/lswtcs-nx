@@ -6,7 +6,7 @@ shown under the guest or runtime function that called them. Chains come from a s
 from pathlib import Path
 import argparse,bisect,collections,re,subprocess
 
-BANDS=('light (<300 draws)','medium (<1300)','heavy (1300+)')
+BANDS=('light (<300 draws)','medium (<1300)','heavy (1300+)','no frame for over 1 s')
 def load_symbols(nm,elf):
     out=subprocess.run([str(nm),'-n','--defined-only',str(elf)],capture_output=True,text=True,check=True).stdout
     addresses,names=[],[]
@@ -41,7 +41,7 @@ def main():
     parser.add_argument('directory',type=Path,help='folder holding hwprof.txt')
     parser.add_argument('--elf',type=Path,required=True,help='lswtcs.elf of the same build')
     parser.add_argument('--nm',type=Path,default=Path('aarch64-none-elf-nm'))
-    parser.add_argument('--band',type=int,default=2,help='0 light, 1 medium, 2 heavy')
+    parser.add_argument('--band',type=int,default=2,help='0 light, 1 medium, 2 heavy, 3 no frame for over 1 s: what a freeze waits on')
     parser.add_argument('--top',type=int,default=14)
     args=parser.parse_args()
     symbols=load_symbols(args.nm,args.elf)

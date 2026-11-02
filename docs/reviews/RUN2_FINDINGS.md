@@ -336,3 +336,101 @@ so only pc and lr are exact. It costs some CPU on core 2, unmeasured. Nothing al
 **A/B.** States now run in a new random order each round, 15 s each, because run 7's fixed order confounded state with scene.
 
 **Capture saves** moved to core 1 under the render thread, and `[CAPSAVE]` reports MB and seconds.
+
+## Run 8: first hardware run of `0.0.14-log8`, 1 November 2026
+
+About 13 minutes, 11,579 frames, 6 save commits, no `crash.log`. Episode I chapter 2, the heavy level, and this time the tester finished
+it, reporting stutters and freezes but only one visual fault. Clocks stayed at CPU 1020, GPU 307.2 and memory 1331.2 MHz; SoC at most
+41.2 C. Archived as `private/runs/run8-log8`, with its ELF.
+
+**Most of the long freezes came from the diagnostics, not the game.** 21 gaps over 1 s add up to 227 s, 29 % of the session; eight over
+5 s make up about 200 s of that.
+
+- Two (14.5 s and 58.7 s, `[CAPTIME]` "targets") were PNG writes on the render thread, after three full captures close together filled the
+  192 MB background queue.
+- Six began between -1.1 and +5.5 s from the end of a profiler window, only while capture files were still being saved, and lost
+  profiler samples match their length. So they lasted as long as `hwprof.txt` was being written: about 680 KB per window through a
+  small FILE buffer, competing with the PNG writes at only 0.85-0.93 MB/s. During them GPU load was 0, guests about 98 % idle, while audio
+  and the clock log kept running. How that write blocked the render thread is not proved. Renderer file polls waiting on the same
+  SD card are one suspect.
+
+**The texture fix held on hardware.** No "unknown binding" or other `[GLBRIDGE]` line in the session. `[GLSIGNS]` reported only format 38,
+`k_32_32_32_32_FLOAT`, with signs 55. Sign handling does not apply to float data, so this does not call for work.
+
+**Merging: 35 checks, 0 flagged**, at most 2 pixels differing, noise 0. At 1900+ draws replay costs a median of about 25 ms merged against
+46 ms unmerged. 2,091 merges were refused for differing content; why was not examined.
+
+Frames over 1 s left out; guest idle and thread shares from 5 s `[SCHEDPROF]` windows without a freeze:
+
+| Recorded draws | FPS | Replay ms | GPU wait ms | Guest idle | Main | Walker | Audio |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| under 300 | 39.8 | 0.5 | 14.3 | 60 % | 14 % | 2 % | 3 % |
+| 300-800 | 21.5 | 7.6 | 25.3 | 42 % | 27 % | 18 % | 6 % |
+| 800-1300 | 18.4 | 15.5 | 25.4 | 34 % | 30 % | 27 % | 8 % |
+| 1300-1900 | 17.5 | 23.0 | 19.9 | 14 % | 30 % | 33 % | 9 % |
+| 1900+ | 14.1 | 30.5 | 7.9 | 10 % | 31 % | 41 % | 10 % |
+
+So the GPU limits the middle bands and the guest's turn limits the heaviest. Above 1300 draws almost no turn time is left, and audio falls
+below real time. These windows were not split by capture work, so treat the shares as approximate.
+
+**Where the turn goes in the heavy band (`hwprof.txt`).** No single lock dominates, which answers run 7's question for this level: only about
+10 % of the holders' samples are blocked in a system call, nearly all of it the next item.
+
+| Turn share | Thread | Leaf functions |
+| --- | --- | --- |
+| 45 % | Walker `822D2AB0` | PM4 walk 21 %, page hash 13 %, file queries 12 %, `memcmp` 9 %, `memmove` 4.5 %, `memset` 3.7 %, clock reads 3.4 % |
+| 35 % | Main | File queries 9 %, page hash 7 %, then diffuse guest code: `sub_8231ED30` 3.3 %, `sub_82320328` 2.5 % |
+| 11 % | Audio `827DB318` | Guest mixer `sub_827E51D0` 15 %, `sub_827F5990` 14 %, XMA decode about 18 % |
+
+The file queries are this port's own: trigger-file polls, limited to one per 250 ms per call site on the belief that a query takes 10-20 us.
+That figure came from a PC. Here they appear to take milliseconds. `press_now`, through `XamInputGetState`, is 6 % of the main thread alone.
+Call chains are a stack scan, and the 2 ms sampling pauses the holder, so the percentages are approximate.
+
+**A/B, random order, gaps over 300 ms left out.** At 1900+ draws: M 15.8 FPS with audio at 41 %, MA 14.6 and 52 %, A (unmerged) 12.6 and 58 %,
+MAV 13.2 and 71 %. Run 7's reading of a large FPS cost from audio priority does not hold up without its fixed order: it is about 1 FPS
+here. No setting keeps audio at real time in this band, and MAV's 71 % against MA's 52 % is larger than V should cause, so scene mix
+still weighs on these numbers.
+
+**The visual fault was not identified.** The tester placed it at roughly 20:39 or just before. Captures
+`6338` (about 20:38:50) and `6631` (about 20:39:09) are the candidates; frame times were matched to the clock only to within about 2 s. An
+automated scan of all five histories for black rows and sudden changes found nothing, and looking at both found no clear fault. In `6631` the
+characters beside the blue saber turn cyan and return. Qui-Gon goes green beside his own saber in `6338`, so this is probably saber light, but no
+reference capture was compared. The grey moving block's flat black and white bands are also unchecked.
+
+## What run 8 led to: `0.0.15-log9`, not yet run on hardware
+
+Compiled and validated; the draw-identity test passes. The new PNG writer's output was checked on PC: pixels, CRCs and Adler-32 at six sizes.
+The level table was tried on synthetic frames. Nothing below has run on a console.
+
+**Diagnostics no longer write from the game's way.**
+
+- File triggers are off on the console unless `LSWTCS_TRIGGERS=1`, in guest and renderer. The capture combos replaced them.
+- The profiler hands a full table to the background thread and keeps sampling into a second one, so its file and the capture files never
+  compete. A window waiting behind capture files just runs longer.
+- A new profiler band, "no frame for over 1 s", samples any remaining freeze: `hwprof_report.py --band 3` says what each thread waits on.
+- PNG writing is much cheaper: CRC by the CPU's instruction, row copies, Adler-32 reduced every 5552 bytes. It used 4 divisions per byte.
+- A full queue now skips files with a `[CAPSAVE]` line, never writing on the render thread. A full capture with over 60 MB still queued keeps
+  its screenshot, draw log and history and skips its targets, with a `[RESDUMP]` line.
+
+**Turn time saved in the record path, all with unchanged output.** Register blocks are byte-swapped with NEON and tested against
+the hook ranges inline (5 % of the walker was calling those hooks), the clock is read directly on the console, a shader at the same address is not compared
+again within a memory epoch, and tile copies make one copy of the 1760-byte record instead of two. The shader case relies on what the page hash
+already relies on: no guest code runs within one epoch.
+
+Rough expectation, from samples and not measured: about 10 ms of a 71 ms frame at 1900+ draws (file queries about 5.7 ms, the rest about 4.5 ms), so
+perhaps 14 to 16 FPS there, and more turn time for audio. Lighter bands are GPU-limited and should change little. The profiler still runs and costs
+something itself.
+
+**Level names in the logs.** GAME.DAT hides file names from the host, but the game formats its level paths with sprintf (`sub_8250F7E0`). Its output
+is read after the call for five known formats, found by following those strings in the generated code: `levels\%s\%s.gin`, `.giz`, and
+`%sLevels\%s\%s` with its `.ai2` and `ai.pak`. `[LEVEL]` in stdout and `# level` in frames.log, and `tools/analyze_run.py` prints a table per level.
+Whether all of these run at every level load is unverified; a level that uses none would keep the previous name.
+
+**Profile.** `hardware-ab.env` drops the unmerged state, already answered. `LSWTCS_GPUPROFLOG=1` logs pages hashed, re-hashes and epochs per frame (`[GPUPAGES]`).
+
+**Next, not started.** The page hash is 8.6 % of the turn in heavy scenes and needs `[GPUPAGES]` first: if re-hashes within a frame dominate, there is a cheaper rule to look for,
+carefully, because that check guards against missed updates. After it, the PM4 walk itself and the guest mixers (`sub_827E51D0`, `sub_827F5990`) as native rewrites
+under the method in `BO2_OPTIMIZATION_PATHS.md`.
+
+The next run should repeat Episode I chapter 2. It decides whether the freezes are gone (`--band 3` shows any left), what FPS and audio gained at the same
+draw counts, and whether `[LEVEL]` names the levels. Captures are best kept for moments with a fault, since each full one writes about 130 MB.

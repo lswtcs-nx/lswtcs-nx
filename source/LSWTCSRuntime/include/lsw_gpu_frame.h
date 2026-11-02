@@ -198,7 +198,15 @@ enum { GP_WALK, GP_RECORD, GP_PREPARE, GP_VCOPY, GP_REPLAY, GP_SHMHASH, GP_PRESE
        GP_COUNT };   // GP_N_*: counts, not ns
 extern "C" uint64_t g_gpuprof[GP_COUNT];
 static inline uint64_t gp_now() {
+#ifdef __SWITCH__
+  // The 19.2 MHz counter, read directly: this runs several times a draw, and steady_clock::now() goes through
+  // clock_gettime (3 % of the walker in run 8).
+  uint64_t ticks;
+  __asm__ volatile("mrs %0, cntpct_el0" : "=r"(ticks));
+  return ticks * 625 / 12;
+#else
   return uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+#endif
 }
 struct GpScope {   // adds the enclosing scope's duration to g_gpuprof[k]
   int k; uint64_t t0;

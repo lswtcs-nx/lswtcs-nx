@@ -7,19 +7,21 @@ def percentile(values,fraction):
     return values[min(len(values)-1,int(len(values)*fraction))] if values else 0.0
 def load_frames(path):
     rows,marks=[],[]
-    state,state_t=None,0.0
+    state,state_t,level=None,0.0,None
     for line in path.open(errors='replace'):
         mark=re.match(r'# mark (\d+) replay (\d+) t ([\d.]+)',line)
         if mark:marks.append((int(mark[1]),float(mark[3])));continue
         ab=re.match(r'# ab (\S+) replay (\d+) t ([\d.]+)',line)
         if ab:state,state_t=ab[1],float(ab[3]);continue
+        named=re.match(r'# level (.*) replay (\d+) t ([\d.]+)',line)
+        if named:level=named[1];continue
         if line.startswith('#'):continue
         parts=line.split('|')
         fields=parts[0].split()
         if len(fields)<9:continue
         try:
             row=dict(replay=int(fields[0]),t=float(fields[2]),replay_ms=float(fields[5]),
-                     gpuwait=float(fields[6]),hold=float(fields[7]),draws=int(fields[8]),ab=state,ab_t=state_t)
+                     gpuwait=float(fields[6]),hold=float(fields[7]),draws=int(fields[8]),ab=state,ab_t=state_t,level=level)
             if len(parts)>=8:   # from 0.0.13-log7
                 played,empty=parts[5].split()
                 row.update(played=int(played),empty=int(empty),groups=int(parts[6]),copies=int(parts[7]))
@@ -39,6 +41,20 @@ def print_windows(rows,seconds):
         print(f"{start:5d} {len(window)/seconds:4.1f} {steady_fps:11.1f} {percentile(dts,.5):7.1f} {percentile(dts,.95):7.1f} {max(dts):7.0f}"
               f" {percentile([r['replay_ms'] for r in window],.5):7.1f} {percentile([r['gpuwait'] for r in window],.5):8.1f}"
               f" {sum(r['hold'] for r in window):8.0f} {percentile([r['draws'] for r in window],.5):6.0f} {sum(d>100 for d in dts):7d}")
+def print_levels(rows):
+    """Each stretch of one level as the game named it (0.0.15-log9 on); fps leaves out freezes of over a second."""
+    if not any(r['level'] for r in rows):return
+    print('\nLevels as the game named them')
+    print(' start     s   fps  draws_p50  freezes>1s  level')
+    stretch=[]
+    for row in rows+[dict(level=None)]:
+        if stretch and row['level']!=stretch[0]['level']:
+            steady=[r['dt'] for r in stretch if r['dt']<1000]
+            fps=1000*len(steady)/sum(steady) if steady else 0
+            print(f"{stretch[0]['t']:6.0f} {stretch[-1]['t']-stretch[0]['t']:5.0f} {fps:5.1f} {percentile([r['draws'] for r in stretch],.5):10.0f}"
+                  f" {sum(r['dt']>=1000 for r in stretch):11d}  {stretch[0]['level'] or '(before the first name)'}")
+            stretch=[]
+        stretch.append(row)
 def print_marks(rows,marks):
     if not marks:return
     print('\nMarks: frames in the 10 s around each one')
@@ -86,11 +102,17 @@ def print_diagnostics(lines):
         match=re.match(r'\[GLUNTILE\] rejected since last report: uncheckable (\d+), content (\d+), tile state (\d+), bottom (\d+), order (\d+)',line)
         if match:rejected=[a+int(b) for a,b in zip(rejected,match.groups())]
     if any(rejected):print('\nMerge refusals: uncheckable {}, content {}, tile state {}, bottom {}, order {}'.format(*rejected))
-    for tag,title in (('[GLSIGNS]','Signed textures'),('[GLBRIDGE]','Shader bridge messages'),('[HWPROF]','CPU profiler (tools/hwprof_report.py names hwprof.txt)'),('[CAPTIME]','Captures'),('[GLHIST]','Frame history'),('[CAPSAVE]','Background saves')):
+    for tag,title in (('[GLSIGNS]','Signed textures'),('[LEVEL]','Level names, in order'),('[GLBRIDGE]','Shader bridge messages'),('[HWPROF]','CPU profiler (tools/hwprof_report.py names hwprof.txt)'),('[CAPTIME]','Captures'),('[GLHIST]','Frame history'),('[CAPSAVE]','Background saves'),('[RESDUMP] targets','Capture targets skipped')):
         found=[l for l in lines if l.startswith(tag)]
         if found:
             print(f'\n{title}:')
             for line in found[:12]:print(' ',line[:170])
+    pages=[l for l in lines if l.startswith('[GPUPAGES]')]
+    if pages:
+        print('\nPage hashing, median of the reports:')
+        for key in ('pages hashed','re-hashed in the same frame','changed mid-frame','epochs','walk','record'):
+            values=[float(m[1]) for m in (re.search(key+r' ([\d.]+)',l) for l in pages) if m]
+            if values:print(f'  {key}: {percentile(values,.5):.2f}, top 5 % {percentile(values,.95):.2f}')
     spikes=[l for l in lines if l.startswith('[GSPIKE]')]
     if spikes:
         print(f'\nGuest frames over LSWTCS_SPIKEMS: {len(spikes)}; slowest:')
@@ -132,6 +154,7 @@ def main():
     print(f"{len(rows)} frames over {rows[-1]['t']:.0f} s; crash.log present: {(args.directory/'crash.log').exists()}")
     print_windows(rows,args.window)
     print_ab(rows)
+    print_levels(rows)
     print_marks(rows,marks)
     print_stdout(args.directory/'stdout.log')
 if __name__=='__main__':main()

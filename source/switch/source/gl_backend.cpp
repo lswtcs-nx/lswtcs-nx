@@ -51,6 +51,9 @@ extern "C" void lsw_log_async_path(char* out, size_t capacity, const char* name)
 extern "C" void lsw_prof_register(const char* name, int sched_id);   // hw_profiler.cpp
 extern "C" void lsw_prof_note_draws(uint32_t draws);
 bool lsw_bg_submit(size_t bytes, std::function<void()> run);   // log_async.cpp: slow file work off this thread
+size_t lsw_bg_queued_bytes();
+extern "C" uint32_t lsw_level_seq();                           // native_crt.cpp: the level the game last built a path for
+extern "C" void lsw_level_name(char* out, size_t capacity);
 extern "C" void lsw_log_path(char* out, size_t capacity, const char* name);   // platform_switch.cpp: session folder
 
 namespace {
@@ -1337,7 +1340,7 @@ void dump_capture_glsl(const LswGlShader* s) {
     auto write_file = [p = std::string(path), s] {   // the shader lives as long as the process
         if (FILE* f = fopen(p.c_str(), "wb")) { fwrite(s->glsl.data(), 1, s->glsl.size(), f); fclose(f); }
     };
-    if (!lsw_bg_submit(s->glsl.size(), write_file)) write_file();
+    if (!lsw_bg_submit(s->glsl.size(), write_file)) { printf("[CAPSAVE] skipped %s: the queue is full\n", path); fflush(stdout); }
 }
 
 // What present_frame shows: a resolve target / render target (top-down rows) or the scene FBO.
@@ -2049,6 +2052,14 @@ void frame_log(const LswGpuFrame& f, uint64_t replay_ns) {
         marks_logged = marks;
         fprintf(fl, "# mark %u replay %llu t %.3f\n", marks, (unsigned long long)g_replays, (now - t0) / 1e9);
     }
+    static uint32_t level_logged = 0;
+    const uint32_t level_seq = lsw_level_seq();
+    if (level_seq != level_logged) {
+        level_logged = level_seq;
+        char level[128];
+        lsw_level_name(level, sizeof level);
+        fprintf(fl, "# level %s replay %llu t %.3f\n", level, (unsigned long long)g_replays, (now - t0) / 1e9);
+    }
     static uint32_t ab_logged = 0;
     if (g_ab_changes != ab_logged) {
         ab_logged = g_ab_changes;
@@ -2137,7 +2148,8 @@ PresentSrc replay() {
         }();
         for (uint64_t a : shot_at) if (a == g_replays) g_capture_frame = true;
         if (g_cam_auto_capture) { g_cam_auto_capture = false; g_capture_frame = true; }   // frame_log: sudden camera turn
-        if (g_replays >= next_check) {
+        static const bool file_trigger = env_on("LSWTCS_TRIGGERS", false);   // a query of the SD card each time; the combos need none
+        if (file_trigger && g_replays >= next_check) {
             next_check = g_replays + 30;
             if (FILE* t = fopen("shot_now", "rb")) { fclose(t); remove("shot_now"); g_capture_frame = true; }
         }
@@ -2665,15 +2677,7 @@ PresentSrc replay() {
 // File "shot_now" in sdmc:/lswtcs (or automatically at replays 300 and 1500 with LSWTCS_GLTEST=1):
 // the scene FBO -> shot_<replay>.png (rows top-down = the guest image) plus a count of pixels that
 // differ from the clear colour, so the GL output can be inspected without Eden's window.
-uint32_t png_crc(const uint8_t* p, size_t n, uint32_t crc) {
-    static uint32_t T[256]; static bool init = false;
-    if (!init) {
-        for (uint32_t i = 0; i < 256; i++) { uint32_t c = i; for (int k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320u ^ (c >> 1)) : (c >> 1); T[i] = c; }
-        init = true;
-    }
-    for (size_t i = 0; i < n; i++) crc = T[(crc ^ p[i]) & 0xFF] ^ (crc >> 8);
-    return crc;
-}
+uint32_t png_crc(const uint8_t* p, size_t n, uint32_t crc) { return ~crc32CalculateWithSeed(~crc, p, n); }   // the running value, before its final inversion
 void png_chunk(FILE* f, const char* type, const uint8_t* data, uint32_t len) {
     const uint8_t lb[4] = {uint8_t(len >> 24), uint8_t(len >> 16), uint8_t(len >> 8), uint8_t(len)};
     fwrite(lb, 1, 4, f);
@@ -2707,15 +2711,24 @@ void write_png_rgba(const char* path, const uint8_t* rgba, int w, int h) {   // 
     std::vector<uint8_t> buf_store(65535);   // this runs on the render thread or the background thread
     uint8_t* const buf = buf_store.data();
     uint32_t a = 1, b = 0;
-    size_t pos = 0;
+    size_t pos = 0, row = 0, column = 0;   // column 0 of each row in the raw stream is its filter byte
     do {
         const size_t blk = std::min<size_t>(raw_len - pos, 65535u);
         const uint8_t bh[5] = {uint8_t(pos + blk >= raw_len ? 1 : 0), uint8_t(blk), uint8_t(blk >> 8), uint8_t(~blk), uint8_t(~blk >> 8)};
         put(bh, 5);
-        for (size_t i = 0; i < blk; ++i) {   // raw stream byte pos+i: filter byte 0 at each row start, then the row
-            const size_t r = (pos + i) / stride, c = (pos + i) % stride;
-            buf[i] = c ? rgba[r * size_t(w) * 4 + c - 1] : 0;
-            a = (a + buf[i]) % 65521; b = (b + a) % 65521;
+        // Two divisions and two remainders per byte kept a capture's PNGs at under 1 MB/s (run 8): the game ran into the queue's limit.
+        for (size_t i = 0; i < blk;) {
+            if (!column) { buf[i++] = 0; column = 1; continue; }
+            const size_t n = std::min(blk - i, stride - column);
+            memcpy(buf + i, rgba + row * size_t(w) * 4 + column - 1, n);
+            i += n;
+            column += n;
+            if (column == stride) { column = 0; ++row; }
+        }
+        for (size_t i = 0; i < blk;) {   // Adler-32, reduced as seldom as zlib: 5552 bytes cannot overflow the sums
+            const size_t end = std::min(blk, i + 5552);
+            for (; i < end; ++i) { a += buf[i]; b += a; }
+            a %= 65521; b %= 65521;
         }
         put(buf, blk);
         pos += blk;
@@ -2735,7 +2748,8 @@ void save_png(const char* path, std::vector<uint8_t>&& rgba, int w, int h) {
     auto job = [p = std::string(path), px = std::make_shared<std::vector<uint8_t>>(std::move(rgba)), w, h] {
         write_png_rgba(p.c_str(), px->data(), w, h);
     };
-    if (!lsw_bg_submit(bytes, job)) job();
+    // Never written here when the queue is full: that held the game for 14.5 s and 58.7 s in run 8.
+    if (!lsw_bg_submit(bytes, job)) { printf("[CAPSAVE] skipped %s: %zu MB waiting for the SD card\n", path, lsw_bg_queued_bytes() >> 20); fflush(stdout); }
 }
 void maybe_capture(const PresentSrc& src) {
     if (!g_capture_frame) return;
@@ -2896,11 +2910,19 @@ void maybe_resdump() {
     if (g_resdump_requested) {
         g_resdump_requested = false;
     } else if (!(dump_at && g_replays == dump_at)) {
-        if (g_replays % 30) return;
+        static const bool file_trigger = env_on("LSWTCS_TRIGGERS", false);
+        if (!file_trigger || g_replays % 30) return;
         FILE* t = fopen("resdump_now", "rb");
         if (!t) return;
         fclose(t);
         remove("resdump_now");
+    }
+    // A capture's targets are about 130 MB. While an earlier capture is still being written, this one keeps its screenshot,
+    // draw log and history: the targets would overflow the queue and hold the game for 2 s only to be skipped.
+    if (const size_t queued = lsw_bg_queued_bytes(); queued > (size_t(60) << 20)) {
+        printf("[RESDUMP] targets of replay %llu skipped: %zu MB of earlier captures still waiting for the SD card\n", (unsigned long long)g_replays, queued >> 20);
+        fflush(stdout);
+        return;
     }
     // Depth images share one scale (LSWTCS_RESDUMPZ=lo,hi, default 0.95..1.0) so values compare across images;
     // the per-image min..max normalisation made tile seams look like depth jumps.

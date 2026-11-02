@@ -72,6 +72,12 @@ What has to change before two guest threads may run at once, from reading the co
    allocator (has a host mutex), file I/O stubs, the scheduler's own counters and `lswtcs_gil_ctr`.
 5. **Atomics** already map to host compare-and-swap (`LSW_GUEST_CAS`), and guest critical sections to host mutexes, which helps.
 
+**Started in log25 (state U, `audio_offturn.cpp`):** one pure guest function of the XAudio thread, `sub_827F5990`, runs off the turn
+on core 2 while other guest threads hold it. The pattern applies to any guest function that touches only its own buffers: check the
+recompiled body for imports, spinlocks, atomics and calls, override the weak symbol, and run it inside `lswtcs_gil_blocking_urgent`
+with `g_guest_off_turn` set. Next candidates by the same check: other leaves of the XAudio thread, then larger subtrees once their
+locks are understood. The handoff costs two scheduler wake-ups per call, so small calls may lose; `[AUDIOOFF]` measures it.
+
 A staged start: let one thread run beside the turn holder and nothing else. The XAudio thread (12-20 % of the turn) touches
 little shared state, and its native reverb already runs off the turn. Every stub it calls has to be audited first. Expect rare
 corruption rather than clean crashes when something is missed, so each step needs long sessions and the input checks kept on.

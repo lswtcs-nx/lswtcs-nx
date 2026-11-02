@@ -1273,6 +1273,9 @@ extern "C" volatile int g_compile_active;
 // suppressed); OTHER threads preempt normally — so a lock-holder that yields on a wait can be
 // resumed (a GLOBAL counter deadlocks: it suppresses everyone while any lock is held).
 thread_local int g_spinlock_depth = 0;
+// This thread runs guest code without the turn (audio_offturn.cpp, state U): its function entries skip the quantum entirely,
+// including the clock and tick updates at its start, which belong to the turn holder.
+thread_local bool g_guest_off_turn = false;
 thread_local unsigned g_spin_dbg[8];   // DIAG: calls per site (0 KfAcq 1 KfRel 2 AcqRaised 3 Raise 4 RelRaised 5 TryAcq 6 Lower)
 static int spinguard_on() { static int s=-1; if(s<0){ const char* e=getenv("LSWTCS_SPINGUARD"); s=(e&&e[0]=='0')?0:1; } return s; }
 extern "C" void lswtcs_spin_enter() { if (spinguard_on()) g_spinlock_depth++; }
@@ -1280,6 +1283,7 @@ extern "C" void lswtcs_spin_leave() { if (spinguard_on() && g_spinlock_depth > 0
 static std::atomic<int> g_qdiv_ab{0};
 extern "C" void lsw_quantum_div_set(int n) { g_qdiv_ab.store(n, std::memory_order_relaxed); }
 extern "C" void lswtcs_gil_quantum() {
+    if (g_guest_off_turn) return;
     // Advance the deterministic virtual clock (no-op unless LSWTCS_VCLOCK). Done FIRST, before
     // any early-return, so guest time tracks fn-entry count purely (1024 entries / boundary).
     vclock_advance_quantum();

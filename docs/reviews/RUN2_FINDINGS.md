@@ -985,3 +985,25 @@ C costs audio and gives nothing, and is dropped. R and G are within noise of tod
 **R and G, runs 23-25 together.** In the heavy bands, R and RG are about 10-15 % faster than today's placement, and the audio is about that much worse. It is one trade-off, not a free gain: the XAudio thread shares the one guest turn, and whatever runs the game faster leaves it less. `[PARALLEL]` matches run 24 (the main thread waits about 50 % of the time).
 
 **Default left as it is.** Audio is one of the owner's first priorities, so trading it for frame rate is the owner's call. The route that removes the trade-off is moving the XAudio thread to a core of its own (route 1 in `CPU_ROADMAP.md`). The profile stays `MAPXSHN,MAPXSHNR,MAPXSHNRG` until then, to gather more of the same.
+
+## `0.0.31-log25`: first guest code off the turn (state U)
+
+- **Where the XAudio thread spends its turn** (run 25, frames of 1300+ draws, `private/session-tools/thread_turn_leaves.py`):
+
+| Function | Share of its turn |
+| --- | --- |
+| Native mixer (N) | 22 % |
+| `sub_827F5990` (second mixer, guest code) | 21 % |
+| `sub_827E5358`, the caller of the first mixer | 8 % |
+
+  `sub_827E5358` takes a guest spinlock and calls kernel imports, so it stays on the turn. `sub_827F5990` does arithmetic on its
+  argument buffers and the stack and calls only an integer-to-double helper. It has no import, spinlock or atomic.
+- **U** (`audio_offturn.cpp`): the XAudio thread leaves the turn for `sub_827F5990`, runs the recompiled function unchanged on core 2
+  at 0x2B (as the native reverb does), and takes the turn back. Meanwhile other guest threads run.
+  - Its guest function entries skip the scheduler quantum (`g_guest_off_turn`).
+  - A caller holding a guest spinlock keeps it on the turn.
+  - `[AUDIOOFF]` reports calls, off-turn calls and the cost per call with and without the handoffs. If the handoffs cost more than
+    the mixing, U loses.
+- The ceiling is small: about 21 % of the XAudio thread's turn, roughly 3-4 % of the heavy-frame turn. What it tests is the
+  mechanism (guest code beside the turn holder) and whether it eases the audio.
+- States `MAPXSHN`, `MAPXSHNU`, `MAPXSHNRG`, `MAPXSHNRGU`: U crossed with RG, whose gain cost audio in runs 23-25.

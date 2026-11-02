@@ -66,6 +66,22 @@ inline bool watched(const void* host, size_t bytes) noexcept {
   }
 }
 
+#if defined(__SWITCH__) && !defined(LSW_GUEST_MEMORY_TRACKING)
+// The Mesa build binds no observer, so a scope has nothing to do, and it was still a call per access: the walker's register
+// reads, and ~11 % of the audio thread's samples in the native reverb (run 8).
+class WriteScope {
+public:
+  WriteScope(void*, size_t) noexcept {}
+  WriteScope(const WriteScope&) = delete;
+  WriteScope& operator=(const WriteScope&) = delete;
+};
+class ReadScope {
+public:
+  ReadScope(const void*, size_t) noexcept {}
+  ReadScope(const ReadScope&) = delete;
+  ReadScope& operator=(const ReadScope&) = delete;
+};
+#else
 class WriteScope {
   const WriteObserver* observer_;
   void* token_;
@@ -94,6 +110,7 @@ public:
   ReadScope(const ReadScope&) = delete;
   ReadScope& operator=(const ReadScope&) = delete;
 };
+#endif
 
 template<class T> inline T load(const void* host) noexcept {
   static_assert(std::is_integral<T>::value, "scalar guest load requires an integer");

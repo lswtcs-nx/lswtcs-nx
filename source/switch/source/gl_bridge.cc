@@ -17,6 +17,7 @@
 #include <memory>
 #include <type_traits>
 #include <unordered_map>
+#include <atomic>
 #include <vector>
 
 #include "xenia/base/math.h"
@@ -30,6 +31,7 @@
 #include "xenia/gpu/xenos.h"
 
 #include "lsw_gl_shader.h"
+#include "lsw_glsl_fold.h"
 #include "lsw_gpu_bridge.h"
 #include "lsw_spirv_glsl.h"
 #define XXH_INLINE_ALL
@@ -60,11 +62,15 @@ struct Bridge {
   std::vector<float> vs_float, ps_float;
   uint32_t bool_loop[40];
   uint32_t fetch[192];
+  alignas(16) float fetch_derived[32 * 4] = {};   // lsw_glsl_fold.h
+  uint32_t derived_words[32][4] = {};             // what each slot of it was computed from
+  uint32_t sys_token = 0, vs_float_token = 0, ps_float_token = 0, derived_token = 0, next_token = 0;
 };
 
 Bridge& bridge() {
   static Bridge* s = [] {
     auto* b = new Bridge();
+    std::memset(b->derived_words, 0xFF, sizeof b->derived_words);   // nothing computed yet, whatever the slots hold
     // No Vulkan device: the GL 4.3 core feature set. SPIR-V 1.0 (SPIRV-Cross input), 32-bit indices
     // native, clip distances available.
     SpirvShaderTranslator::Features f(false);
@@ -119,8 +125,7 @@ uint64_t hash_ucode(const uint32_t* p, uint32_t n) {
 struct UcodeMemo { std::vector<uint32_t> be; SpirvShader* shader = nullptr; uint32_t epoch = 0; };
 extern "C" uint32_t lsw_gpu_shm_epoch();
 
-SpirvShader* get_shader(xenos::ShaderType type, const uint32_t* ucode_be, uint32_t dwords) {
-  Bridge& b = bridge();
+SpirvShader* get_shader(Bridge& b, xenos::ShaderType type, const uint32_t* ucode_be, uint32_t dwords) {
   static std::unordered_map<uint64_t, UcodeMemo> memo_map;
   const uint64_t mkey = uint64_t(reinterpret_cast<uintptr_t>(ucode_be)) ^ (uint64_t(dwords) << 40) ^
                         (type == xenos::ShaderType::kPixel ? 0x8000000000000000ull : 0);
@@ -189,8 +194,7 @@ double ms_since(std::chrono::steady_clock::time_point t0) {
 }
 
 // Translation of `shader` with `modification` as GLSL plus its texture units (cached).
-const LswGlShader* get_glsl(SpirvShader& shader, uint64_t modification, LswGlStage stage) {
-  Bridge& b = bridge();
+const LswGlShader* get_glsl(Bridge& b, SpirvShader& shader, uint64_t modification, LswGlStage stage) {
   const uint64_t key = shader.ucode_data_hash() ^ (modification * 0x9E3779B97F4A7C15ull);
   auto it = b.gl.find(key);
   if (it != b.gl.end()) return it->second.get();
@@ -240,6 +244,7 @@ const LswGlShader* get_glsl(SpirvShader& shader, uint64_t modification, LswGlSta
           glsl.swap(o);
         }
       }
+      glsl = lsw_glsl_fold_fetch(glsl);
       out = std::make_unique<LswGlShader>();
       out->stage = stage;
       out->key = key;
@@ -310,6 +315,135 @@ void pp_report() {
   for (auto& x : g_pp) x = 0;
 }
 
+// ---- Reuse of the previous draw's preparation (LSWTCS_PREPMEMO=1, or state P of LSWTCS_ABSTATES) ------------------------------
+// Consecutive draws mostly share shaders and render state. While no state register has changed (LswRegGens) and the shaders are the same, this
+// draw's translations, viewport, scissor and system constants are the previous draw's, which stay in the bridge and in the caller's `out`;
+// only what depends on what did change is computed again: texture state and vertex ranges on a fetch constant change, floats on a float change.
+// Run 8: this path was about 13 % of the turn in heavy scenes. Every 256th reuse the full path runs as well and the two are compared; the first
+// difference prints [PREPMEMO] MISMATCH and turns the reuse off for the session, so a wrong reuse lasts one draw.
+struct PrepMemo {
+  const LswGpuDraw* out = nullptr;
+  const uint32_t* vs_ucode = nullptr; const uint32_t* ps_ucode = nullptr;
+  uint32_t vs_dwords = 0, ps_dwords = 0, index_endian = 0, initiator = 0;
+  uint32_t state = 0, floats = 0, fetch = 0, epoch = 0;
+  SpirvShader* vs = nullptr; SpirvShader* ps_given = nullptr; SpirvShader* ps = nullptr;
+  bool vs_unsigned = false, ps_unsigned = false;
+};
+PrepMemo g_memo;
+std::atomic<bool> g_prep_memo_on{[] { const char* e = getenv("LSWTCS_PREPMEMO"); return e && e[0] == '1'; }()};
+bool g_prep_memo_broken = false;
+uint64_t g_pm_calls = 0, g_pm_reused = 0, g_pm_fetch = 0, g_pm_floats = 0, g_pm_checks = 0;
+
+bool textures_unsigned(const RegisterFile& regs, const Shader& s) {
+  for (const auto& tb : s.texture_bindings()) {
+    const auto fetch = regs.GetTextureFetch(tb.fetch_constant);
+    const uint32_t signs = texture_util::SwizzleSigns(fetch);
+    if (!signs) continue;
+    // [GLSIGNS]: what reaches the signed translations. The replay binds one texture to both the unsigned and signed
+    // units, so a truly signed component (1) would read as unsigned; biased (2) and gamma (3) use the unsigned one.
+    static std::unordered_map<uint64_t, bool> seen;
+    bool& known = seen[(uint64_t(signs) << 8) | uint64_t(fetch.format)];
+    if (!known) {
+      known = true;
+      printf("[GLSIGNS] format %u signs %02X (2 bits per component: 1 signed, 2 biased, 3 gamma)\n", uint32_t(fetch.format), signs);
+      fflush(stdout);
+    }
+    return false;
+  }
+  return true;
+}
+// Texture signs and host swizzles per used fetch constant (no image-view swizzle in GL here).
+void fill_texture_state(const RegisterFile& regs, const SpirvShader& vs, const SpirvShader* ps, SysConst& sc) {
+  uint32_t used_tex = vs.GetUsedTextureMaskAfterTranslation() | (ps ? ps->GetUsedTextureMaskAfterTranslation() : 0);
+  uint32_t ti;
+  while (xe::bit_scan_forward(used_tex, &ti)) {
+    used_tex = xe::clear_lowest_bit(used_tex);
+    const auto fetch = regs.GetTextureFetch(ti);
+    const uint32_t sign_shift = 8 * (ti & 3);
+    sc.texture_swizzled_signs[ti >> 2] |= uint32_t(texture_util::SwizzleSigns(fetch)) << sign_shift;
+    const uint32_t swz_shift = 12 * (ti & 1);
+    sc.texture_swizzles[ti >> 1] |=
+        (lsw_gpu_texture_mapping(&regs[XE_GPU_REG_SHADER_CONSTANT_FETCH_00_0 + ti * 6]) & 0xFFFu) << swz_shift;
+  }
+}
+// Vertex buffer ranges the VS fetches from shared memory.
+void fill_vertex_ranges(const RegisterFile& regs, const SpirvShader& vs, LswGpuDraw* out) {
+  out->vfetch_count = 0;
+  const auto& cmv = vs.constant_register_map();
+  for (uint32_t i = 0; i < xe::countof(cmv.vertex_fetch_bitmap); ++i) {
+    uint32_t bits = cmv.vertex_fetch_bitmap[i], j;
+    while (xe::bit_scan_forward(bits, &j)) {
+      bits = xe::clear_lowest_bit(bits);
+      xenos::xe_gpu_vertex_fetch_t vf = regs.GetVertexFetch(i * 32 + j);
+      if (vf.type != xenos::FetchConstantType::kVertex) continue;
+      if (out->vfetch_count < LSW_GPU_MAX_VFETCH) {
+        out->vfetch_addr[out->vfetch_count] = vf.address << 2;
+        out->vfetch_size[out->vfetch_count] = vf.size << 2;
+        ++out->vfetch_count;
+      }
+    }
+  }
+}
+// Slots holding vertex fetches stay zero, so a new vertex buffer does not make a new block.
+void fill_fetch_derived(Bridge& b, const uint32_t* regs_in) {
+  bool changed = false;
+  for (uint32_t slot = 0; slot < 32; ++slot) {
+    const uint32_t* words = &regs_in[XE_GPU_REG_SHADER_CONSTANT_FETCH_00_0 + slot * 6];
+    const uint32_t type = words[0] & 3u;
+    uint32_t* seen = b.derived_words[slot];
+    if (seen[0] == type && seen[1] == words[2] && seen[2] == words[3] && seen[3] == words[4]) continue;
+    const bool was_texture = seen[0] != 3u;
+    seen[0] = type; seen[1] = words[2]; seen[2] = words[3]; seen[3] = words[4];
+    float* out = &b.fetch_derived[slot * 4];
+    if (type == 3u) {   // xenos::FetchConstantType::kVertex
+      if (was_texture) { std::memset(out, 0, 4 * sizeof(float)); changed = true; }
+      continue;
+    }
+    lsw_fetch_derived(words, out);
+    changed = true;
+  }
+  if (changed || !b.derived_token) b.derived_token = ++b.next_token;
+}
+void pack_all_floats(Bridge& b, const RegisterFile& regs, const SpirvShader& vs, const SpirvShader* ps, LswGpuDraw* out) {
+  pack_floats(regs, vs.constant_register_map(), XE_GPU_REG_SHADER_CONSTANT_000_X, b.vs_float);
+  if (ps) pack_floats(regs, ps->constant_register_map(), XE_GPU_REG_SHADER_CONSTANT_256_X, b.ps_float);
+  else b.ps_float.assign(4, 0.0f);
+  out->vs_float = b.vs_float.data(); out->vs_float_count = uint32_t(b.vs_float.size() / 4);
+  out->ps_float = b.ps_float.data(); out->ps_float_count = uint32_t(b.ps_float.size() / 4);
+  b.vs_float_token = ++b.next_token;
+  b.ps_float_token = ++b.next_token;
+}
+void set_tokens(const Bridge& b, LswGpuDraw* out) {
+  if (!g_prep_memo_on.load(std::memory_order_relaxed)) { std::memset(out->cb_token, 0, sizeof out->cb_token); return; }
+  out->cb_token[0] = b.sys_token;
+  out->cb_token[1] = b.vs_float_token;
+  out->cb_token[2] = b.ps_float_token;
+  out->cb_token[3] = g_lsw_reg_gens.boolloop;
+  out->cb_token[4] = g_lsw_reg_gens.fetch;
+  out->cb_token[5] = b.derived_token;
+}
+int prepare_full(Bridge& b, const uint32_t* regs_in, const uint32_t* vs_ucode_be, uint32_t vs_dwords,
+                 const uint32_t* ps_ucode_be, uint32_t ps_dwords, uint32_t index_endian, LswGpuDraw* out);
+// Field by field: the arrays are valid only up to their counts. Returns the first field that differs, or null.
+const char* memo_differs(const LswGpuDraw& a, const Bridge& b, const LswGpuDraw& saved, const uint8_t* saved_sys,
+                         const std::vector<float>& saved_vs, const std::vector<float>& saved_ps, const float* saved_derived) {
+  if (a.vs_dxbc != saved.vs_dxbc || a.vs_key != saved.vs_key) return "vertex shader";
+  if (a.ps_dxbc != saved.ps_dxbc || a.ps_key != saved.ps_key) return "pixel shader";
+  if (a.ps_writes_depth != saved.ps_writes_depth || a.ps_color_targets != saved.ps_color_targets) return "pixel shader outputs";
+  if (a.primitive_polygonal != saved.primitive_polygonal || a.gs_key_bits != saved.gs_key_bits) return "primitive";
+  if (std::memcmp(a.viewport, saved.viewport, sizeof a.viewport) || std::memcmp(a.scissor, saved.scissor, sizeof a.scissor)) return "viewport";
+  if (std::memcmp(b.sys_block, saved_sys, sizeof b.sys_block)) return "system constants";
+  if (b.vs_float != saved_vs) return "vertex floats";
+  if (b.ps_float != saved_ps) return "pixel floats";
+  if (a.vfetch_count != saved.vfetch_count || std::memcmp(a.vfetch_addr, saved.vfetch_addr, a.vfetch_count * 4) ||
+      std::memcmp(a.vfetch_size, saved.vfetch_size, a.vfetch_count * 4)) return "vertex ranges";
+  if (a.vs_tex_count != saved.vs_tex_count || a.ps_tex_count != saved.ps_tex_count || a.vs_smp_count != saved.vs_smp_count || a.ps_smp_count != saved.ps_smp_count) return "binding counts";
+  if (std::memcmp(a.vs_tex, saved.vs_tex, a.vs_tex_count * sizeof a.vs_tex[0]) || std::memcmp(a.ps_tex, saved.ps_tex, a.ps_tex_count * sizeof a.ps_tex[0]) ||
+      std::memcmp(a.vs_smp, saved.vs_smp, a.vs_smp_count * sizeof a.vs_smp[0]) || std::memcmp(a.ps_smp, saved.ps_smp, a.ps_smp_count * sizeof a.ps_smp[0])) return "bindings";
+  if (std::memcmp(b.fetch_derived, saved_derived, sizeof b.fetch_derived)) return "derived fetch values";
+  return nullptr;
+}
+
 }  // namespace
 
 extern "C" uint32_t lsw_gpu_system_constants_size(void) {
@@ -372,12 +506,9 @@ uint64_t lsw_gl_tile_system_key(const void* data, uint32_t size, bool points, ui
   return XXH3_64bits_withSeed(block, sizeof block, seed);
 }
 
-extern "C" int lsw_gpu_prepare(const uint32_t* regs_in, const uint32_t* vs_ucode_be, uint32_t vs_dwords,
-                               const uint32_t* ps_ucode_be, uint32_t ps_dwords, uint32_t index_endian,
-                               uint32_t rt_width, uint32_t rt_height, LswGpuDraw* out) {
-  (void)rt_width; (void)rt_height;
-  if (!regs_in || !vs_ucode_be || !vs_dwords || !out) return 0;
-  Bridge& b = bridge();
+namespace {
+int prepare_full(Bridge& b, const uint32_t* regs_in, const uint32_t* vs_ucode_be, uint32_t vs_dwords,
+                 const uint32_t* ps_ucode_be, uint32_t ps_dwords, uint32_t index_endian, LswGpuDraw* out) {
   static_assert(std::is_standard_layout_v<RegisterFile> &&
                     sizeof(RegisterFile) == sizeof(uint32_t) * RegisterFile::kRegisterCount,
                 "RegisterFile must be a plain register array");
@@ -390,12 +521,13 @@ extern "C" int lsw_gpu_prepare(const uint32_t* regs_in, const uint32_t* vs_ucode
   out->vs_tex_count = out->ps_tex_count = out->vs_smp_count = out->ps_smp_count = 0;
   std::memset(&out->viewport, 0, sizeof(*out) - offsetof(LswGpuDraw, viewport));
 
-  SpirvShader* vs = get_shader(xenos::ShaderType::kVertex, vs_ucode_be, vs_dwords);
+  SpirvShader* vs = get_shader(b, xenos::ShaderType::kVertex, vs_ucode_be, vs_dwords);
   if (!vs || !vs->is_ucode_analyzed()) return 0;
   const bool primitive_polygonal = draw_util::IsPrimitivePolygonal(regs);
   SpirvShader* ps = nullptr;
+  SpirvShader* ps_given = nullptr;
   if (ps_ucode_be && ps_dwords && draw_util::IsRasterizationPotentiallyDone(regs, primitive_polygonal)) {
-    ps = get_shader(xenos::ShaderType::kPixel, ps_ucode_be, ps_dwords);
+    ps = ps_given = get_shader(b, xenos::ShaderType::kPixel, ps_ucode_be, ps_dwords);
     if (ps && !draw_util::IsPixelShaderNeededWithRasterization(*ps, regs)) ps = nullptr;
   }
   pm(PP_SHADERS);
@@ -466,31 +598,14 @@ extern "C" int lsw_gpu_prepare(const uint32_t* regs_in, const uint32_t* vs_ucode
   }
   // Specialisation: all textures of the shader unsigned in this draw (every texture in the hub) ->
   // fetches without the signed / biased / gamma paths (SpirvShaderTranslator::LswTexturesUnsigned).
-  auto textures_unsigned = [&](const Shader& s) {
-    for (const auto& tb : s.texture_bindings()) {
-      const auto fetch = regs.GetTextureFetch(tb.fetch_constant);
-      const uint32_t signs = texture_util::SwizzleSigns(fetch);
-      if (!signs) continue;
-      // [GLSIGNS]: what reaches the signed translations. The replay binds one texture to both the unsigned and signed
-      // units, so a truly signed component (1) would read as unsigned; biased (2) and gamma (3) use the unsigned one.
-      static std::unordered_map<uint64_t, bool> seen;
-      bool& known = seen[(uint64_t(signs) << 8) | uint64_t(fetch.format)];
-      if (!known) {
-        known = true;
-        printf("[GLSIGNS] format %u signs %02X (2 bits per component: 1 signed, 2 biased, 3 gamma)\n", uint32_t(fetch.format), signs);
-        fflush(stdout);
-      }
-      return false;
-    }
-    return true;
-  };
-  if (textures_unsigned(*vs)) vs_mod.value |= SpirvShaderTranslator::Modification::kLswTexturesUnsigned;
-  if (ps && textures_unsigned(*ps)) ps_mod.value |= SpirvShaderTranslator::Modification::kLswTexturesUnsigned;
+  const bool vs_unsigned = textures_unsigned(regs, *vs), ps_unsigned = ps && textures_unsigned(regs, *ps);
+  if (vs_unsigned) vs_mod.value |= SpirvShaderTranslator::Modification::kLswTexturesUnsigned;
+  if (ps_unsigned) ps_mod.value |= SpirvShaderTranslator::Modification::kLswTexturesUnsigned;
 
   pm(PP_MODS);
-  const LswGlShader* vs_gl = get_glsl(*vs, vs_mod.value, kLswGlVertex);
+  const LswGlShader* vs_gl = get_glsl(b, *vs, vs_mod.value, kLswGlVertex);
   if (!vs_gl) return 0;
-  const LswGlShader* ps_gl = ps ? get_glsl(*ps, ps_mod.value, kLswGlPixel) : nullptr;
+  const LswGlShader* ps_gl = ps ? get_glsl(b, *ps, ps_mod.value, kLswGlPixel) : nullptr;
   if (ps && !ps_gl) ps = nullptr;
 
   out->vs_dxbc = vs_gl; out->vs_dxbc_size = 1; out->vs_key = vs_gl->key;
@@ -583,18 +698,8 @@ extern "C" int lsw_gpu_prepare(const uint32_t* regs_in, const uint32_t* vs_ucode
     sc.point_screen_diameter_to_ndc_radius[0] = 1.0f / std::max(viewport_info.xy_extent[0], uint32_t(1));
     sc.point_screen_diameter_to_ndc_radius[1] = 1.0f / std::max(viewport_info.xy_extent[1], uint32_t(1));
   }
-  // Texture signs and host swizzles per used fetch constant (no image-view swizzle in GL here).
-  uint32_t used_tex = vs->GetUsedTextureMaskAfterTranslation() | (ps ? ps->GetUsedTextureMaskAfterTranslation() : 0);
+  fill_texture_state(regs, *vs, ps, sc);
   uint32_t ti;
-  while (xe::bit_scan_forward(used_tex, &ti)) {
-    used_tex = xe::clear_lowest_bit(used_tex);
-    const auto fetch = regs.GetTextureFetch(ti);
-    const uint32_t sign_shift = 8 * (ti & 3);
-    sc.texture_swizzled_signs[ti >> 2] |= uint32_t(texture_util::SwizzleSigns(fetch)) << sign_shift;
-    const uint32_t swz_shift = 12 * (ti & 1);
-    sc.texture_swizzles[ti >> 1] |=
-        (lsw_gpu_texture_mapping(&regs[XE_GPU_REG_SHADER_CONSTANT_FETCH_00_0 + ti * 6]) & 0xFFFu) << swz_shift;
-  }
   if (ucode_dump_on()) {   // DIAG: distinct texture states (signs, host swizzle) per shader pair
     static std::unordered_map<uint64_t, bool> seen;
     char line[512];
@@ -616,37 +721,22 @@ extern "C" int lsw_gpu_prepare(const uint32_t* regs_in, const uint32_t* vs_ucode
   sc.alpha_to_mask = rb_colorcontrol.alpha_to_mask_enable ? (rb_colorcontrol.value >> 24) | (1 << 8) : 0;
   out->system_constants = b.sys_block;
   out->system_constants_size = uint32_t(sizeof(b.sys_block));
+  b.sys_token = ++b.next_token;
 
   pm(PP_SYS);
   // ── Float / bool+loop / fetch constants ──
-  pack_floats(regs, vs->constant_register_map(), XE_GPU_REG_SHADER_CONSTANT_000_X, b.vs_float);
-  if (ps) pack_floats(regs, ps->constant_register_map(), XE_GPU_REG_SHADER_CONSTANT_256_X, b.ps_float);
-  else b.ps_float.assign(4, 0.0f);
-  out->vs_float = b.vs_float.data(); out->vs_float_count = uint32_t(b.vs_float.size() / 4);
-  out->ps_float = b.ps_float.data(); out->ps_float_count = uint32_t(b.ps_float.size() / 4);
+  pack_all_floats(b, regs, *vs, ps, out);
   // Bool / loop constants straight from the register file (the recorder copies them into the frame right away).
   out->bool_loop = &regs[XE_GPU_REG_SHADER_CONSTANT_BOOL_000_031];
   // Fetch constants straight from the register file too. (Masking the slots the shaders do not read changed nothing,
   // Eden hub 2026-10-11: the previous draw's block was reused 34 % of the time either way, since the slots that change
   // between draws are the used vertex fetches: every mesh has its own vertex buffer.)
   out->fetch = &regs[XE_GPU_REG_SHADER_CONSTANT_FETCH_00_0];
+  fill_fetch_derived(b, regs_in);
+  out->fetch_derived = b.fetch_derived;
 
   pm(PP_FLOAT);
-  // ── Vertex buffer ranges the VS fetches from shared memory ──
-  const auto& cmv = vs->constant_register_map();
-  for (uint32_t i = 0; i < xe::countof(cmv.vertex_fetch_bitmap); ++i) {
-    uint32_t bits = cmv.vertex_fetch_bitmap[i], j;
-    while (xe::bit_scan_forward(bits, &j)) {
-      bits = xe::clear_lowest_bit(bits);
-      xenos::xe_gpu_vertex_fetch_t vf = regs.GetVertexFetch(i * 32 + j);
-      if (vf.type != xenos::FetchConstantType::kVertex) continue;
-      if (out->vfetch_count < LSW_GPU_MAX_VFETCH) {
-        out->vfetch_addr[out->vfetch_count] = vf.address << 2;
-        out->vfetch_size[out->vfetch_count] = vf.size << 2;
-        ++out->vfetch_count;
-      }
-    }
-  }
+  fill_vertex_ranges(regs, *vs, out);
 
   // ── Texture / sampler bindings (the recorder copies these; the GL replay uses the shader's units) ──
   auto fill = [&](const SpirvShader& s, LswGpuTexBinding* tex, uint32_t& nt, LswGpuSamplerBinding* smp, uint32_t& ns) {
@@ -663,6 +753,87 @@ extern "C" int lsw_gpu_prepare(const uint32_t* regs_in, const uint32_t* vs_ucode
   if (ps) fill(*ps, out->ps_tex, out->ps_tex_count, out->ps_smp, out->ps_smp_count);
   pm(PP_REST);
   pp_report();
+  set_tokens(b, out);
+  PrepMemo& m = g_memo;
+  m.out = out; m.vs_ucode = vs_ucode_be; m.ps_ucode = ps_ucode_be; m.vs_dwords = vs_dwords; m.ps_dwords = ps_dwords;
+  m.index_endian = index_endian; m.initiator = regs_in[XE_GPU_REG_VGT_DRAW_INITIATOR] & 0xFFFFu;
+  m.state = g_lsw_reg_gens.state; m.floats = g_lsw_reg_gens.floats; m.fetch = g_lsw_reg_gens.fetch; m.epoch = lsw_gpu_shm_epoch();
+  m.vs = vs; m.ps_given = ps_given; m.ps = ps; m.vs_unsigned = vs_unsigned; m.ps_unsigned = ps_unsigned;
+  return 1;
+}
+}  // namespace
+
+extern "C" void lsw_prep_memo_set(int on) { g_prep_memo_on.store(on != 0 && !g_prep_memo_broken, std::memory_order_relaxed); }
+
+extern "C" int lsw_gpu_prepare(const uint32_t* regs_in, const uint32_t* vs_ucode_be, uint32_t vs_dwords,
+                               const uint32_t* ps_ucode_be, uint32_t ps_dwords, uint32_t index_endian,
+                               uint32_t rt_width, uint32_t rt_height, LswGpuDraw* out) {
+  (void)rt_width; (void)rt_height;
+  if (!regs_in || !vs_ucode_be || !vs_dwords || !out) return 0;
+  Bridge& b = bridge();
+  PrepMemo& m = g_memo;
+  const bool on = g_prep_memo_on.load(std::memory_order_relaxed);
+  bool same = on && m.out == out && m.state == g_lsw_reg_gens.state && m.vs_ucode == vs_ucode_be && m.ps_ucode == ps_ucode_be &&
+              m.vs_dwords == vs_dwords && m.ps_dwords == ps_dwords && m.index_endian == index_endian &&
+              m.initiator == (regs_in[XE_GPU_REG_VGT_DRAW_INITIATOR] & 0xFFFFu);
+  if (same && m.epoch != lsw_gpu_shm_epoch()) {   // guest code has run: the shaders' bytes need looking at
+    same = get_shader(b, xenos::ShaderType::kVertex, vs_ucode_be, vs_dwords) == m.vs &&
+           (!m.ps_given || get_shader(b, xenos::ShaderType::kPixel, ps_ucode_be, ps_dwords) == m.ps_given);
+    if (same) m.epoch = lsw_gpu_shm_epoch();
+  }
+  const RegisterFile& regs = *reinterpret_cast<const RegisterFile*>(regs_in);
+  if (same && m.fetch != g_lsw_reg_gens.fetch &&
+      (textures_unsigned(regs, *m.vs) != m.vs_unsigned || (m.ps && textures_unsigned(regs, *m.ps) != m.ps_unsigned))) same = false;
+  ++g_pm_calls;
+  if (on && !(g_pm_calls % 100000)) {
+    printf("[PREPMEMO] %llu calls: %llu reused, %llu with new fetch constants, %llu with new floats, %llu checks (reuse %s)\n",
+           (unsigned long long)g_pm_calls, (unsigned long long)g_pm_reused, (unsigned long long)g_pm_fetch, (unsigned long long)g_pm_floats,
+           (unsigned long long)g_pm_checks, g_prep_memo_broken ? "turned off by a mismatch" : "on");
+    fflush(stdout);
+  }
+  if (!same) return prepare_full(b, regs_in, vs_ucode_be, vs_dwords, ps_ucode_be, ps_dwords, index_endian, out);
+  ++g_pm_reused;
+  if (m.fetch != g_lsw_reg_gens.fetch) {
+    ++g_pm_fetch;
+    SysConst& sc = *reinterpret_cast<SysConst*>(b.sys_block);
+    uint32_t signs[sizeof sc.texture_swizzled_signs / 4], swizzles[sizeof sc.texture_swizzles / 4];
+    std::memcpy(signs, sc.texture_swizzled_signs, sizeof signs);
+    std::memcpy(swizzles, sc.texture_swizzles, sizeof swizzles);
+    std::memset(sc.texture_swizzled_signs, 0, sizeof signs);
+    std::memset(sc.texture_swizzles, 0, sizeof swizzles);
+    fill_texture_state(regs, *m.vs, m.ps, sc);
+    if (std::memcmp(signs, sc.texture_swizzled_signs, sizeof signs) || std::memcmp(swizzles, sc.texture_swizzles, sizeof swizzles))
+      b.sys_token = ++b.next_token;
+    fill_vertex_ranges(regs, *m.vs, out);
+    fill_fetch_derived(b, regs_in);
+    m.fetch = g_lsw_reg_gens.fetch;
+  }
+  if (m.floats != g_lsw_reg_gens.floats) {
+    ++g_pm_floats;
+    pack_all_floats(b, regs, *m.vs, m.ps, out);
+    m.floats = g_lsw_reg_gens.floats;
+  }
+  set_tokens(b, out);
+  if (!(g_pm_reused % 256)) {
+    ++g_pm_checks;
+    static LswGpuDraw saved;
+    static uint8_t saved_sys[sizeof b.sys_block];
+    static std::vector<float> saved_vs, saved_ps;
+    static float saved_derived[32 * 4];
+    saved = *out;
+    std::memcpy(saved_sys, b.sys_block, sizeof saved_sys);
+    saved_vs = b.vs_float; saved_ps = b.ps_float;
+    std::memcpy(saved_derived, b.fetch_derived, sizeof saved_derived);
+    const int full = prepare_full(b, regs_in, vs_ucode_be, vs_dwords, ps_ucode_be, ps_dwords, index_endian, out);
+    if (const char* what = full ? memo_differs(*out, b, saved, saved_sys, saved_vs, saved_ps, saved_derived) : "full path failed") {
+      g_prep_memo_broken = true;
+      g_prep_memo_on.store(false, std::memory_order_relaxed);
+      printf("[PREPMEMO] MISMATCH in %s after %llu reuses: reuse turned off for this session (VS %p, PS %p)\n", what, (unsigned long long)g_pm_reused,
+             static_cast<const void*>(vs_ucode_be), static_cast<const void*>(ps_ucode_be));
+      fflush(stdout);
+    }
+    return full;
+  }
   return 1;
 }
 

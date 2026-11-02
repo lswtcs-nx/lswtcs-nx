@@ -67,7 +67,7 @@ def print_ab(rows):
     """Settings compared over the same session: frames in the first 2 s of a state and hitches are left out."""
     states=sorted({r['ab'] for r in rows if r['ab']})
     if not states:return
-    print('\nA/B states (M merging, A audio first, W walk off rotation) by recorded draws; speed = audio played per real time')
+    print('\nA/B states (M merging, A audio first, P reuse of draw preparation, X XMA and LZ2K off the turn, S direct stitching, H page hash per frame, V comparison) by recorded draws; speed = audio played per real time')
     print('state      draws   frames   s   fps  audio%  empty%  replay  gpuwait  merged%')
     pairs=list(zip(rows,rows[1:]))
     for low,high in BANDS:
@@ -102,15 +102,27 @@ def print_diagnostics(lines):
         match=re.match(r'\[GLUNTILE\] rejected since last report: uncheckable (\d+), content (\d+), tile state (\d+), bottom (\d+), order (\d+)',line)
         if match:rejected=[a+int(b) for a,b in zip(rejected,match.groups())]
     if any(rejected):print('\nMerge refusals: uncheckable {}, content {}, tile state {}, bottom {}, order {}'.format(*rejected))
-    for tag,title in (('[GLSIGNS]','Signed textures'),('[LEVEL]','Level names, in order'),('[GLBRIDGE]','Shader bridge messages'),('[HWPROF]','CPU profiler (tools/hwprof_report.py names hwprof.txt)'),('[CAPTIME]','Captures'),('[GLHIST]','Frame history'),('[CAPSAVE]','Background saves'),('[RESDUMP] targets','Capture targets skipped')):
+    for tag,title in (('[GLSIGNS]','Signed textures'),('[LEVEL]','Level names, in order'),('[GLSTITCH]','Stitched regions'),('[GLBRIDGE]','Shader bridge messages'),('[HWPROF]','CPU profiler (tools/hwprof_report.py names hwprof.txt)'),('[CAPTIME]','Captures'),('[GLHIST]','Frame history'),('[CAPSAVE]','Background saves'),('[RESDUMP] targets','Capture targets skipped')):
         found=[l for l in lines if l.startswith(tag)]
         if found:
             print(f'\n{title}:')
             for line in found[:12]:print(' ',line[:170])
+    memo=[l for l in lines if l.startswith('[PREPMEMO]')]
+    if memo:
+        print('\nReuse of draw preparation:')
+        print(' ',memo[-1][:170])
+        for line in [l for l in memo if 'MISMATCH' in l][:5]:print(' ',line[:170])
+    gpu=[l for l in lines if l.startswith('[GLGPU] replay') and 'OFF' not in l]
+    if gpu:
+        print(f'\nGPU time per frame kind, median of {len(gpu)} samples in ms (count), by recorded draws of no band:')
+        kinds={}
+        for line in gpu:
+            for key,value in re.findall(r'(GPU|plain|points|rects|quads|resolves|texsrc blits|present) ([\d.]+)',line):kinds.setdefault(key,[]).append(float(value))
+        for key,value in kinds.items():print(f'  {key:13s} {percentile(value,.5):7.2f}   top 5 % {percentile(value,.95):7.2f}')
     pages=[l for l in lines if l.startswith('[GPUPAGES]')]
     if pages:
         print('\nPage hashing, median of the reports:')
-        for key in ('pages hashed','re-hashed in the same frame','changed mid-frame','epochs','walk','record'):
+        for key in ('pages hashed','re-hashed in the same frame','changed mid-frame','epochs','walk','record','skipped','sampled misses'):
             values=[float(m[1]) for m in (re.search(key+r' ([\d.]+)',l) for l in pages) if m]
             if values:print(f'  {key}: {percentile(values,.5):.2f}, top 5 % {percentile(values,.95):.2f}')
     spikes=[l for l in lines if l.startswith('[GSPIKE]')]

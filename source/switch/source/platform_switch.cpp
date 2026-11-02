@@ -124,15 +124,16 @@ extern "C" void lsw_offcore_begin_prio(int prio);
 extern "C" void lsw_offcore_begin() { lsw_offcore_begin_prio(0x2B); }
 // Same with a chosen priority (the PM4 walk, kernel_stubs.cpp LSWTCS_WALKOFF: its multi-ms bursts at 0x2B starved the
 // glthread worker on core 2 and with it the render thread).
-extern "C" void lsw_offcore_begin_prio(int new_prio) {
+extern "C" void lsw_offcore_begin_on(int target_core, int new_prio) {
     s32 core = 0; u64 mask = 0;
     if (R_FAILED(svcGetThreadCoreMask(&core, &mask, CUR_THREAD_HANDLE))) { g_offcore_prev_core = -1; return; }
     s32 prio = 0;
     g_offcore_prev_prio = R_SUCCEEDED(svcGetThreadPriority(&prio, CUR_THREAD_HANDLE)) ? prio : -1;
     g_offcore_prev_core = core; g_offcore_prev_mask = mask;
     svcSetThreadPriority(CUR_THREAD_HANDLE, new_prio);
-    svcSetThreadCoreMask(CUR_THREAD_HANDLE, 2, 1u << 2);
+    svcSetThreadCoreMask(CUR_THREAD_HANDLE, target_core, 1u << target_core);
 }
+extern "C" void lsw_offcore_begin_prio(int new_prio) { lsw_offcore_begin_on(2, new_prio); }
 extern "C" void lsw_offcore_end() {
     if (g_offcore_prev_core < 0) return;
     svcSetThreadCoreMask(CUR_THREAD_HANDLE, g_offcore_prev_core, g_offcore_prev_mask);

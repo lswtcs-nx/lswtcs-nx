@@ -397,6 +397,14 @@ void report() {
 }
 }  // namespace
 
+extern "C" void lswtcs_gil_blocking(void (*fn)(void*), void* arg);   // kernel_stubs.cpp
+extern "C" __attribute__((weak)) void lsw_offcore_begin_on(int, int) {}   // Switch: platform_switch.cpp
+extern "C" __attribute__((weak)) void lsw_offcore_end() {}
+// A/B state X: larger blocks decode without the guest scheduler's turn, on core 1 below the render thread (run 8: 3 % of the turn in
+// heavy scenes). The game cannot read a block before this call returns, and its decoder's globals are only written afterwards.
+static std::atomic<bool> g_lz2k_off_turn{false};
+extern "C" void lsw_lz2k_off_turn_set(int on) { g_lz2k_off_turn.store(on != 0, std::memory_order_relaxed); }
+
 // Strong definition: replaces the recompiled sub_82504740 (a weak alias) for every caller and the call table.
 PPC_FUNC(sub_82504740) {
     const int m = mode();
@@ -432,7 +440,21 @@ PPC_FUNC(sub_82504740) {
         // a corrupt stream gets here, and the guest's handling of it is unchanged apart from those bytes).
         const uint64_t t0 = now_ns();
         try {
-            const State s = decode(d, src, in, dst, out, ring, compsize, origsize, i0);
+            State s{};
+            if (origsize >= (16u << 10) && g_lz2k_off_turn.load(std::memory_order_relaxed)) {
+                struct Job { Lz2k* d; uint32_t src; const uint8_t* in; uint32_t dst; uint8_t* out; uint8_t* ring; uint32_t compsize, origsize, i0; State* s; bool bad; };
+                Job job{&d, src, in, dst, out, ring, compsize, origsize, i0, &s, false};
+                lswtcs_gil_blocking([](void* p) {
+                    Job& j = *static_cast<Job*>(p);
+                    lsw_offcore_begin_on(1, 0x30);
+                    try { *j.s = decode(*j.d, j.src, const_cast<uint8_t*>(j.in), j.dst, j.out, j.ring, j.compsize, j.origsize, j.i0); }
+                    catch (const Bad&) { j.bad = true; }
+                    lsw_offcore_end();
+                }, &job);
+                if (job.bad) throw Bad{};
+            } else {
+                s = decode(d, src, in, dst, out, ring, compsize, origsize, i0);
+            }
             write_state(base, s);
             ctx.r3.u64 = s.total;
             g_ns += now_ns() - t0;

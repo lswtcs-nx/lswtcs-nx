@@ -397,7 +397,9 @@ automated scan of all five histories for black rows and sudden changes found not
 characters beside the blue saber turn cyan and return. Qui-Gon goes green beside his own saber in `6338`, so this is probably saber light, but no
 reference capture was compared. The grey moving block's flat black and white bands are also unchecked.
 
-## What run 8 led to: `0.0.15-log9`, not yet run on hardware
+## What run 8 led to: `0.0.15-log9`, never run on hardware by itself
+
+The tester chose to skip this build and test it together with the next one, `0.0.16-log10`.
 
 Compiled and validated; the draw-identity test passes. The new PNG writer's output was checked on PC: pixels, CRCs and Adler-32 at six sizes.
 The level table was tried on synthetic frames. Nothing below has run on a console.
@@ -434,3 +436,46 @@ under the method in `BO2_OPTIMIZATION_PATHS.md`.
 
 The next run should repeat Episode I chapter 2. It decides whether the freezes are gone (`--band 3` shows any left), what FPS and audio gained at the same
 draw counts, and whether `[LEVEL]` names the levels. Captures are best kept for moments with a fault, since each full one writes about 130 MB.
+
+## `0.0.16-log10`: planned from run 8's profile, not yet run on hardware
+
+Compiled and validated. The draw-identity test passes. The fetch-constant test passes, also over the 181 distinct shaders captured so far, and those shaders still
+compile as rewritten on a PC's OpenGL driver (NVIDIA), which says nothing about Mesa. Nothing below has run on a console.
+
+Run 8 changed the order of `BO2_OPTIMIZATION_PATHS.md`. In the heavy band 69 % of the turn is host code and 31 % the game's, and the game's top 100 functions are only 22 %.
+So work on this port's own record path comes first, and compiler flags or native rewrites of guest code have less to offer for now.
+
+**State letters.** `hardware-ab.env` runs MAPXS and one state without each of P, X and S, plus one with H and one with V, so each compares with MAPXS on its own.
+
+**P: reuse of draw preparation** (`gl_bridge.cc`, `lsw_gpu_prepare`). Every register write now goes through a generation count (`LswRegGens`), which ignores a value written again
+unchanged. While no state register has changed and the shaders are the same, the previous draw's translations, viewport, scissor and system constants stand, and only what
+changed is computed again: texture state and vertex ranges on a fetch change, floats on a float change. Identical blocks then skip the comparison in `put_block`, through a token.
+Every 256th reuse also runs the full path and compares; the first difference prints `[PREPMEMO] MISMATCH` and turns reuse off for the session. How often draws qualify is unknown until `[PREPMEMO]` reports it.
+
+**X: XMA and LZ2K off the turn.** A kick wakes the XMA worker, now on core 2, instead of decoding on the audio thread, as the 360's decoder runs beside the CPU. Blocks of 16 KB and up decompress
+without the turn, on core 1 below the render thread. If the game relied on a kick finishing at once, audio would show it in this state.
+
+**S: resolves straight into stitched targets** (`gl_rt.inc`). About 5 of 11.8 Mpx of blits per frame were second copies of tile pieces. Once a region's composite has been built twice, resolves into it go
+straight to their row, which keeps the rule that the newest resolve of a row wins. A part read on its own, or a composite of another size, gets its rows copied back first. State V's comparison now also resolves and
+composes the old way in its unmerged pass, so it checks S too.
+
+**H: page hash per frame.** The hash is 8.6 % of the turn. The source comment rejects page age as proof that a page has not changed, for a good reason, so this is not on by default and needs the owner's judgement even if it
+measures well. Only in this state, a page unchanged for 8 frames and already hashed this frame skips later epochs, except one in 16, and `[GPUPAGES]` counts what those samples would have missed.
+
+**Always on:**
+
+- Fetch constants folded (`lsw_glsl_fold.h`, `LSWTCS_GLFETCHFOLD=0` turns it off): offset, LOD bias and exponent scale come from a uniform block computed per draw instead of bitfield extracts, divisions and `ldexp` per pixel.
+  It rewrites the GLSL text, so the program list on the SD card is rewritten too at boot and stays useful. That also leaves no state to compare within a session: it can only be compared against run 8. It changes rounding offsets by at most
+  a unit in the last place. Mass Effect's similar change measured nothing, so expect little.
+- Blits use one program per mode instead of branching per pixel.
+- `lsw_guest` scopes compile to nothing in the Mesa build, where no observer exists; they were a call per access.
+- `LOAD_ALU_CONSTANT` takes the same block copy as type 0 writes.
+
+**Considered and left out.**
+
+- Not walking repeated tile IBs. With the block copy and the generation count little of the gain is left, perhaps 2 % of the turn. Its draws still need the viewport registers set inside the IB, so skipping writes needs a replay script
+  of them, and an error would show as a wrong viewport in a later tile.
+- `bridge()` costs a static guard check, 0.7 % of the turn, not the `call_once` assumed when this was planned. Passing it as an argument removes only a part of that.
+
+**Reading the next run.** `tools/analyze_run.py` compares the states by draw band and prints `[PREPMEMO]`, `[GPUPAGES]`, `[GLSTITCH]` and, from `LSWTCS_GLGPUPROF=600`, GPU time by kind of work with merging on, which run 2's table predates. A
+`MISMATCH` or a flagged `[UNTILECHECK]` decides against that change whatever its FPS. `tests/run_fetch_fold.py` covers the rewrite.

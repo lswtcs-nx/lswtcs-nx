@@ -21,6 +21,7 @@
 
 extern "C" void dbg_ram(const char* fmt, ...);
 extern "C" void lswtcs_sched_snapshot();   // DIAG (kernel_stubs.cpp)
+extern "C" __attribute__((weak)) void lsw_offcore_begin_prio(int) {}   // Switch: platform_switch.cpp
 
 namespace {
 constexpr uint32_t kContextCount = 320;
@@ -37,8 +38,14 @@ std::mutex g_alloc_mx;
 HANDLE g_work_event = nullptr;
 std::atomic<uint64_t> g_fn[8];   // DIAG call counters (lswtcs_fncount)
 std::atomic<uint64_t> g_kicks{0}, g_works{0}, g_locks{0}, g_clears{0}, g_other{0};
+// A/B state X: a kick only wakes the worker, as the 360's decoder runs beside the CPU, instead of decoding on the thread that
+// holds the guest scheduler's turn (run 8: about 18 % of the audio thread's turn in heavy scenes).
+std::atomic<bool> g_kick_async{false};
 
 void worker_main() {
+    // On core 2 beside the audio output thread: a frame decodes in well under a millisecond, and on core 0 this thread
+    // would compete with whichever guest thread holds the turn.
+    lsw_offcore_begin_prio(0x2B);
     for (;;) {
         bool did = false;
         for (uint32_t i = 0; i < kContextCount; ++i)
@@ -61,6 +68,7 @@ void worker_main() {
 }
 }  // namespace
 
+extern "C" void lsw_xma_async_set(int on) { g_kick_async.store(on != 0, std::memory_order_relaxed); }
 extern "C" void lswtcs_fncount(int id) { if (id >= 0 && id < 8) ++g_fn[id]; }
 
 // base = g_base; ctx_va = guest VA of a 320*64-byte, 256-aligned block in physical memory.
@@ -115,7 +123,7 @@ extern "C" void lswtcs_xma_mmio_store(uint8_t* base, uint32_t addr, uint32_t val
             uint32_t id = id0 + std::countr_zero(v); v &= v - 1;
             if (id < kContextCount && g_ctx[id]) {
                 g_ctx[id]->Enable();
-                if (g_ctx[id]->Work()) ++g_works;
+                if (!g_kick_async.load(std::memory_order_relaxed) && g_ctx[id]->Work()) ++g_works;
                 ++g_kicks;
             }
         }

@@ -31,6 +31,7 @@
 #include <vector>
 
 #include "lsw_gl_shader.h"
+#include "lsw_glsl_fold.h"
 #include "lsw_gpu_bridge.h"
 #include "lsw_gpu_frame.h"
 #include "lsw_spirv_glsl.h"
@@ -46,6 +47,10 @@ extern std::atomic<uint32_t> g_frame_marks;   // win32_switch.cpp: tester marks 
 extern std::atomic<uint32_t> g_capture_request;   // win32_switch.cpp: capture combos, 1 light, 2 full
 extern "C" void lsw_ft_ring_dump();   // kernel_stubs.cpp: game frame times of the last 120 swaps ([FTRING])
 extern "C" void lsw_sched_ab_set(int audioprio, int walkoff);   // kernel_stubs.cpp: LSWTCS_ABCYCLE
+extern "C" void lsw_shm_frame_hash_set(int on);                 // kernel_stubs.cpp: H
+extern "C" void lsw_prep_memo_set(int on);                      // gl_bridge.cc: P
+extern "C" void lsw_xma_async_set(int on);                      // lsw_xma.cc: X
+extern "C" void lsw_lz2k_off_turn_set(int on);                  // native_lz2k.cpp: X
 extern "C" void lsw_audio_stats(uint64_t* played, uint64_t* empty_ns);   // audio_switch.cpp: frames.log columns
 extern "C" void lsw_log_async_path(char* out, size_t capacity, const char* name);   // log_async.cpp
 extern "C" void lsw_prof_register(const char* name, int sched_id);   // hw_profiler.cpp
@@ -621,6 +626,8 @@ void program_cache_init() {
                 snprintf(path, sizeof path, LSW_PROGLIST_DIR "/%s", n);
                 ProgSources s;
                 if (!program_list_read(path, s)) { remove(path); continue; }
+                s.vs = lsw_glsl_fold_fetch(s.vs);   // saved before fetch folding: what the game will now ask for
+                s.ps = lsw_glsl_fold_fetch(s.ps);
                 const uint64_t ckey = program_cache_key(s);   // driver changed -> different key: still compiled
                 std::lock_guard<std::mutex> lk(g_prog_mtx);
                 if (g_prog_entries.count(ckey)) continue;
@@ -1270,7 +1277,7 @@ struct GlStateCache {
     static constexpr int kUnits = 32;
     uint64_t epoch = 0;
     GLuint prog = 0, fbo = 0;
-    struct Ubo { GLuint buf; GLintptr off; GLsizeiptr size; } ubo[6];
+    struct Ubo { GLuint buf; GLintptr off; GLsizeiptr size; } ubo[7];
     GLuint tex[kUnits][3], smp[kUnits];
     GLint active = -1;
     std::unordered_map<GLuint, uint32_t> swz;   // texture -> swizzle last set on it
@@ -2005,6 +2012,11 @@ void ab_cycle_tick() {
     const auto has = [](char c) { return g_ab_state.find(c) != std::string::npos; };
     g_ut_off_ab = !has('M');
     lsw_sched_ab_set(has('A'), has('W'));
+    lsw_prep_memo_set(has('P'));
+    lsw_shm_frame_hash_set(has('H'));
+    lsw_xma_async_set(has('X'));
+    lsw_lz2k_off_turn_set(has('X'));
+    stitch_set(has('S'));
     ++g_ab_changes;
     printf("[ABCYCLE] state %s from replay %llu\n", g_ab_state.c_str(), (unsigned long long)g_replays);
     fflush(stdout);
@@ -2480,6 +2492,7 @@ PresentSrc replay() {
         g_sc.bind_ubo(2, g_arena, r.cb_psf_off, float_cb_size(r.cb_psf_size));
         g_sc.bind_ubo(3, g_arena, r.cb_bool_off, 40 * 4);
         g_sc.bind_ubo(4, g_arena, r.cb_fetch_off, 192 * 4);
+        if (r.cb_derived_off) g_sc.bind_ubo(kLswFetchDerivedBinding, g_arena, r.cb_derived_off, kLswFetchDerivedBytes);
         for (const UnitBind& u : units) g_sc.bind_unit(u.unit, u.target, u.tex, u.sampler, view_swizzle_on(), u.swz);
         rp_close(RP_BIND, t_bind, t_bind_in);
         {
@@ -2870,10 +2883,13 @@ PresentSrc untile_check(const PresentSrc& shown) {
     read(shown, merged);
     g_replay_same = true;
     g_ut_off_check = true;
+    stitch_copy_back_all();   // the comparison pass resolves and composes the old way too, so this checks both
+    g_stitch_suspended = true;
     const PresentSrc second = replay();
     arena_fence();
     read(second, unmerged);
     g_ut_off_check = false;
+    g_stitch_suspended = false;
     const PresentSrc third = replay();
     arena_fence();
     read(third, merged2);
@@ -2931,6 +2947,7 @@ void maybe_resdump() {
         if (const char* e = getenv("LSWTCS_RESDUMPZ")) sscanf(e, "%f,%f", &lo, &hi);
         return std::make_pair(lo, hi);
     }();
+    stitch_copy_back_all();   // the dump shows each resolve target as itself
     // Read back in strips of 64 rows: a whole target as floats was 15-21 MB in one block, and after a long session the
     // console's heap had no such block (Switch 2026-10-09: std::bad_alloc in a capture aborted the game). A target that
     // still does not fit is skipped and logged.

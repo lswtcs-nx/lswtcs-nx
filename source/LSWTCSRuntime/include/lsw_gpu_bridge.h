@@ -33,6 +33,10 @@ struct LswGpuDraw {
   const float* ps_float; uint32_t ps_float_count;
   const uint32_t* bool_loop;                          // 40 dwords
   const uint32_t* fetch;                              // 192 dwords
+  const float* fetch_derived;                         // Switch bridge: 32 vec4 (lsw_glsl_fold.h), else null
+  // Per constant block (LswCbKind, then 5 = fetch_derived): the same non-zero token as the frame's last block of that kind means the
+  // same content, so the recorder needs no comparison. 0 = unknown.
+  uint32_t cb_token[6];
   // Guest physical byte ranges the VS fetches vertices from (must be in shared memory).
   uint32_t vfetch_count;
   uint32_t vfetch_addr[LSW_GPU_MAX_VFETCH], vfetch_size[LSW_GPU_MAX_VFETCH];
@@ -50,6 +54,12 @@ struct LswGpuDraw {
   // primitive types D3D12 lacks; combine with the type in lsw_gpu_geometry_shader.
   uint32_t gs_key_bits;
 };
+
+// Generations of the register file (kernel_stubs.cpp), each bumped when a value of that class actually changes:
+// floats 0x4000-0x47FF, fetch 0x4800-0x48FF, bool and loop 0x4900-0x49FF, state all others (not VGT_DRAW_INITIATOR and
+// VGT_EVENT_INITIATOR, which are written per draw and per event). What lsw_gpu_prepare reuses between draws rests on them.
+struct LswRegGens { uint32_t state, floats, fetch, boolloop; };
+extern struct LswRegGens g_lsw_reg_gens;
 
 // regs: full register file (host order, >= 0x5003 dwords). ucode pointers are guest memory
 // (big-endian dwords). index_endian: the draw's index endianness (xenos::Endian) for the VS.

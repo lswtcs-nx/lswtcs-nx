@@ -40,6 +40,7 @@ struct LswGpuDrawRec {
   uint32_t cb_vsf_off, cb_vsf_size;
   uint32_t cb_psf_off, cb_psf_size;
   uint32_t cb_bool_off, cb_fetch_off;
+  uint32_t cb_derived_off;   // lsw_glsl_fold.h: 0 = none (nothing is allocated at 0 but the frame's first block, a system block)
   // Vertex data the VS reads from shared memory: [first_range, first_range + range_count).
   uint32_t first_range, range_count;
   // Index buffer (raw guest bytes in the arena; the VS applies the endian swap itself).
@@ -132,7 +133,7 @@ struct LswGpuFrame {
   uint32_t input_check_skipped=0,input_check_reuses=0,input_check_merges=0;
   bool input_check_exhausted=false;
   // Last constant block written per kind (LswCbKind), for put_block's reuse check.
-  uint32_t cb_last_off[5] = {~0u, ~0u, ~0u, ~0u, ~0u}, cb_last_total[5] = {}, cb_last_na[5] = {}, cb_last_nb[5] = {};
+  uint32_t cb_last_off[6] = {~0u, ~0u, ~0u, ~0u, ~0u, ~0u}, cb_last_total[6] = {}, cb_last_na[6] = {}, cb_last_nb[6] = {}, cb_last_token[6] = {};
   void clear() { input_signatures.clear(); input_mismatch={}; input_check_bytes=input_check_ns=0;
     input_check_skipped=input_check_reuses=input_check_merges=0;input_check_exhausted=false;
     front={}; deko_execution.reset(); draw_extents.clear(); arena.clear(); ranges.clear(); draws.clear(); prelude.clear();
@@ -140,10 +141,12 @@ struct LswGpuFrame {
   // Constant block = [a: na bytes][b: nb bytes][zeros up to total, then to the next 256 bytes]. Reuses
   // the previous block of the same kind when identical (consecutive draws mostly share constants; every
   // draw copying its own ~20 KB made the arena ~3 MB/frame). dedup=false always appends.
-  uint32_t put_block(int kind, uint32_t total, const void* a, uint32_t na, const void* b, uint32_t nb, bool dedup) {
+  // token: see LswGpuDraw::cb_token. A block written without one (0) cannot be matched by token.
+  uint32_t put_block(int kind, uint32_t total, const void* a, uint32_t na, const void* b, uint32_t nb, bool dedup, uint32_t token = 0) {
     if (dedup && cb_last_off[kind] != ~0u && cb_last_total[kind] == total && cb_last_na[kind] == na && cb_last_nb[kind] == nb) {
+      if (token && cb_last_token[kind] == token) return cb_last_off[kind];
       const uint8_t* p = arena.data() + cb_last_off[kind];
-      if ((!na || std::memcmp(p, a, na) == 0) && (!nb || std::memcmp(p + na, b, nb) == 0)) return cb_last_off[kind];
+      if ((!na || std::memcmp(p, a, na) == 0) && (!nb || std::memcmp(p + na, b, nb) == 0)) { cb_last_token[kind] = token; return cb_last_off[kind]; }
     }
     uint32_t padded = (total + 255u) & ~255u;
     uint32_t off = alloc_uninit(padded);
@@ -151,7 +154,7 @@ struct LswGpuFrame {
     if (na) std::memcpy(p, a, na);
     if (nb) std::memcpy(p + na, b, nb);
     std::memset(p + na + nb, 0, padded - na - nb);
-    cb_last_off[kind] = off; cb_last_total[kind] = total; cb_last_na[kind] = na; cb_last_nb[kind] = nb;
+    cb_last_off[kind] = off; cb_last_total[kind] = total; cb_last_na[kind] = na; cb_last_nb[kind] = nb; cb_last_token[kind] = token;
     return off;
   }
   // Zero-filled (constant buffers: padding and short blocks must read as 0).
@@ -194,6 +197,7 @@ enum { GP_WALK, GP_RECORD, GP_PREPARE, GP_VCOPY, GP_REPLAY, GP_SHMHASH, GP_PRESE
        GP_RP_ARENA, GP_RP_PREPASS, GP_RP_PSO, GP_RP_BIND, GP_RP_DIAG, GP_LIMIT, GP_RTWAIT,
        GP_RP_TEXSRC, GP_RP_SRV, GP_RP_SMP, GP_RP_RT, GP_RP_DRAW,
        GP_N_PAGEHASH, GP_N_EPOCH, GP_N_REHASH, GP_N_MIDCHANGE, GP_N_EPOCH_ISR,
+       GP_N_HASH_SKIP, GP_N_HASH_MISS,   // LSWTCS_ABSTATES H: page hashes skipped, and changes found in the sampled ones
        GP_N_MID_WALK, GP_N_MID_ISR, GP_N_MID_DRAIN,   // mid-frame page changes by epoch source (same order as src 0/1/2)
        GP_COUNT };   // GP_N_*: counts, not ns
 extern "C" uint64_t g_gpuprof[GP_COUNT];

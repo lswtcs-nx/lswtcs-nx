@@ -237,40 +237,45 @@ void blit(const HostTex& src, const HostTex& dst, int x, int y, int w, int h, in
         ~Stamp() { if (g_blit_stamp) gpu_stamp(GK_TEXSRC); }
     } stamp;
     g_blit_px += uint64_t(w) * uint64_t(h);
-    static GLuint prog = 0;
-    static GLint u_off = -1, u_mode = -1, u_swap = -1;
-    if (!prog) {
+    // One program per mode and swap, chosen here rather than per pixel: these copies are 11.8 Mpx per heavy frame (run 8), about a
+    // quarter of the GPU's time in run 2, and branching on a uniform in each pixel adds to the cost of the one texel fetch.
+    struct BlitProgram { GLuint prog = 0; GLint u_off = -1, u_scale = -1; };
+    static BlitProgram programs[4][2];
+    const int program_mode = std::clamp(mode, 0, 3);
+    BlitProgram& bp = programs[program_mode][swap_rb ? 1 : 0];
+    if (!bp.prog) {
         static const char* const kVs =
             "#version 430\nvoid main() { vec2 t = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);\n"
             "  gl_Position = vec4(t * 2.0 - 1.0, 0.0, 1.0); }\n";
-        static const char* const kFs =
-            "#version 430\nlayout(binding = 0) uniform sampler2DArray src;\nuniform ivec2 off;\nuniform ivec3 mode;\nuniform int swp;\n"
+        static const char* const kHead =
+            "#version 430\nlayout(binding = 0) uniform sampler2DArray src;\nuniform ivec2 off;\nuniform ivec2 scale;\n"
             "layout(location = 0) out vec4 o;\n"
             "vec4 ld(ivec2 p) { return texelFetch(src, ivec3(p, 0), 0); }\n"
-            "void main() { ivec2 s = ivec2(gl_FragCoord.xy) + off;\n"
-            "  if (mode.x == 1) { ivec2 b = s * 2; o = 0.25 * (ld(b) + ld(b + ivec2(1, 0)) + ld(b + ivec2(0, 1)) + ld(b + ivec2(1, 1))); }\n"
-            "  else if (mode.x == 2) { ivec2 b = ivec2(s.x, s.y * 2); o = 0.5 * (ld(b) + ld(b + ivec2(0, 1))); }\n"
-            "  else if (mode.x == 3) o = ld(s * mode.yz);\n"
-            "  else o = ld(s);\n"
-            "  if (swp != 0) o = o.bgra; }\n";
+            "void main() { ivec2 s = ivec2(gl_FragCoord.xy) + off;\n";
+        static const char* const kBody[4] = {
+            "  o = ld(s);\n",
+            "  ivec2 b = s * 2; o = 0.25 * (ld(b) + ld(b + ivec2(1, 0)) + ld(b + ivec2(0, 1)) + ld(b + ivec2(1, 1)));\n",
+            "  ivec2 b = ivec2(s.x, s.y * 2); o = 0.5 * (ld(b) + ld(b + ivec2(0, 1)));\n",
+            "  o = ld(s * scale);\n",
+        };
+        const std::string fs = std::string(kHead) + kBody[program_mode] + (swap_rb ? "  o = o.bgra;\n" : "") + "}\n";
+        const char* const fs_text = fs.c_str();
         GLuint v = glCreateShader(GL_VERTEX_SHADER), f = glCreateShader(GL_FRAGMENT_SHADER);
         glShaderSource(v, 1, &kVs, nullptr); glCompileShader(v);
-        glShaderSource(f, 1, &kFs, nullptr); glCompileShader(f);
-        prog = glCreateProgram();
-        glAttachShader(prog, v); glAttachShader(prog, f); glLinkProgram(prog);
-        GLint ok = 0; glGetProgramiv(prog, GL_LINK_STATUS, &ok);
-        if (!ok) { char log[512] = {}; glGetProgramInfoLog(prog, sizeof log, nullptr, log); printf("[GLRT] blit link failed: %s\n", log); fflush(stdout); }
-        u_off = glGetUniformLocation(prog, "off");
-        u_mode = glGetUniformLocation(prog, "mode");
-        u_swap = glGetUniformLocation(prog, "swp");
+        glShaderSource(f, 1, &fs_text, nullptr); glCompileShader(f);
+        bp.prog = glCreateProgram();
+        glAttachShader(bp.prog, v); glAttachShader(bp.prog, f); glLinkProgram(bp.prog);
+        GLint ok = 0; glGetProgramiv(bp.prog, GL_LINK_STATUS, &ok);
+        if (!ok) { char log[512] = {}; glGetProgramInfoLog(bp.prog, sizeof log, nullptr, log); printf("[GLRT] blit link failed: %s\n", log); fflush(stdout); }
+        bp.u_off = glGetUniformLocation(bp.prog, "off");
+        bp.u_scale = glGetUniformLocation(bp.prog, "scale");
     }
     ++g_blit_count;
     ++g_gl_epoch;
     glBindFramebuffer(GL_FRAMEBUFFER, single_fbo(dst));
-    glUseProgram(prog);
-    glUniform2i(u_off, offx, offy);
-    glUniform3i(u_mode, mode, sx, sy);
-    glUniform1i(u_swap, swap_rb ? 1 : 0);
+    glUseProgram(bp.prog);
+    glUniform2i(bp.u_off, offx, offy);
+    if (bp.u_scale >= 0) glUniform2i(bp.u_scale, sx, sy);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D_ARRAY, src.tex);
     glBindSampler(0, 0);
@@ -290,8 +295,22 @@ struct Resolved {
     HostTex t; uint32_t tfmt = 0; uint64_t frame = 0; uint64_t probe = 0; uint32_t probe_bytes = 0;
     bool composite = false; uint32_t vy0 = 0xFFFFFFFFu, vy1 = 0;
     bool swap = false;   // last resolve into it had copy_dest_swap (red/blue exchanged in guest memory)
+    bool direct = false;   // stitched region: the last resolve went straight into the composite
+    bool stale = false;    // and t does not hold it yet (stitch_copy_back)
+    uint32_t compose_count = 0;   // composite only: how often it has been built, see stitch_learn
 };
 std::unordered_map<uint32_t, Resolved> g_resolved;
+
+// ---- stitched regions (state S of LSWTCS_ABSTATES) -----------------------------------------------------------------
+// Predicated tiling resolves each tile into its own part of one piece of guest memory, and texture_source then copies those parts
+// into the one texture the post passes sample. Those second copies were about 5 of 11.8 Mpx per heavy frame. Once a region's composite has
+// been built the same way twice, the region is known: later resolves into it go straight into the composite at their row, which keeps
+// the rule that the newest resolve of a row wins, as in the 360's memory. A part sampled on its own, or a composite of another size, gets
+// its rows copied back first (stitch_copy_back). The check of state V draws a frame this way and the old way and compares (untile_check).
+struct StitchRegion { uint32_t base; uint64_t row_bytes, end; };
+std::vector<StitchRegion> g_stitch_regions;
+bool g_stitch_on = [] { const char* e = getenv("LSWTCS_GLSTITCH"); return e && e[0] == '1'; }();
+bool g_stitch_suspended = false;   // untile_check's comparison pass
 
 // ---- dead work (LSWTCS_GLDEADSKIP, default on) ------------------------------------------------
 // A resolve whose destination nothing has sampled for kDeadReplays replays copies for nobody: the hub
@@ -365,6 +384,45 @@ Resolved* resolved_get(uint32_t dest, uint32_t w, uint32_t h, uint32_t fmt, uint
 }
 float unorm(uint32_t v, uint32_t bits) { return float(v & ((1u << bits) - 1)) / float((1u << bits) - 1); }
 
+// The composite and row a resolve into `dest` goes to directly, or none (out stays null).
+std::unordered_map<uint32_t, Resolved> g_composed;
+uint32_t stitch_row(uint32_t dest, uint32_t fmt, int32_t x, int32_t y, int32_t w, int32_t h, const HostTex*& out) {
+    if (!g_stitch_on || g_stitch_suspended) return 0;
+    for (const StitchRegion& rg : g_stitch_regions) {
+        if (dest < rg.base || dest >= rg.end || (dest - rg.base) % rg.row_bytes) continue;
+        auto it = g_composed.find(rg.base);
+        if (it == g_composed.end() || !it->second.t.tex || it->second.t.fmt != fmt) return 0;
+        const uint32_t row = uint32_t((dest - rg.base) / rg.row_bytes);
+        if (uint64_t(x) + uint64_t(w) > it->second.t.w || uint64_t(row) + uint64_t(y) + uint64_t(h) > it->second.t.h) return 0;
+        out = &it->second.t;
+        return row;
+    }
+    return 0;
+}
+// The rows of one directly written part, back into its own texture.
+void stitch_copy_back(uint32_t dest, Resolved& part) {
+    if (!part.stale) return;
+    part.stale = false;
+    for (const StitchRegion& rg : g_stitch_regions) {
+        if (dest < rg.base || dest >= rg.end || (dest - rg.base) % rg.row_bytes) continue;
+        auto it = g_composed.find(rg.base);
+        if (it == g_composed.end() || !it->second.t.tex) continue;
+        const uint32_t row = uint32_t((dest - rg.base) / rg.row_bytes);
+        const uint32_t y0 = part.vy0 == 0xFFFFFFFFu ? 0 : part.vy0, y1 = std::min<uint32_t>(part.vy1 ? part.vy1 : part.t.h, it->second.t.h - std::min(row, it->second.t.h));
+        if (y1 > y0) blit(it->second.t, part.t, 0, int(y0), int(std::min(part.t.w, it->second.t.w)), int(y1 - y0), 0, int(row), 0, 1, 1);
+        return;
+    }
+}
+// Every part back on its own: for the old path, which composes from the parts' textures.
+void stitch_copy_back_all() {
+    for (auto& kv : g_resolved) { stitch_copy_back(kv.first, kv.second); kv.second.direct = false; }
+}
+void stitch_set(bool on) {
+    if (g_stitch_on == on) return;
+    if (!on) { stitch_copy_back_all(); g_stitch_regions.clear(); }
+    g_stitch_on = on;
+}
+
 // One recorded resolve: copy the source rectangle into the destination texture, then the clears.
 uint32_t g_resolves_done = 0;
 void do_resolve(const LswGpuDrawRec& r, bool copy = true, bool clears = true) {
@@ -391,7 +449,11 @@ void do_resolve(const LswGpuDrawRec& r, bool copy = true, bool clears = true) {
                 // Copied unswapped: the host texture keeps the render target's channel order, and copy_dest_swap is
                 // applied where the copy is sampled (resolved_swizzle), as the guest's fetch swizzle undoes it there.
                 // Swapping here turned the HUD (presented straight from the resolved front buffer) blue (2026-10-11).
-                blit(src->t, dst->t, r.rs_dest_x, r.rs_dest_y, w, h, x0 - r.rs_dest_x, y0 - r.rs_dest_y, mode, int32_t(sx), int32_t(sy));
+                const HostTex* composite = nullptr;
+                const uint32_t row = stitch_row(r.rs_dest, dfmt, r.rs_dest_x, r.rs_dest_y, w, h, composite);
+                if (composite) blit(src->t, *composite, r.rs_dest_x, r.rs_dest_y + int(row), w, h, x0 - r.rs_dest_x, y0 - (r.rs_dest_y + int(row)), mode, int32_t(sx), int32_t(sy));
+                else blit(src->t, dst->t, r.rs_dest_x, r.rs_dest_y, w, h, x0 - r.rs_dest_x, y0 - r.rs_dest_y, mode, int32_t(sx), int32_t(sy));
+                dst->direct = dst->stale = composite != nullptr;
                 dst->swap = r.rs_dest_swap != 0;
                 dst->frame = ++g_resolve_seq;
                 dst->vy0 = std::min<uint32_t>(dst->vy0, uint32_t(r.rs_dest_y));
@@ -459,12 +521,14 @@ const HostTex* resolved_view(uint32_t base, Resolved& src, uint32_t w, uint32_t 
     }
     return &v.t;
 }
-std::unordered_map<uint32_t, Resolved> g_composed;
 // *swap (optional): the source's resolve had copy_dest_swap (for a stitched source: its first piece).
 bool texture_source(uint32_t base, uint32_t tfmt, uint32_t w, uint32_t h, const HostTex*& out, bool* swap = nullptr) {
     auto ex = g_resolved.find(base);
     if (ex != g_resolved.end()) note_dest_used(base);
     if (ex != g_resolved.end() && (!ex->second.t.tex || ex->second.composite)) ex = g_resolved.end();
+    const auto region = std::find_if(g_stitch_regions.begin(), g_stitch_regions.end(), [&](const StitchRegion& rg) { return rg.base == base; });
+    const bool in_region = region != g_stitch_regions.end() && !g_stitch_suspended;
+    if (ex != g_resolved.end() && !in_region) stitch_copy_back(base, ex->second);   // read through its own address
     if (ex != g_resolved.end() && ex->second.probe_bytes && guest_probe(base, ex->second.probe_bytes) != ex->second.probe) {
         forget_fbos_of(ex->second.t.tex);   // stale: the CPU reused the memory
         host_tex_free(ex->second.t);
@@ -486,6 +550,7 @@ bool texture_source(uint32_t base, uint32_t tfmt, uint32_t w, uint32_t h, const 
     if (subs.empty()) {
         if (ex == g_resolved.end()) return false;
         Resolved& rr = ex->second;
+        stitch_copy_back(base, rr);
         if (const HostTex* vw = resolved_view(base, rr, w, h)) { out = vw; return true; }
         out = &rr.t;
         return true;
@@ -494,7 +559,13 @@ bool texture_source(uint32_t base, uint32_t tfmt, uint32_t w, uint32_t h, const 
     uint64_t seq = ex != g_resolved.end() ? ex->second.frame : 0;
     for (auto& sp : subs) seq = std::max<uint64_t>(seq, sp.second->frame);
     Resolved& c = g_composed[base];
-    if (c.t.tex && (c.t.w != w || c.t.h != h || c.t.fmt != fmt)) { forget_fbos_of(c.t.tex); host_tex_free(c.t); c = Resolved{}; ++g_src_epoch; }
+    if (c.t.tex && (c.t.w != w || c.t.h != h || c.t.fmt != fmt)) {
+        if (region != g_stitch_regions.end()) {   // a different view of the memory: the parts need their own rows again
+            stitch_copy_back_all();
+            g_stitch_regions.clear();   // relearned from the next compositions
+        }
+        forget_fbos_of(c.t.tex); host_tex_free(c.t); c = Resolved{}; ++g_src_epoch;
+    }
     if (!c.t.tex) {
         c.t = host_tex_create(w, h, fmt);
         const float z[4] = {};
@@ -502,6 +573,8 @@ bool texture_source(uint32_t base, uint32_t tfmt, uint32_t w, uint32_t h, const 
         c.frame = ~0ull;
     }
     if (c.frame != seq) {
+        const uint64_t contained = c.frame;
+        const bool known = in_region && contained != ~0ull && std::any_of(g_stitch_regions.begin(), g_stitch_regions.end(), [&](const StitchRegion& rg) { return rg.base == base; });
         c.frame = seq;
         // Blit in resolve order, newest last: on the 360 all of these share one piece of memory, so whichever resolve
         // wrote a row most recently is what the texture holds. The old order (base first, then every sub-range) let
@@ -519,11 +592,19 @@ bool texture_source(uint32_t base, uint32_t tfmt, uint32_t w, uint32_t h, const 
         std::stable_sort(order.begin(), order.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
         for (auto& o : order) {
             Resolved& s = *o.second.first;
+            if (known && (s.direct || s.frame <= contained)) continue;   // already in the composite
+            if (!known) stitch_copy_back(o.second.second == 0 ? base : base + uint32_t(o.second.second * row_bytes), s);   // this path reads the part's own texture
             const uint32_t yoff = o.second.second;
             uint32_t y0 = s.vy0 == 0xFFFFFFFFu ? 0 : s.vy0, y1 = s.vy1 ? s.vy1 : s.t.h;
             y1 = std::min<uint32_t>(y1, std::min<uint32_t>(s.t.h, c.t.h - yoff));
             if (y1 <= y0) continue;
             blit(s.t, c.t, 0, int(yoff + y0), int(std::min(s.t.w, c.t.w)), int(y1 - y0), 0, -int(yoff), 0, 1, 1);
+        }
+        if (g_stitch_on && !g_stitch_suspended && row_bytes && !known && ++c.compose_count >= 2 &&
+            std::none_of(g_stitch_regions.begin(), g_stitch_regions.end(), [&](const StitchRegion& rg) { return rg.base == base; })) {
+            g_stitch_regions.push_back({base, row_bytes, uint64_t(base) + row_bytes * ((h + 31) & ~31u)});
+            printf("[GLSTITCH] region 0x%08X, %ux%u, %zu parts: resolves go straight into it from now on\n", base, w, h, subs.size());
+            fflush(stdout);
         }
     }
     out = &c.t;

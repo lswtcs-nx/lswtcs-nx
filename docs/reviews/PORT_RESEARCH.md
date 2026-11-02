@@ -16,16 +16,14 @@ Switchbrew lists it as configuration `0x92220008`, and `0x92220007` as the same 
 original handheld maximum. Older Switchbrew revisions were the source for these values, so
 check them against current firmware.
 
-TCS never calls `apmSetPerformanceConfiguration`, and its logs do not record the active
-configuration, so the clock under which all our numbers were taken is **unknown**. If it is 307.2 MHz,
-460.8 MHz would be 50 % more GPU clock for a GPU-limited game with no image change.
+TCS never calls `apmSetPerformanceConfiguration`. `[CLOCK]` has recorded the clocks since `0.0.13-log7`: CPU 1020, GPU 307.2 and
+memory 1331.2 MHz handheld in runs 7 and 8. So 460.8 MHz would be 50 % more GPU clock for a GPU-limited game with no image change.
 
 This is not an overclock in the sys-clk sense, but it is still a clock change, with battery and heat
 costs. The harness says no silent clock changes, and the owner tests at stock handheld to track
 performance. So it needs the owner's decision.
 
-Smallest safe step: log the configuration from `apmGetPerformanceConfiguration` (read-only), then, only
-if agreed, an off-by-default `env.txt` option for one A/B run.
+Next step, only if agreed: an off-by-default `env.txt` option for one A/B run.
 
 Do **not** use official CPU boost mode. Mass Effect measured 3.2–4.5 FPS because it throttles the GPU
 to 76.8 MHz. TCS does not call `appletSetCpuBoostMode`.
@@ -56,8 +54,8 @@ Note `gl_rt.inc`: `glCopyImageSubData` was measured slower than blits on Nouveau
 
 Each fetch re-derives offset, LOD bias and exponent from uniforms with `bitfieldExtract`, although these
 are constant per draw. NFSMW reports cleaner translated shaders without a figure. Mass Effect's
-texture-sign specialization gave no gain, so expect a modest result. Folding needs variant identity
-under R2, and variants cost compile time, as the early-Z hint showed.
+texture-sign specialization gave no gain, so expect a modest result. `0.0.16-log10` moves them to a uniform
+block computed on the CPU, which needs no shader variants (`lsw_glsl_fold.h`); unmeasured.
 
 ### 5. ZCULL: low priority
 

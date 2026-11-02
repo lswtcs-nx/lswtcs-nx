@@ -18,8 +18,9 @@ generated code as TCS. Its renderer differs (Vulkan on NVK). `PORT_RESEARCH.md` 
 - **Where it applies.** These paths help where the guest CPU sets the pace, as in run 7's heaviest level: GPU 54 ms and GPU idle
   47 ms of a 99 ms frame. Run 6's lighter levels were GPU-limited and would gain little.
 - **Order depends on `LSWTCS_HWPROF`.** Run 8 was the first profile (`RUN2_FINDINGS.md`). No lock dominates in the heavy level, so
-  the spin row below has no evidence behind it here. The first gains went to the port's own record path in `0.0.15-log9`. The guest
-  mixers `sub_827E51D0` and `sub_827F5990` are named candidates for native rewrites.
+  the spin row below has no evidence behind it here. Host code is 69 % of the turn in heavy scenes and guest code 31 %, with the top 100 guest
+  functions at 22 %, so the first gains went to the port's own record path in `0.0.15-log9` and `0.0.16-log10`. Compiler flags reach little of that time for now. The guest
+  mixers `sub_827E51D0` and `sub_827F5990`, about 3 % of the turn, are named candidates for native rewrites.
 
 ## Candidates
 

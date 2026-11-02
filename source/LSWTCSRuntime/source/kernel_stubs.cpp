@@ -3155,6 +3155,21 @@ static void pm4_dump_ib(uint32_t phys_addr, uint32_t dword_count, int depth) {
 // (Type-0 register writes + SET_CONSTANT). Never writes guest memory, so unlike
 // fence-servicing (pm4_process_ib) it cannot trip the game's GPU-completion paths.
 static uint32_t g_xe_regs[0x6000] = {0};
+#include "lsw_gpu_bridge.h"
+// Every write of the walk goes through these, so lsw_gpu_prepare can tell that nothing it reads has changed (lsw_gpu_bridge.h).
+// A value written again unchanged counts as no change: D3D sets much of its state again for each draw.
+extern "C" { LswRegGens g_lsw_reg_gens = {1, 1, 1, 1}; }
+static inline void reg_changed_range(uint32_t reg, uint32_t n) {
+    if (reg < 0x4000 || reg + n > 0x4A00) ++g_lsw_reg_gens.state;
+    if (reg < 0x4800 && reg + n > 0x4000) ++g_lsw_reg_gens.floats;
+    if (reg < 0x4900 && reg + n > 0x4800) ++g_lsw_reg_gens.fetch;
+    if (reg < 0x4A00 && reg + n > 0x4900) ++g_lsw_reg_gens.boolloop;
+}
+static inline void reg_set(uint32_t reg, uint32_t value) {
+    if (g_xe_regs[reg] == value) return;
+    g_xe_regs[reg] = value;
+    reg_changed_range(reg, 1);
+}
 static uint32_t* pm4_regs() { return g_xe_regs; }
 uint32_t g_draw_mode_hist[8] = {0};   // histogram of RB_MODECONTROL mode at each DRAW
 static uint32_t g_draw_total = 0;
@@ -4086,13 +4101,17 @@ static void gpu_record_resolve() {
 // A published frame that is replaced before it was replayed hands its uploads to the next frame
 // (gpu_shm_carry_uploads). DIAG LSWTCS_SHMALWAYS=1: upload every page of every range every draw.
 static constexpr uint32_t kShmPageShift = 12, kShmPageSize = 1u << kShmPageShift, kShmPages = 0x20000000u >> kShmPageShift;
-struct GpuShmPage { uint64_t hash; uint32_t epoch; uint32_t valid; uint32_t frame; };
+struct GpuShmPage { uint64_t hash; uint32_t epoch; uint32_t valid; uint32_t frame; uint32_t stable; };   // stable: frames in a row unchanged
 static std::vector<GpuShmPage> g_shm_pages;
 static uint32_t g_shm_epoch = 1;
 // Epoch sources (GPUPROF attribution of mid-frame page changes): 0 = walk start, 1 = after a guest
 // interrupt callback, 2 = after a tile-drain yield.
 static int g_shm_epoch_src = 0;
 extern "C" uint32_t lsw_gpu_shm_epoch() { return g_shm_epoch; }   // gl_bridge.cc: shader bytes cannot change within one
+static std::atomic<bool> g_shm_frame_hash{false};
+static uint32_t g_shm_hash_tick = 0;
+static constexpr uint32_t kShmSettledFrames = 8;
+extern "C" void lsw_shm_frame_hash_set(int on) { g_shm_frame_hash.store(on != 0, std::memory_order_relaxed); }
 static inline void gpu_shm_new_epoch(int src) { ++g_shm_epoch; ++g_gpuprof[GP_N_EPOCH]; if (src == 1) ++g_gpuprof[GP_N_EPOCH_ISR]; g_shm_epoch_src = src; }
 static void gpu_shm_invalidate(uint32_t phys) {   // a CP write landed here: rehash before trusting the page
     if (!g_shm_pages.empty() && phys < 0x20000000u) g_shm_pages[phys >> kShmPageShift].epoch = 0;
@@ -4111,7 +4130,8 @@ static bool shm_late_on() { static const bool on = [] { const char* e = getenv("
 // Appends upload runs for the guest physical range [a, a + sz) to f.ranges.
 static void gpu_shm_track(LswGpuFrame& f, uint32_t a, uint32_t sz) {
     static int always = -1; if (always < 0) { const char* e = getenv("LSWTCS_SHMALWAYS"); always = (e && e[0] == '1') ? 1 : 0; }
-    if (g_shm_pages.empty()) g_shm_pages.assign(kShmPages, GpuShmPage{0, 0, 0, 0});
+    if (g_shm_pages.empty()) g_shm_pages.assign(kShmPages, GpuShmPage{0, 0, 0, 0, 0});
+    const bool frame_hash = g_shm_frame_hash.load(std::memory_order_relaxed);
     const uint8_t* phys = g_base + 0x80000000ull;
     uint32_t p0 = a >> kShmPageShift, p1 = (a + sz - 1) >> kShmPageShift, run = UINT32_MAX;
     const bool late = shm_late_on();
@@ -4137,7 +4157,13 @@ static void gpu_shm_track(LswGpuFrame& f, uint32_t a, uint32_t sz) {
         if(lsw_deko_recording_resources())pg.epoch=0;
 #endif
         bool dirty = always != 0;
-        if (pg.epoch != g_shm_epoch) {
+        // A/B state H only (the rule above is the default): a page already hashed this frame and unchanged for a while is
+        // not hashed again in this frame's later epochs, except one in 16, which reports what the rule would have missed.
+        const bool settled = frame_hash && pg.frame == g_shm_frame && pg.stable >= kShmSettledFrames;
+        if (pg.epoch != g_shm_epoch && settled && (++g_shm_hash_tick & 15u) != 0) {
+            pg.epoch = g_shm_epoch;
+            ++g_gpuprof[GP_N_HASH_SKIP];
+        } else if (pg.epoch != g_shm_epoch) {
             // XXH3 (SIMD: AVX2 here, NEON on Switch); LSWTCS_XXH3=0 = the scalar lsw_hash_bytes (A/B).
             static int xxh = -1; if (xxh < 0) { const char* e = getenv("LSWTCS_XXH3"); xxh = (e && e[0] == '0') ? 0 : 1; }
             const uint8_t* src = phys + (size_t(p) << kShmPageShift);
@@ -4156,6 +4182,9 @@ static void gpu_shm_track(LswGpuFrame& f, uint32_t a, uint32_t sz) {
                                 p << kShmPageShift, g_shm_epoch_src, copies.size() - 1);
                 } } }
             const bool changed = !pg.valid || pg.hash != h;
+            if (changed && settled) ++g_gpuprof[GP_N_HASH_MISS];
+            if (changed) pg.stable = 0;
+            else if (pg.frame != g_shm_frame) ++pg.stable;
             pg.frame = g_shm_frame;
             if (changed) dirty = true;
             pg.hash = h; pg.valid = 1; pg.epoch = g_shm_epoch;
@@ -4416,7 +4445,7 @@ static bool gpu_record_draw_impl(uint32_t initiator, uint32_t dma_base, uint32_t
     uint32_t endian = (src == 0 || src == 1) ? (dma_size >> 30) : 0;
     if (src == 1) endian = idx32 ? 2u : 1u;
     bool ps_ok = g_ps_addr >= 0x80000000u && g_ps_addr < 0xA0000000u && g_ps_size && g_ps_size < 0x4000;
-    LswGpuDraw d;
+    static LswGpuDraw d;   // static: lsw_gpu_prepare leaves what did not change since the previous draw in place (one walker at a time)
     uint64_t gp0 = gp_now();
 #ifdef LSW_DEKO_BACKEND
     lsw_deko_capture_read(lsw_host(g_vs_addr),size_t(g_vs_size)*4);
@@ -4533,7 +4562,7 @@ static bool gpu_record_draw_impl(uint32_t initiator, uint32_t dma_base, uint32_t
     // LSWTCS_CBDEDUP (default on): a constant block identical to the previous draw's reuses its arena copy.
     static int cbdedup = -1; if (cbdedup < 0) { const char* e = getenv("LSWTCS_CBDEDUP"); cbdedup = (e && e[0] == '0') ? 0 : 1; }
     auto put_cb = [&](int kind, const void* src0, uint32_t size, uint32_t& off_out) {
-        off_out = f.put_block(kind, size ? size : 16, src0, size, nullptr, 0, cbdedup == 1); };
+        off_out = f.put_block(kind, size ? size : 16, src0, size, nullptr, 0, cbdedup == 1, d.cb_token[kind]); };
     r.cb_sys_size = d.system_constants_size; put_cb(0, d.system_constants, d.system_constants_size, r.cb_sys_off);
     // Float constants are bound as root CBVs, which have no size: a relative read c[a0+N] past the
     // block would return the next draw's arena bytes (NaN / huge -> exploded shadow-pass vertices).
@@ -4554,12 +4583,13 @@ static bool gpu_record_draw_impl(uint32_t initiator, uint32_t dma_base, uint32_t
         size_out = count * 16;
         if (!cbpad || count < 256) { put_cb(kind, src0, size_out, off_out); return; }
         const void* b = (tail && cbpad == 1) ? (const void*)tail : (tail && cbpad == 3) ? (const void*)src0 : nullptr;
-        off_out = f.put_block(kind, 512 * 16, src0, size_out, b, b ? 512 * 16 - size_out : 0, cbdedup == 1);
+        off_out = f.put_block(kind, 512 * 16, src0, size_out, b, b ? 512 * 16 - size_out : 0, cbdedup == 1, b ? 0u : d.cb_token[kind]);
     };
     put_float(1, d.vs_float, d.vs_float_count, &g_xe_regs[0x4400], r.cb_vsf_size, r.cb_vsf_off);   // SHADER_CONSTANT_256_X
     put_float(2, d.ps_float, d.ps_float_count, nullptr, r.cb_psf_size, r.cb_psf_off);
     put_cb(3, d.bool_loop, 40 * 4, r.cb_bool_off);
     put_cb(4, d.fetch, 192 * 4, r.cb_fetch_off);
+    if (d.fetch_derived) r.cb_derived_off = f.put_block(5, 32 * 16, d.fetch_derived, 32 * 16, nullptr, 0, cbdedup == 1, d.cb_token[5]);
     static uint64_t rp_hit[5], rp_vsf_bytes = 0, rp_vsf_big = 0;
     if (recprof) {
         const uint64_t t = gp_now(); rp_consts += t - rp0; rp0 = t;
@@ -4846,12 +4876,23 @@ template <typename RD> static bool pm4_bin_packet(uint32_t hdr, uint32_t op, uin
     return false;
 }
 // Byte-swapped block copy of a register write (run 8: the largest single loop of the walker).
-static inline void pm4_regs_copy(uint32_t* dst, const uint32_t* src, uint32_t n) {
+static inline bool pm4_regs_copy(uint32_t* dst, const uint32_t* src, uint32_t n) {
+    uint32_t any = 0;
 #ifdef __aarch64__
-    for (; n >= 4; n -= 4, dst += 4, src += 4)
-        vst1q_u8(reinterpret_cast<uint8_t*>(dst), vrev32q_u8(vld1q_u8(reinterpret_cast<const uint8_t*>(src))));
+    uint32x4_t differs = vdupq_n_u32(0);
+    for (; n >= 4; n -= 4, dst += 4, src += 4) {
+        const uint32x4_t v = vreinterpretq_u32_u8(vrev32q_u8(vld1q_u8(reinterpret_cast<const uint8_t*>(src))));
+        differs = vorrq_u32(differs, veorq_u32(v, vld1q_u32(dst)));
+        vst1q_u32(dst, v);
+    }
+    any = vmaxvq_u32(differs);
 #endif
-    for (uint32_t i = 0; i < n; i++) dst[i] = __builtin_bswap32(src[i]);
+    for (uint32_t i = 0; i < n; i++) {
+        const uint32_t v = __builtin_bswap32(src[i]);
+        any |= dst[i] ^ v;
+        dst[i] = v;
+    }
+    return any != 0;
 }
 static void pm4_extract_ib(uint32_t phys_addr, uint32_t dword_count, int depth) {
     // IB rejects are counted and the first few logged (IBREJ): a silently skipped IB loses every
@@ -4910,7 +4951,7 @@ static void pm4_extract_ib(uint32_t phys_addr, uint32_t dword_count, int depth) 
                 // Fast path (shader constants: thousands of registers a frame): byte-swapped block copy, then the
                 // per-register hooks only where they act (regset_note: 0x2000-0x23FF and 0x4800-0x4805;
                 // pm4_reg_side_effect: 0x578-0x57F). Same result as the loop below, ~1/3 of the walker's samples.
-                pm4_regs_copy(&g_xe_regs[reg], ib_host + pos + 1, n);
+                if (pm4_regs_copy(&g_xe_regs[reg], ib_host + pos + 1, n)) reg_changed_range(reg, n);
                 if (g_cw_on && reg < 0x4400 && reg + n > 0x4000)
                     for (uint32_t r = std::max(reg, 0x4000u); r < std::min(reg + n, 0x4400u); ++r)
                         cw_note(r, 0x100, phys_addr + (pos + 1 + (r - reg)) * 4, reg, n, pos);
@@ -4926,7 +4967,7 @@ static void pm4_extract_ib(uint32_t phys_addr, uint32_t dword_count, int depth) 
             } else
             for (uint32_t i = 0; i < cnt && pos + 1 + i < dword_count; i++) {
                 uint32_t r = one_reg ? reg : reg + i;
-                if (r < 0x6000) { uint32_t v = ib_rd(pos + 1 + i); g_xe_regs[r] = v; regset_note(r, v); pm4_reg_side_effect(r, v); cw_note(r, 0, 0, r, 1, pos); }
+                if (r < 0x6000) { uint32_t v = ib_rd(pos + 1 + i); reg_set(r, v); regset_note(r, v); pm4_reg_side_effect(r, v); cw_note(r, 0, 0, r, 1, pos); }
             }
             if (reg < 0x4800 && reg + cnt > 0x4000 && LSW_ENV_SET("LSWTCS_XVS")) {
                 static int m = 0;
@@ -5023,7 +5064,7 @@ static void pm4_extract_ib(uint32_t phys_addr, uint32_t dword_count, int depth) 
                               return v;
                           }
                           uint32_t r = addr & 0x7FFF;
-                          if (r == 0x0A31) g_xe_regs[r] &= 0x7FFFFFFFu;   // COHER_STATUS_HOST: MakeCoherent clears busy
+                          if (r == 0x0A31) reg_set(r, g_xe_regs[r] & 0x7FFFFFFFu);   // COHER_STATUS_HOST: MakeCoherent clears busy
                           return r < 0x6000 ? g_xe_regs[r] : 0;
                       };
                       auto match = [&](uint32_t v) -> bool {
@@ -5065,7 +5106,7 @@ static void pm4_extract_ib(uint32_t phys_addr, uint32_t dword_count, int depth) 
                 uint32_t base  = (ctype==0)?0x4000 : (ctype==1)?0x4800 :
                                  (ctype==2)?0x4900 : (ctype==3)?0x4908 : (ctype==4)?0x2000 : 0;
                 if (base) for (uint32_t i = 0; i < body - 1 && pos + 2 + i < dword_count; i++)
-                    if (base + coff + i < 0x6000) { uint32_t v = ib_rd(pos + 2 + i); g_xe_regs[base + coff + i] = v; regset_note(base + coff + i, v);
+                    if (base + coff + i < 0x6000) { uint32_t v = ib_rd(pos + 2 + i); reg_set(base + coff + i, v); regset_note(base + coff + i, v);
                         cw_note(base + coff + i, 0x2D, 0, coff, body - 1, pos); }
             } else if (op == 0x2F && body >= 3) {          // LOAD_ALU_CONSTANT (from memory)
                 // Matches Xenia ExecutePacketType3_LOAD_ALU_CONSTANT. This is how the game
@@ -5081,12 +5122,17 @@ static void pm4_extract_ib(uint32_t phys_addr, uint32_t dword_count, int depth) 
                     uint32_t rbase = (ctype == 0) ? 0x4000u : (ctype == 1) ? 0x4800u : (ctype == 2) ? 0x4900u :
                                      (ctype == 3) ? 0x4908u : (ctype == 4) ? 0x2000u : 0u;
                     uint32_t src = addr + 0x80000000u;
-                    if (rbase && src >= 0x80000000u && src < 0xA0000000u) {
+                    const uint32_t first = rbase + index;
+                    if (rbase >= 0x4000 && first + size <= 0x6000 && src >= 0x80000000u && uint64_t(src) + uint64_t(size) * 4 <= 0xA0000000ull &&
+                        !g_cw_on && g_imlog_left_fwd() <= 0) {
+                        // Constants, the usual case: as the type 0 path above.
+                        if (size && pm4_regs_copy(&g_xe_regs[first], reinterpret_cast<const uint32_t*>(lsw_host(src)), size)) reg_changed_range(first, size);
+                    } else if (rbase && src >= 0x80000000u && src < 0xA0000000u) {
                         for (uint32_t i = 0; i < size; ++i) {
                             uint32_t r = rbase + index + i;
                             if (r >= 0x6000) break;
                             uint32_t v = ib_read(src, i);
-                            g_xe_regs[r] = v; regset_note(r, v);
+                            reg_set(r, v); regset_note(r, v);
                             cw_note(r, 0x2F, src + i * 4, index, size, pos);
                         }
                     }
@@ -5106,7 +5152,7 @@ static void pm4_extract_ib(uint32_t phys_addr, uint32_t dword_count, int depth) 
                 uint32_t index = ib_rd(pos + 1) & 0xFFFFu;   // absolute register index
                 for (uint32_t i = 0; i + 1 < body && pos + 2 + i < dword_count; ++i) {
                     uint32_t r = index + i; if (r >= 0x6000) break;
-                    uint32_t v = ib_rd(pos + 2 + i); g_xe_regs[r] = v; regset_note(r, v); cw_note(r, op, 0, index, body - 1, pos);
+                    uint32_t v = ib_rd(pos + 2 + i); reg_set(r, v); regset_note(r, v); cw_note(r, op, 0, index, body - 1, pos);
                 }
             } else if (op == 0x27 && body >= 2) {          // IM_LOAD (microcode by addr)
                 g_imload27++;
@@ -5162,7 +5208,7 @@ static void pm4_extract_ib(uint32_t phys_addr, uint32_t dword_count, int depth) 
                 uint32_t v = g_xe_regs[reg];
                 v &= (rmw_info & 0x80000000u) ? g_xe_regs[and_mask & 0x1FFF] : and_mask;
                 v |= (rmw_info & 0x40000000u) ? g_xe_regs[or_mask & 0x1FFF]  : or_mask;
-                g_xe_regs[reg] = v;
+                reg_set(reg, v);
                 regset_note(reg, v);
             } else if (op == 0x22 || op == 0x36) {           // DRAW_INDX / DRAW_INDX_2
                 g_draw_total++;
@@ -5362,8 +5408,8 @@ static void pm4_extract_ib(uint32_t phys_addr, uint32_t dword_count, int depth) 
             if (t1 && pos + 2 < dword_count) {
                 uint32_t r1 = hdr & 0x7FF, r2 = (hdr >> 11) & 0x7FF;
                 uint32_t d1 = ib_rd(pos + 1), d2 = ib_rd(pos + 2);
-                g_xe_regs[r1] = d1; regset_note(r1, d1); pm4_reg_side_effect(r1, d1);
-                g_xe_regs[r2] = d2; regset_note(r2, d2); pm4_reg_side_effect(r2, d2);
+                reg_set(r1, d1); regset_note(r1, d1); pm4_reg_side_effect(r1, d1);
+                reg_set(r2, d2); regset_note(r2, d2); pm4_reg_side_effect(r2, d2);
                 pos += 3; continue;
             }
         }
@@ -5750,11 +5796,11 @@ static void pm4_process_ring_flat_impl(bool allow_drain) {
             if (type == 0) {
                 uint32_t cnt = ((hdr >> 16) & 0x3FFF) + 1, reg = hdr & 0x7FFF; bool one = (hdr >> 15) & 1u;
                 for (uint32_t i = 0; i < cnt; ++i) { uint32_t r = one ? reg : reg + i, v = rb_read(pos + 1 + i);
-                    if (r < 0x6000) { g_xe_regs[r] = v; pm4_reg_side_effect(r, v); } }
+                    if (r < 0x6000) { reg_set(r, v); pm4_reg_side_effect(r, v); } }
                 adv = 1 + cnt;
             } else if (type == 1) {
                 uint32_t r1 = hdr & 0x7FF, r2 = (hdr >> 11) & 0x7FF, d1 = rb_read(pos + 1), d2 = rb_read(pos + 2);
-                g_xe_regs[r1] = d1; pm4_reg_side_effect(r1, d1); g_xe_regs[r2] = d2; pm4_reg_side_effect(r2, d2);
+                reg_set(r1, d1); pm4_reg_side_effect(r1, d1); reg_set(r2, d2); pm4_reg_side_effect(r2, d2);
                 adv = 3;
             } else if (type == 3) {
                 uint32_t body = ((hdr >> 16) & 0x3FFF) + 1, op = (hdr >> 8) & 0x7F;
@@ -6352,9 +6398,9 @@ PPC_FUNC(__imp__VdSwap) {
                     ms(gp[GP_RTWAIT]), gp[GP_N_PAGEHASH] / 60.0, gp[GP_N_REHASH] / 60.0, gp[GP_N_MIDCHANGE] / 60.0, gp[GP_N_EPOCH] / 60.0,
                     gp[GP_N_EPOCH_ISR] / 60.0, (unsigned long long)gp[GP_N_MID_WALK], (unsigned long long)gp[GP_N_MID_ISR], (unsigned long long)gp[GP_N_MID_DRAIN]);
             { static const bool to_log = LSW_ENV_SET("LSWTCS_GPUPROFLOG");   // what the page hash costs, for tools/analyze_run.py
-              if (to_log) printf("[GPUPAGES] per frame: pages hashed %.0f, re-hashed in the same frame %.0f, changed mid-frame %.2f, epochs %.1f (isr %.1f), walk %.2f ms, record %.2f ms\n",
+              if (to_log) printf("[GPUPAGES] per frame: pages hashed %.0f, re-hashed in the same frame %.0f, changed mid-frame %.2f, epochs %.1f (isr %.1f), walk %.2f ms, record %.2f ms, skipped %.0f, sampled misses %llu\n",
                                  gp[GP_N_PAGEHASH] / 60.0, gp[GP_N_REHASH] / 60.0, gp[GP_N_MIDCHANGE] / 60.0, gp[GP_N_EPOCH] / 60.0, gp[GP_N_EPOCH_ISR] / 60.0,
-                                 ms(gp[GP_WALK]), ms(gp[GP_RECORD])); }
+                                 ms(gp[GP_WALK]), ms(gp[GP_RECORD]), gp[GP_N_HASH_SKIP] / 60.0, (unsigned long long)gp[GP_N_HASH_MISS]); }
             dbg_ram("[GPUPROF] guest ISR inside walk=%.2fms | replay: arena->upload=%.2f diag=%.2f prepass=%.2f pso=%.2f bind=%.2f (texsrc=%.2f srv=%.2f smp=%.2f) rt=%.2f draw=%.2f\n",
                     ms(gp[GP_IRQ]), ms(gp[GP_RP_ARENA]), ms(gp[GP_RP_DIAG]), ms(gp[GP_RP_PREPASS]), ms(gp[GP_RP_PSO]), ms(gp[GP_RP_BIND]),
                     ms(gp[GP_RP_TEXSRC]), ms(gp[GP_RP_SRV]), ms(gp[GP_RP_SMP]), ms(gp[GP_RP_RT]), ms(gp[GP_RP_DRAW]));

@@ -1089,3 +1089,24 @@ The game crashed while entering `Gungan_A` (state `MAPXSHN`, so L and R off at t
   falls back to an ordinary yield if the holder cannot run.
 - `[AUDIOOFF]` lines now also count "turn passed to the holder" and "taken after 200 ms".
 - States `MAPXSHN`, `MAPXSHNL` only, so L gets twice the play time.
+
+## Run 30: `0.0.34-log28`, 2 November 2026
+
+`Gungan_A` to `C` and back to the hub; no crash, no hang. Archived in `private/runs/run30-log28`.
+
+- **Passing the turn to the holder did not help.** The turn was passed 1.57 M times, yet 846 waits still ran into the 200 ms limit,
+  all on the XAudio voice lock `83212774`, with holders 0, 1 and 4 in turn. L ran 8.4 FPS at 4000+ draws (p95 810 ms), against 14.5
+  for today's placement; 10.2 against 27.1 at 300-1300 draws. Real spinlocks as built are not usable.
+- **The tagged holder did not release the lock even with the turn**, so one of these holds (not checked):
+  1. Some path releases that lock without the stubs: the game's own code writes the word, or another import clears it. The word
+     then keeps a stale tag, and the next acquirer waits 200 ms for a thread that no longer holds it. The frequency fits: 846 of
+     335,753 acquisitions.
+  2. The holder blocks (a guest wait) or spin-waits while holding the lock, for something the waiter has to do. That worked when the
+     locks were turn-only, because the waiter was never stopped.
+- **Next evidence** (none built): per lock, record the guest lr of each acquire and release through the stubs, and on a forced take
+  print the holder's scheduler state (runnable, blocked in a guest wait) and its last acquire site. A lock released outside the
+  stubs shows as an acquire with no release. Searching the recompiled code for stores to `0x83212774` (`lis` 0x8321 + 0x2774) is the
+  static route.
+- **Profile:** `MAPXSHN`, `MAPXSHNRG` (L, U out). Same build.
+
+Route 1 now depends on making guest spinlocks real without this stall (`CPU_ROADMAP.md`). Route 2 (faster generated code) does not.

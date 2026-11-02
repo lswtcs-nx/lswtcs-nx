@@ -83,6 +83,10 @@ locks and kernel objects. The second needs every kernel stub it calls made safe 
 targets found at run time; the static audit cannot follow them. Real spinlocks (L) must work first: run 27 froze in L, and log27 is
 the attempt to fix it.
 
+**Run 30 (log28):** real spinlocks still stall on the XAudio voice lock (846 waits past 200 ms, 8.4 FPS), even with the turn passed
+to the holder. Either the lock is also released outside the stubs, or a holder waits for something while holding it. Find which
+first (`RUN2_FINDINGS.md`, run 30, "Next evidence"); until then L is off and route 1 is blocked at this step.
+
 **Started in log25 (state U, `audio_offturn.cpp`):** one pure guest function of the XAudio thread, `sub_827F5990`, runs off the turn
 on core 2 while other guest threads hold it. The pattern applies to any guest function that touches only its own buffers: check the
 recompiled body for imports, spinlocks, atomics and calls, override the weak symbol, and run it inside `lswtcs_gil_blocking_urgent`

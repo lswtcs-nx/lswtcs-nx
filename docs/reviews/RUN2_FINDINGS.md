@@ -1296,3 +1296,11 @@ Audio 98-100 % in every state. Each letter is mixed with some pair (G with U+W+R
 ## Probes without a console
 
 - **View table shortcut and `-fPIE`** (`addr_probe.sh`): `ppc_recomp.359.cpp` loses 3.0 % of its instructions and 4.6 % of memory instructions. 23 % of guest accesses are stack-relative. On 62 % of the turn that is a couple of percent at best, below what a run can measure, and it rests on stacks staying below `0xA0000000`. Not taken.
+
+## Log 35: `0.0.41-log35`, logs for scoping GPU work and a possible Deko backend
+
+Same behaviour as log34 outside sampled frames: profile `MAPXSHNLU`, no change to the picture, clocks or quality. Not yet run on hardware.
+
+- **`[GLPASS]`**, in frames already sampled by `LSWTCS_GLGPUPROF` and in captures: GPU ms, draws, vertices and pixels per render pass, resolves with their cost and destination. First 40 frames of 1000+ draws, 8 lighter ones.
+- **`[GLINV]`** (`LSWTCS_GLINV=1`), running totals from every 16th replay, printed every 1600: targets and formats, EDRAM reuse (old contents loaded, returns to a target, one base with two formats, colour and depth at one base), resolves by format and clear, textures by format and source, primitives, state counts, largest frame and memory.
+- Not included: a replayable frame dump on Switch. The capture writer is desktop only (`lsw_frame_capture_writer.inc`), so a same-frame Mesa and Deko comparison still needs that port.

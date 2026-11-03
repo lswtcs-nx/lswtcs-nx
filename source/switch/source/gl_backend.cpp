@@ -22,6 +22,7 @@
 #include <cstdio>
 #include <cstring>
 #include <functional>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -795,8 +796,139 @@ extern uint64_t g_replays;   // defined with the texture cache below
 // own since 2026-10-11 s7 (before, they were charged to the next draw: 15 rect draws "cost" 3.9 ms with pixels off).
 // GK_OTHER: GPU time just before such a blit (state setup, nothing drawn).
 enum { GK_START, GK_PLAIN, GK_POINTS, GK_RECTS, GK_QUADS, GK_RESOLVE, GK_PRESENT, GK_TEXSRC, GK_OTHER, GK_N };
-struct GpuStamp { uint8_t kind; GLuint prog; uint64_t ps_key; int32_t pixels; };
+struct GpuStamp { uint8_t kind; GLuint prog; uint64_t ps_key; int32_t pixels; uint32_t pass; };
 bool g_gpuprof_frame = false;
+// [GLPASS], in profiled frames: GPU cost per render pass, a pass being the draws to one set of targets up to a resolve or a change of targets. It lists where the GPU's time
+// goes for work on Mesa, and is the map a Deko render pass plan would follow (resolves, targets and their order). Only frames with stamps, so it costs nothing else.
+struct GpuPass { uint32_t pitch, msaa, c0, c0f, c1, c1f, nrt, d, df, draws[4], resolves, dest_w, dest_h, dest_fmt; uint64_t verts; bool open; };
+std::vector<GpuPass> g_passes;
+void pass_note_draw(const LswGpuDrawRec& r, uint32_t nrt) {
+    if (!g_gpuprof_frame) return;
+    const uint32_t pitch = r.surf_info & 0x3FFF, msaa = (r.surf_info >> 16) & 3, c0 = nrt ? r.color_info & 0xFFF : 0, c0f = nrt ? (r.color_info >> 16) & 0xF : 0,
+                   c1 = nrt > 1 ? r.color_info_mrt[1] & 0xFFF : 0, c1f = nrt > 1 ? (r.color_info_mrt[1] >> 16) & 0xF : 0, d = r.depth_info & 0xFFF, df = (r.depth_info >> 16) & 1;
+    bool same = !g_passes.empty();
+    if (same) {
+        const GpuPass& p = g_passes.back();
+        same = p.open && p.pitch == pitch && p.msaa == msaa && p.c0 == c0 && p.c0f == c0f && p.c1 == c1 && p.c1f == c1f && p.nrt == nrt && p.d == d && p.df == df;
+    }
+    if (!same) { GpuPass p{}; p.pitch = pitch; p.msaa = msaa; p.c0 = c0; p.c0f = c0f; p.c1 = c1; p.c1f = c1f; p.nrt = nrt; p.d = d; p.df = df; p.open = true; g_passes.push_back(p); }
+    ++g_passes.back().draws[r.gs_type & 3];
+    g_passes.back().verts += r.ib_count ? r.ib_count : r.vertex_count;
+}
+void pass_note_resolve(const LswGpuDrawRec& r) {
+    if (!g_gpuprof_frame) return;
+    if (g_passes.empty()) { GpuPass p{}; g_passes.push_back(p); }
+    GpuPass& p = g_passes.back();
+    ++p.resolves; p.dest_w = r.rs_dest_pitch; p.dest_h = r.rs_dest_height; p.dest_fmt = r.rs_dest_fmt; p.open = false;
+}
+// [GLINV] (LSWTCS_GLINV=1): what the game asks of a renderer, over every 16th replay: targets, formats, primitives, textures and how EDRAM is used. Printed every 1600 replays,
+// as running totals. For scoping a Deko backend without another run (CPU_ROADMAP.md): each line answers something that backend has to implement or can leave out.
+struct GlInventory {
+    std::map<uint64_t, uint64_t> rts, topo, tex, res;
+    std::unordered_set<uint64_t> progs, vs, ps, gs, blends, depths;
+    uint64_t draws = 0, frames = 0, stencil = 0, pswz = 0, polyofs = 0, ib32 = 0, nonidx = 0, vstex = 0, mrt = 0, uncleared = 0, reentry = 0, alias = 0, col_dep_same = 0, dead = 0;
+    uint64_t arena_max = 0, ranges_max = 0, recs_max = 0;
+    uint32_t units_max = 0, tex_w_max = 0, tex_h_max = 0;
+    // This frame only.
+    std::unordered_map<uint32_t, uint32_t> base_fmt;    // EDRAM base -> pitch and format last seen on it
+    std::unordered_set<uint32_t> cleared, seen;
+    uint32_t last_rt = ~0u;
+} g_inv;
+bool g_inv_frame = false;
+void inv_frame_begin(const LswGpuFrame& f) {
+    static const bool on = env_on("LSWTCS_GLINV", false);
+    g_inv_frame = on && (g_replays & 15) == 0;
+    if (!g_inv_frame) return;
+    ++g_inv.frames;
+    g_inv.arena_max = std::max<uint64_t>(g_inv.arena_max, f.arena.size());
+    uint64_t rb = 0;
+    for (const LswGpuRange& rg : f.ranges) rb += rg.size;
+    g_inv.ranges_max = std::max(g_inv.ranges_max, rb);
+    g_inv.recs_max = std::max<uint64_t>(g_inv.recs_max, f.draws.size());
+    g_inv.base_fmt.clear(); g_inv.cleared.clear(); g_inv.seen.clear(); g_inv.last_rt = ~0u;
+}
+void inv_note_rt(bool depth, uint32_t base, uint32_t pitch, uint32_t msaa, uint32_t fmt) {
+    ++g_inv.rts[(uint64_t(depth) << 63) | (uint64_t(base) << 40) | (uint64_t(pitch) << 24) | (uint64_t(msaa) << 20) | fmt];
+    const uint32_t id = base | (uint32_t(depth) << 31), val = (pitch << 8) | fmt;
+    auto it = g_inv.base_fmt.find(id);
+    if (it != g_inv.base_fmt.end() && it->second != val) ++g_inv.alias;
+    g_inv.base_fmt[id] = val;
+}
+void inv_note_draw(const LswGpuDrawRec& r, uint32_t nrt, size_t units) {
+    if (!g_inv_frame) return;
+    GlInventory& v = g_inv;
+    ++v.draws;
+    const uint32_t pitch = r.surf_info & 0x3FFF, msaa = (r.surf_info >> 16) & 3;
+    for (uint32_t i = 0; i < nrt; ++i) { const uint32_t ci = i ? r.color_info_mrt[i] : r.color_info; inv_note_rt(false, ci & 0xFFF, pitch, msaa, (ci >> 16) & 0xF); }
+    inv_note_rt(true, r.depth_info & 0xFFF, pitch, msaa, (r.depth_info >> 16) & 1);
+    if (nrt && (r.color_info & 0xFFF) == (r.depth_info & 0xFFF)) ++v.col_dep_same;
+    if (nrt > 1) ++v.mrt;
+    const uint32_t rt = (r.color_info & 0xFFF) | ((r.depth_info & 0xFFF) << 12);
+    if (rt != v.last_rt) {   // the targets changed: new this frame without a clear means the old contents load; seen before means a return to them
+        if (v.seen.count(rt)) ++v.reentry;
+        else if (!v.cleared.count(r.color_info & 0xFFF) && !v.cleared.count((r.depth_info & 0xFFF) | 0x80000000u)) ++v.uncleared;
+        v.seen.insert(rt);
+        v.last_rt = rt;
+    }
+    ++v.topo[(uint64_t(r.topology) << 8) | (r.gs_type & 3)];
+    v.progs.insert(r.vs_key ^ (r.ps_key * 31)); v.vs.insert(r.vs_key); if (r.ps_key) v.ps.insert(r.ps_key); if (r.gs_dxbc) v.gs.insert(uint64_t(uintptr_t(r.gs_dxbc)));
+    v.blends.insert(r.blendcontrol); v.depths.insert(r.depthcontrol);
+    if (r.depthcontrol & 1) ++v.stencil;
+    if (r.ps_writes_depth) ++v.pswz;
+    if (r.poly_scale != 0 || r.poly_offset != 0) ++v.polyofs;
+    if (r.ib_count && r.ib_32bit) ++v.ib32;
+    if (!r.ib_count) ++v.nonidx;
+    if (r.vs_tex_count) ++v.vstex;
+    v.units_max = std::max<uint32_t>(v.units_max, uint32_t(units));
+}
+void inv_note_texture(uint32_t fmt, uint32_t dim, uint32_t w, uint32_t h, uint32_t source) {   // source: 0 memory, 1 a resolve, 2 not bound as asked
+    if (!g_inv_frame) return;
+    ++g_inv.tex[(uint64_t(dim) << 16) | (uint64_t(fmt) << 8) | source];
+    g_inv.tex_w_max = std::max(g_inv.tex_w_max, w); g_inv.tex_h_max = std::max(g_inv.tex_h_max, h);
+}
+void inv_note_resolve(const LswGpuDrawRec& r, bool copied) {
+    if (!g_inv_frame) return;
+    const bool depth = r.rs_src == 4;
+    const uint32_t fmt = depth ? (r.depth_info >> 16) & 1 : (r.color_info >> 16) & 0xF;
+    ++g_inv.res[(uint64_t(depth) << 40) | (uint64_t(fmt) << 32) | (uint64_t(r.rs_dest_fmt) << 16) | (uint64_t((r.surf_info >> 16) & 3) << 8) | (uint64_t(r.rs_clear_color != 0) << 1) | uint64_t(r.rs_clear_depth != 0)];
+    if (!copied) ++g_inv.dead;
+    if (r.rs_clear_color) g_inv.cleared.insert(r.color_info & 0xFFF);
+    if (r.rs_clear_depth) g_inv.cleared.insert((r.depth_info & 0xFFF) | 0x80000000u);
+    g_inv.last_rt = ~0u;
+}
+void inv_report() {
+    if (!g_inv_frame || (g_replays % 1600) != 0 || !g_inv.draws) return;
+    const GlInventory& v = g_inv;
+    auto top = [](const std::map<uint64_t, uint64_t>& m, size_t n) {
+        std::vector<std::pair<uint64_t, uint64_t>> s(m.begin(), m.end());
+        std::sort(s.begin(), s.end(), [](const auto& a, const auto& b) { return a.second > b.second; });
+        if (s.size() > n) s.resize(n);
+        return s;
+    };
+    printf("[GLINV] replay %llu: %llu frames, %llu draws | programs %zu, VS %zu, PS %zu, GS %zu | blend states %zu, depth states %zu | stencil %llu, PS writes depth %llu, polygon offset %llu, MRT %llu, "
+           "VS textures %llu, 32-bit indices %llu, no indices %llu | units per draw up to %u, texture up to %ux%u\n", (unsigned long long)g_replays, (unsigned long long)v.frames, (unsigned long long)v.draws,
+           v.progs.size(), v.vs.size(), v.ps.size(), v.gs.size(), v.blends.size(), v.depths.size(), (unsigned long long)v.stencil, (unsigned long long)v.pswz, (unsigned long long)v.polyofs, (unsigned long long)v.mrt,
+           (unsigned long long)v.vstex, (unsigned long long)v.ib32, (unsigned long long)v.nonidx, v.units_max, v.tex_w_max, v.tex_h_max);
+    u64 used = 0, total = 0;
+    svcGetInfo(&used, InfoType_UsedMemorySize, CUR_PROCESS_HANDLE, 0);
+    svcGetInfo(&total, InfoType_TotalMemorySize, CUR_PROCESS_HANDLE, 0);
+    printf("[GLINV] EDRAM use: target changes with old contents loaded %llu, returns to a target %llu, same base with another format or pitch %llu, colour and depth at one base %llu | dead resolves %llu | largest frame: "
+           "%llu records, arena %llu KB, uploads %llu KB | memory %llu of %llu MB\n", (unsigned long long)v.uncleared, (unsigned long long)v.reentry, (unsigned long long)v.alias, (unsigned long long)v.col_dep_same,
+           (unsigned long long)v.dead, (unsigned long long)v.recs_max, (unsigned long long)(v.arena_max >> 10), (unsigned long long)(v.ranges_max >> 10), (unsigned long long)(used >> 20), (unsigned long long)(total >> 20));
+    char b[1400]; int k = snprintf(b, sizeof b, "[GLINV] targets (d/c base pitch msaa fmt: draws):");
+    for (const auto& e : top(v.rts, 24)) k += snprintf(b + k, sizeof b - k, " %c%u,%u,%u,%u:%llu", (e.first >> 63) ? 'd' : 'c', unsigned((e.first >> 40) & 0xFFF), unsigned((e.first >> 24) & 0xFFFF), unsigned((e.first >> 20) & 15), unsigned(e.first & 0xFFFFF), (unsigned long long)e.second);
+    puts(b);
+    k = snprintf(b, sizeof b, "[GLINV] topology,gs:");
+    for (const auto& e : top(v.topo, 16)) k += snprintf(b + k, sizeof b - k, " %u,%u:%llu", unsigned(e.first >> 8), unsigned(e.first & 255), (unsigned long long)e.second);
+    puts(b);
+    k = snprintf(b, sizeof b, "[GLINV] textures (dim,fmt,resolved:binds):");
+    for (const auto& e : top(v.tex, 30)) k += snprintf(b + k, sizeof b - k, " %u,%u,%u:%llu", unsigned(e.first >> 16), unsigned((e.first >> 8) & 255), unsigned(e.first & 255), (unsigned long long)e.second);
+    puts(b);
+    k = snprintf(b, sizeof b, "[GLINV] resolves (depth,src fmt,dest fmt,msaa,clears:n):");
+    for (const auto& e : top(v.res, 24)) k += snprintf(b + k, sizeof b - k, " %u,%u,%u,%u,%u:%llu", unsigned(e.first >> 40), unsigned((e.first >> 32) & 255), unsigned((e.first >> 16) & 0xFFFF), unsigned((e.first >> 8) & 255), unsigned(e.first & 255), (unsigned long long)e.second);
+    puts(b);
+    fflush(stdout);
+}
 // Timestamp queries on switch-mesa return the GPU timer in ticks that run at 384/625 of real time (the Tegra X1 GPU
 // timer; yuzu/Eden convert with the same 384/625 ratio), not nanoseconds. Console 2026-10-11: the paused game swapped
 // every 16.67 ms (vsync) and the raw stamps read 10.2 ms apart; in a level 34-35 ms frames read 21.0 ms. All [GLGPU]
@@ -848,7 +980,7 @@ void gpu_stamp(uint8_t kind, GLuint prog = 0, uint64_t ps_key = 0, int32_t pixel
         glGenQueries(GLsizei(add), g_gpq_pool.data() + g_gpq_pool.size() - add);
     }
     glQueryCounter(g_gpq_pool[i], GL_TIMESTAMP);
-    g_gpq_labels.push_back({kind, prog, ps_key, pixels});
+    g_gpq_labels.push_back({kind, prog, ps_key, pixels, g_passes.empty() ? 0u : uint32_t(g_passes.size() - 1)});
 }
 void gpu_prof_finish() {
     if (!g_gpuprof_frame) return;
@@ -862,6 +994,9 @@ void gpu_prof_finish() {
     struct ProgCost { uint64_t ns = 0; uint32_t draws = 0; uint64_t ps_key = 0; uint64_t pixels = 0; };
     std::unordered_map<GLuint, ProgCost> by_prog;
     uint64_t pixels_total = 0;
+    struct PassCost { uint64_t draw_ns = 0, res_ns = 0, pixels = 0; };
+    std::vector<PassCost> pass_cost(g_passes.size() + 1);
+    uint64_t pass_draws = 0;
     for (size_t i = 1; i < n; ++i) {
         const uint64_t d = t[i] > t[i - 1] ? t[i] - t[i - 1] : 0;
         const GpuStamp& s = g_gpq_labels[i];
@@ -869,7 +1004,21 @@ void gpu_prof_finish() {
         ++cnt[s.kind];
         GLuint64 px = 0;
         if (s.pixels >= 0) { glGetQueryObjectui64v(g_gpx_pool[size_t(s.pixels)], GL_QUERY_RESULT, &px); pixels_total += px; }
-        if (s.prog) { ProgCost& c = by_prog[s.prog]; c.ns += d; ++c.draws; c.ps_key = s.ps_key; c.pixels += px; }
+        if (s.prog) { ProgCost& c = by_prog[s.prog]; c.ns += d; ++c.draws; c.ps_key = s.ps_key; c.pixels += px; ++pass_draws; }
+        if (s.pass < pass_cost.size()) { if (s.kind == GK_RESOLVE) pass_cost[s.pass].res_ns += d; else if (s.prog) pass_cost[s.pass].draw_ns += d; pass_cost[s.pass].pixels += px; }
+    }
+    {   // The heavy frames first: a light frame's passes say little and fill the log.
+        static int heavy_prints = 0, light_prints = 0;
+        const bool heavy = pass_draws >= 1000;
+        if (heavy ? heavy_prints++ < 40 : light_prints++ < 8) {
+            for (size_t i = 0; i < g_passes.size(); ++i) {
+                const GpuPass& p = g_passes[i];
+                printf("[GLPASS] replay %llu pass %zu: pitch %u msaa %u c0 %u/%u c1 %u/%u nrt %u d %u/%u | draws %u/%u/%u/%u verts %llu | draw %.2f ms %.2f Mpx | resolves %u %.2f ms to %ux%u fmt %u\n",
+                       (unsigned long long)g_replays, i, p.pitch, p.msaa, p.c0, p.c0f, p.c1, p.c1f, p.nrt, p.d, p.df, p.draws[0], p.draws[1], p.draws[2], p.draws[3], (unsigned long long)p.verts,
+                       pass_cost[i].draw_ns / 1e6, pass_cost[i].pixels / 1e6, p.resolves, pass_cost[i].res_ns / 1e6, p.dest_w, p.dest_h, p.dest_fmt);
+            }
+        }
+        g_passes.clear();
     }
     g_gpx_used = 0;
     const uint64_t total = n > 1 && t[n - 1] > t[0] ? t[n - 1] - t[0] : 0;
@@ -1199,6 +1348,7 @@ void collect_units(const LswGlShader* s, const uint32_t* fetch_all, bool gpurt, 
             if (t.target == want) tex = t.tex;
             else how = !info ? " NOT-TEXTURE" : t.tex ? " DIM-MISMATCH" : " DUMMY";
         }
+        inv_note_texture(fmt, u.dimension, w, h, how[1] == 'R' ? 1 : how[0] ? 2 : 0);
         if (!tex) tex = g_dummy[want == GL_TEXTURE_CUBE_MAP ? 1 : want == GL_TEXTURE_3D ? 2 : 0];
         if (g_capture_frame) {
             char b[160];
@@ -2347,6 +2497,8 @@ PresentSrc replay() {
         // 1300 draws since log34: with one tile (LSWTCS_ONETILE) the heaviest frames have about 2,000, and run 33 sampled only 11 frames.
         static uint64_t last_heavy = 0;
         if (every && !g_gpuprof_frame && f.draws.size() >= 1300 && g_replays - last_heavy >= every / 5) g_gpuprof_frame = true;
+        if (every && g_capture_frame) g_gpuprof_frame = true;   // a captured frame also has its cost per pass, next to its picture and draw list
+        inv_frame_begin(f);
         if (g_gpuprof_frame) last_heavy = g_replays;
         static const int split = [] { const char* e = getenv("LSWTCS_GLGPUSPLIT"); return e ? atoi(e) : 0; }();
         static uint64_t samples = 0;
@@ -2538,6 +2690,8 @@ PresentSrc replay() {
                     do_resolve(r, copy);
                 }
                 ++resolves;
+                pass_note_resolve(r);
+                inv_note_resolve(r, copy);
                 gpu_stamp(GK_RESOLVE);
             }
             continue;
@@ -2595,6 +2749,8 @@ PresentSrc replay() {
             g_sc.bind_fbo(g_scene_fbo);
         }
         rp_close(RP_RT, t_rt, t_rt_in);
+        pass_note_draw(r, dt.nrt);
+        inv_note_draw(r, dt.nrt, units.size());
         // 4. Program, constants, textures, state, draw.
         const uint64_t t_bind = gp_now(), t_bind_in = g_rp_scoped;
         g_sc.use_program(prog);
@@ -2712,6 +2868,7 @@ PresentSrc replay() {
         ++drawn;
     }
     rp_close(RP_LOOP, t_loop, t_loop_in);
+    inv_report();
     RpScope rp_tail(RP_TAIL);
     // Present source: the resolve target at the frontbuffer address, else colour RT 0 of pitch 1280.
     const char* shown = "scene";

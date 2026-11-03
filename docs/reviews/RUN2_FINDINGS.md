@@ -1564,3 +1564,23 @@ Handheld again. No fault, no dropped interrupt, and audio was fine.
 - **Program costs.** From the per-draw stamps of heavy frames, two programs take 38 % of the GPU time: `CA8722BD02CAB82B` (6 textures, 72 draws) and `6F9BED73E5CE1620` (alpha tested, 207 draws). Neither shows waste. They have no dynamic register indexing and no loops, and texture sampling is cheap (+tex off: 0.6 ms).
 - **Scale.** At 307 MHz, the Tegra X1 does about 157 GFLOPS against about 240 for the 360's GPU (peak figures, rough). The 360 holds about 30 FPS here. Handheld holds 21 at heavy load, close to that ratio. So shader code has little left to give handheld. Clock is the lever: 460.8 MHz is about 236 GFLOPS. That is the owner's decision.
 - **Next.** I needs a docked run of the same build, where the main thread limits. Until then it stays a letter. The next GPU item would be resolves drawn straight into their destination. That saves at most part of the 5.5 ms, and only on passes that meet several conditions.
+
+## Run 46: `0.0.51-log45` docked, 3 November 2026: I helps where the main thread limits
+
+Docked, at GPU 768 MHz and memory 1600 MHz. No fault, no dropped interrupt, and no fence wait for the walker.
+
+- **FPS with I:**
+  - At 1300+ draws: 27.0 against 24.4 FPS, +11.0 % (90 %: +0.2 to +24.1).
+  - Load-matched: +7.1 % at 1300+ draws (-2.8 to +18.9), and +5.0 % over all frames (-2.0 to +12.9).
+  - Audio: 94 % in both states.
+  - So the gain is only just outside the noise. The mechanism is direct, though: the walk left the main thread and nothing waits for it.
+- **The main thread is still the limit.** It holds about 85 % of the guest turn in both states, and gets more frames done in I.
+- **The GPU is not the limit docked.** The bench's plain heavy frame takes 21.3 ms (17.1-27.0), against about 37 ms per frame. Resolve copies are 3.2 ms of that.
+- **Waste found on the render thread.** In its heavy samples, `getenv` takes about 7 %: a per-draw check of `LSWTCS_GLTEST` scanned the environment for every draw.
+- **The sampling profile cannot tell A/B states apart.** In the main thread's mixed profile, about a quarter is the walk (`gpu_shm_track`'s XXH3, register copies, IB parse), which comes from the state without I.
+
+## Log 46
+
+- **I is part of every state now.** The state without I stays as the control (`MAPXSHNLUBI,MAPXSHNLUB`).
+- **The `getenv` check is read once.**
+- **Each hwprof sample carries its A/B state.** The state goes in the band's high bits, and `[ABCYCLE]` prints the "profile tag". `tools/hwprof_report.py --state NAME` reports one state. This gives the main thread's own profile with I. That profile picks between the generated-code routes: LTO, the quantum counter, and plain memory.

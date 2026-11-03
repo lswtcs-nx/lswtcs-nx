@@ -60,6 +60,8 @@ extern "C" void lsw_spin_real_set(int on);                     // kernel_stubs.c
 extern "C" void lsw_walk_sites_report(const char* state);   // kernel_stubs.cpp
 extern "C" void lsw_async_walk_set(int on);   // kernel_stubs.cpp
 extern "C" volatile int lsw_nvc0_cb_dedupe;   // mesa_cbdedupe_edits.py
+// The A/B state's tag in hwprof.txt (hw_profiler.cpp): 0 none, 1-7 the index in LSWTCS_ABSTATES plus one, 9-15 in LSWTCS_ABSTATES2. Printed on each [ABCYCLE] line.
+extern "C" { volatile uint32_t lsw_ab_tag = 0; }
 extern "C" unsigned long long lsw_nvc0_cb_sets, lsw_nvc0_cb_same, lsw_nvc0_cb_barriers, lsw_nvc0_cb_serializes;
 extern "C" void lsw_ab_stat_report(const char* state, unsigned long long replay);   // kernel_stubs.cpp: [ABSTAT]
 extern "C" void lsw_shm_age_set(int on);                       // kernel_stubs.cpp: E (settled pages hashed one frame in 4)
@@ -2348,7 +2350,9 @@ void ab_cycle_tick() {
         puts(ub);
         l_sets = lsw_nvc0_cb_sets; l_same = lsw_nvc0_cb_same; l_bar = lsw_nvc0_cb_barriers; l_ser = lsw_nvc0_cb_serializes; l_rep = g_replays;
     }
-    g_ab_state = states[order[index++ % states.size()]];
+    const size_t state_index = order[index++ % states.size()];
+    g_ab_state = states[state_index];
+    lsw_ab_tag = state_index < 7 ? uint32_t(state_index + 1 + (phase == 2 ? 8 : 0)) : 0;
     const auto has =[](char c) { return g_ab_state.find(c) != std::string::npos; };
     g_ut_off_ab = !has('M');
     lsw_sched_ab_set(has('A'), has('W'));
@@ -2376,7 +2380,7 @@ void ab_cycle_tick() {
     g_sc.key_valid = false;
     stitch_set(has('S'));
     ++g_ab_changes;
-    printf("[ABCYCLE] state %s from replay %llu\n", g_ab_state.c_str(), (unsigned long long)g_replays);
+    printf("[ABCYCLE] state %s from replay %llu, profile tag %u\n", g_ab_state.c_str(), (unsigned long long)g_replays, (unsigned)lsw_ab_tag);
     fflush(stdout);
 }
 
@@ -2802,7 +2806,8 @@ PresentSrc replay() {
             }
         }
         if (!prog) { ++no_prog; continue; }
-        if (env_on("LSWTCS_GLTEST", false)) dump_first_program(vs, ps, gs);
+        static const bool kGlTest = env_on("LSWTCS_GLTEST", false);   // run 46: a getenv here per draw was about 7 % of the render thread
+        if (kGlTest) dump_first_program(vs, ps, gs);
         // 2. Texture sources (may blit composites / views: before any binding).
         const uint32_t* fetch_all = reinterpret_cast<const uint32_t*>(f.arena.data() + r.cb_fetch_off);
         units.clear(); swz.clear(); g_unit_log.clear();

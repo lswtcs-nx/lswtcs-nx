@@ -2,6 +2,7 @@
 
 For each thread and draw band: its CPU, and where its samples are by exact function (pc), with blocking system calls
 shown under the guest or runtime function that called them. Chains come from a stack scan, so they are indications.
+From log46 each sample also carries its A/B state (band >> 4, the "profile tag" of [ABCYCLE] lines); --state picks one.
 """
 from pathlib import Path
 import argparse,bisect,collections,re,subprocess
@@ -43,12 +44,17 @@ def main():
     parser.add_argument('--nm',type=Path,default=Path('aarch64-none-elf-nm'))
     parser.add_argument('--band',type=int,default=2,help='0 light, 1 medium, 2 heavy, 3 no frame for over 1 s: what a freeze waits on')
     parser.add_argument('--top',type=int,default=14)
+    parser.add_argument('--state',help='only samples taken in this A/B state (names from stdout.log [ABCYCLE] lines)')
     args=parser.parse_args()
     symbols=load_symbols(args.nm,args.elf)
     threads,samples,cpu=parse(args.directory/'hwprof.txt')
-    print(f'{len(samples)} distinct stacks, band: {BANDS[args.band]}')
+    tags=None
+    if args.state:
+        tags={int(m[2]) for m in re.finditer(r'\[ABCYCLE\] state (\S+) from replay \d+, profile tag (\d+)',(args.directory/'stdout.log').read_text(errors='replace')) if m[1]==args.state}
+        if not tags:raise SystemExit(f'no profile tag for state {args.state} in stdout.log')
+    print(f'{len(samples)} distinct stacks, band: {BANDS[args.band]}'+(f', state {args.state} (tags {sorted(tags)})' if tags else ''))
     for target,name in sorted(threads.items()):
-        rows=[s for s in samples if s[0]==target and s[1]==args.band]
+        rows=[s for s in samples if s[0]==target and s[1]&15==args.band and (tags is None or s[1]>>4 in tags)]
         total=sum(s[3] for s in rows)
         if not total:continue
         used=cpu.get(target,[])

@@ -25,6 +25,7 @@
 bool lsw_bg_submit(size_t bytes, std::function<void()> run);   // log_async.cpp
 extern "C" void lsw_log_path(char* out, size_t capacity, const char* name);
 extern "C" __attribute__((weak)) int lsw_sched_turn() { return -1; }
+extern "C" volatile uint32_t lsw_ab_tag;   // gl_backend.cpp: the A/B state, kept in the high bits of each sample's band
 
 namespace {
 constexpr int kMaxThreads = 48, kFrames = 8, kStackWords = 512;
@@ -282,7 +283,7 @@ void profiler_main(void* arg) {
         // Whoever holds the turn each tick, everyone else every 4th: blocked threads are the question, not the volume.
         const bool all = (++tick & 3) == 0;
         for (int i = 0; i < count; ++i)
-            if (all || (g_targets[i].sched_id >= 0 && g_targets[i].sched_id == turn)) sample_target(i, turn, band);
+            if (all || (g_targets[i].sched_id >= 0 && g_targets[i].sched_id == turn)) sample_target(i, turn, band | ((lsw_ab_tag & 15u) << 4));
         const uint64_t now = armTicksToNs(armGetSystemTick());
         if (now - window_start >= 60000000000ull && end_window(f, window_start, now)) window_start = now;
     }

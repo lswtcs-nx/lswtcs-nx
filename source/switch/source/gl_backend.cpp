@@ -58,6 +58,7 @@ extern "C" void lsw_native_mix_set(int on);                    // native_mixer.c
 extern "C" void lsw_audio_offturn_set(int on);                 // audio_offturn.cpp: U (the second audio mixer off the guest turn)
 extern "C" void lsw_spin_real_set(int on);                     // kernel_stubs.cpp: L (guest spinlocks really taken)
 extern "C" void lsw_walk_sites_report(const char* state);   // kernel_stubs.cpp
+extern "C" void lsw_async_walk_set(int on);   // kernel_stubs.cpp
 extern "C" volatile int lsw_nvc0_cb_dedupe;   // mesa_cbdedupe_edits.py
 extern "C" unsigned long long lsw_nvc0_cb_sets, lsw_nvc0_cb_same, lsw_nvc0_cb_barriers, lsw_nvc0_cb_serializes;
 extern "C" void lsw_ab_stat_report(const char* state, unsigned long long replay);   // kernel_stubs.cpp: [ABSTAT]
@@ -776,7 +777,7 @@ GLuint program(const LswGlShader* vs, const LswGlShader* ps, const LswGlShader* 
 // picture and skips shading pixels that fail the depth test.
 bool g_early_z = false, g_early_force = false;   // force: GPUBENCH only, every draw with the alpha-test code (an upper bound, never shown)
 uint64_t g_early_eligible = 0, g_early_used = 0, g_early_forced = 0;
-uint64_t g_alpha_hist[8][2];   // draws whose program has the alpha-test code, by alpha function (7 = always) and alpha to coverage
+uint64_t g_alpha_hist[8][2], g_alpha_depth[8];   // depth: by RB_DEPTHCONTROL bits 0-2 (stencil, z test, z write)   // draws whose program has the alpha-test code, by alpha function (7 = always) and alpha to coverage
 std::unordered_set<GLuint> g_early_progs;   // the early-test programs, for the [GLGPU] program lines
 const LswGlShader* early_ps(const LswGlShader* ps) {
     static std::unordered_map<const LswGlShader*, std::unique_ptr<LswGlShader>> variants;
@@ -2334,6 +2335,8 @@ void ab_cycle_tick() {
         {
             char hb[400]; int hk = snprintf(hb, sizeof hb, "[EARLYZ] draws with the alpha-test code so far, by alpha function 0-7 (7 always), without / with alpha to coverage:");
             for (int a = 0; a < 8; ++a) hk += snprintf(hb + hk, sizeof hb - hk, " %d:%llu/%llu", a, (unsigned long long)g_alpha_hist[a][0], (unsigned long long)g_alpha_hist[a][1]);
+            hk += snprintf(hb + hk, sizeof hb - hk, " | by depth control (stencil, z test, z write bits):");
+            for (int a = 0; a < 8; ++a) hk += snprintf(hb + hk, sizeof hb - hk, " %d:%llu", a, (unsigned long long)g_alpha_depth[a]);
             puts(hb);
         }
         l_ee = g_early_eligible; l_eu = g_early_used;
@@ -2364,7 +2367,8 @@ void ab_cycle_tick() {
     lsw_audio_offturn_set(has('U'));
     lsw_spin_real_set(has('L'));
     g_rt_pool = has('J') ? 3 : has('Z') ? 1 : 0;   // Z, J: compressed render targets (gl_rt.inc)
-    g_early_z = has('F');   // F: early depth tests where the alpha test cannot discard (program_early)
+    g_early_z = has('F');   // F: early depth tests where the alpha test cannot discard, or depth and stencil are not written (program_early)
+    lsw_async_walk_set(has('I'));   // I: the frame's ring walk on its own thread (kernel_stubs.cpp)
     lsw_nvc0_cb_dedupe = has('B');   // B: nouveau skips constant buffer binds that change nothing (mesa_cbdedupe_edits.py)
     lsw_shm_age_set(has('E'));
     lsw_quantum_div_set(has('Q') ? 4 : 0);
@@ -2789,8 +2793,11 @@ PresentSrc replay() {
                 const uint32_t* sys = reinterpret_cast<const uint32_t*>(f.arena.data() + r.cb_sys_off);
                 const uint32_t func = (sys[0] >> 11) & 7;
                 ++g_alpha_hist[func][sys[44] != 0];
+                ++g_alpha_depth[r.depthcontrol & 7];
                 if (g_early_force) { const GLuint p = program_early(vs, ps, gs, prog); if (p != prog) ++g_early_forced; prog = p; }
-                else if (g_early_z && func == 7 && sys[44] == 0) prog = program_early(vs, ps, gs, prog);   // state F: alpha test always passes, no alpha to coverage
+                // State F: the alpha test cannot discard, or (run 42: every such draw has the test on) the draw writes neither depth nor stencil
+                // but tests depth: then a discard after an early test changes nothing either.
+                else if (g_early_z && ((func == 7 && sys[44] == 0) || (r.depthcontrol & 7) == 2)) prog = program_early(vs, ps, gs, prog);
                 else if (g_bench_prewarm) program_early(vs, ps, gs, prog);   // builds the variant in the background for the bench, draws as before
             }
         }

@@ -1492,3 +1492,27 @@ Without pixels the GPU outruns the render thread's submission, so those timestam
 - From the frame's fence walk to VdSwap the main thread runs 13.6 ms on average, and from VdSwap to the next kick 11.1 ms.
 - `[GPUPAGES]` puts the walk at 6-9 ms per frame in heavy stretches, so it fits inside the first window.
 - One unknown remains: guest interrupt callbacks fired inside the walk, which run guest code. log42 counts them and their time.
+
+## Run 42: `0.0.48-log42` handheld, 3 November 2026: no interrupts in the walk, copies are the resolves' cost, early-z needs care
+
+One state, five benches. Deltas are against "plain again", in ms per bench.
+
+| Change | Per bench (ms) |
+| --- | --- |
+| Resolves off | -5.8, -4.5, -5.5, -4.8, -4.8 |
+| Resolve copies off (clears kept) | -4.4, -4.3, -4.8, -3.8, -3.7 |
+| Early-z forced: the variant for every draw with the alpha-test code (1207-1558 draws) | -6.5, -9.0, +4.8, -5.3, -3.3 |
+| B off | +0.3, +0.9, +0.5, +2.2, +0.2 |
+
+- **The copies are most of the resolves' cost:** about 4-4.8 ms of the 5 ms.
+- **Forcing early depth tests would save about 3-9 ms (one bench is out of line), but it is not safe.** `[EARLYZ]` shows every draw with that code has a real alpha test: function 4 (greater) 1.93 M draws, 6 (greater or equal) 0.72 M, never 7 (always), never alpha to coverage. With early tests, a pixel the alpha test discards would still write depth.
+- **No guest interrupt callback ran from any walk**, so a walk can run on a thread with no guest context.
+
+## Log 43: `0.0.49-log43`, the walk on its own thread
+
+Docked, states `MAPXSHNLUB` and `MAPXSHNLUBI`. Not yet run on hardware.
+
+- **State I.** A walker thread joins the scheduler (`async_walker_body`). At a fence wait whose segment an earlier walk already read, the wait hands the walk to that thread and returns. Any later walk site, and VdSwap, first waits for it (`async_walk_join`), so the guest sees the ring as before at every point that depends on it.
+- The thread holds the turn for the ring and leaves it for each IB of 4096 dwords or more, as W does, on core 1 (`LSWTCS_WALKOFF_CORE=1`). A guest interrupt on that thread would be dropped and counted; run 42 had none.
+- `[ASYNCWALK]`: hand-offs, the walker's time, and waits for it by site.
+- **State F is safe now for draws that test depth but write neither depth nor stencil.** A discard after an early test changes nothing for them. `[EARLYZ]` adds their count by depth control; the bench's "early-z on" measures the gain.

@@ -816,6 +816,10 @@ const LswGlShader* early_ps(const LswGlShader* ps) {
 // (arithmetic and texture fetches); against "pixels off" what is left is filling: rasterising, depth and colour writes. Run 55, handheld:
 // pixels were 63 % of the GPU frame, and only this split says whether better translated shaders or less filling is the way.
 bool g_bench_trivial = false;
+// log57 bench, splitting the shaders' cost further. Run 56, handheld: trivial pixel shaders took off 26.3 ms, as much as no pixels at all
+// (26.3 ms), so filling costs next to nothing and the time is inside the shaders. "textures unbound": every unit gets no texture, so each
+// fetch still runs but reads no memory (the arithmetic stays); "anisotropic filtering off": the game's samplers at one sample.
+bool g_bench_texnone = false, g_bench_noaniso = false;
 uint64_t g_bench_trivial_used = 0;
 const LswGlShader* trivial_ps(const LswGlShader* ps) {
     static std::unordered_map<const LswGlShader*, std::unique_ptr<LswGlShader>> variants;
@@ -845,6 +849,52 @@ GLuint program_trivial(const LswGlShader* vs, const LswGlShader* ps, const LswGl
     const size_t waits = g_frame_wait.size();
     const uint32_t pending = g_prog_pending_draws;
     const GLuint p = program(vs, t, gs);
+    if (!p) { g_frame_wait.resize(waits); g_prog_pending_draws = pending; return prog; }   // still compiling: draw as before
+    return p;
+}
+// A/B state e (log57): the pixel shader's epilogue specialised for the draw. Every translated pixel shader decides per pixel, from the
+// system constants, things that are fixed for the whole draw: the alpha test function (flags bits 11-13), alpha to coverage, and the
+// piecewise gamma conversion of colour outputs 0 and 1 (flags bits 14 and 15). Run 56, handheld: the time is inside the shaders, and the
+// world's costliest shader is one texture fetch and a few operations ahead of that epilogue. Here those reads become constants, so the
+// compiler drops the branches not taken; the arithmetic of the branch taken is unchanged, so the picture is the same. One variant per
+// shader and combination, compiled in the background; until it is ready the draw uses the shader as before.
+bool g_epi_ab = false, g_bench_epi = false;
+uint64_t g_epi_used = 0, g_epi_drawn = 0;
+const LswGlShader* epilogue_ps(const LswGlShader* ps, uint32_t flags, uint32_t a2m) {
+    static const char* const kFunc = "bitfieldExtract(xe_uniform_system_constants.flags, int(11u), int(3u))";
+    static const char* const kA2m = "if (xe_uniform_system_constants.alpha_to_mask != 0u)";
+    static const char* const kMask = "gl_SampleMask[0] = -1;";
+    static const char* const kGamma[2] = {"if ((xe_uniform_system_constants.flags & 16384u) != 0u)", "if ((xe_uniform_system_constants.flags & 32768u) != 0u)"};
+    const uint32_t combo = ((flags >> 11) & 7) | (a2m ? 8u : 0u) | (((flags >> 14) & 3) << 4);
+    static std::unordered_map<uint64_t, std::unique_ptr<LswGlShader>> variants;
+    const uint64_t key = (uint64_t(reinterpret_cast<uintptr_t>(ps)) << 6) ^ combo;
+    auto it = variants.find(key);
+    if (it != variants.end()) return it->second.get();
+    std::unique_ptr<LswGlShader> v;
+    std::string g = ps->glsl;
+    auto replace_all = [&g](const std::string& from, const std::string& to) {
+        size_t n = 0;
+        for (size_t at = g.find(from); at != std::string::npos; at = g.find(from, at + to.size())) { g.replace(at, from.size(), to); ++n; }
+        return n;
+    };
+    size_t changed = replace_all(kFunc, std::to_string((flags >> 11) & 7) + "u");
+    changed += replace_all(kA2m, a2m ? "if (true)" : "if (false)");
+    if (!a2m) changed += replace_all(kMask, "");   // writing every sample changes nothing
+    for (int i = 0; i < 2; ++i) changed += replace_all(kGamma[i], (flags >> (14 + i)) & 1 ? "if (true)" : "if (false)");
+    if (changed) {
+        v = std::make_unique<LswGlShader>(*ps);
+        v->gl = 0;
+        v->key = ps->key ^ ((0xE91ull << 8 | combo) * 0x9E3779B97F4A7C15ull);
+        v->glsl = std::move(g);
+    }
+    return (variants[key] = std::move(v)).get();
+}
+GLuint program_epilogue(const LswGlShader* vs, const LswGlShader* ps, const LswGlShader* gs, GLuint prog, uint32_t flags, uint32_t a2m) {
+    const LswGlShader* e = epilogue_ps(ps, flags, a2m);
+    if (!e) return prog;
+    const size_t waits = g_frame_wait.size();
+    const uint32_t pending = g_prog_pending_draws;
+    const GLuint p = program(vs, e, gs);
     if (!p) { g_frame_wait.resize(waits); g_prog_pending_draws = pending; return prog; }   // still compiling: draw as before
     return p;
 }
@@ -1373,6 +1423,7 @@ GLuint get_sampler(const uint32_t* fetch6, const LswGpuSamplerBinding& b) {
     RpScope rp(RP_SAMPLER);
     LswGpuSamplerDesc s;
     lsw_gpu_sampler(fetch6, &b, &s);
+    if (g_bench_noaniso) s.max_aniso = 1;   // bench only: its own sampler objects (the key includes the descriptor)
     std::string key(reinterpret_cast<const char*>(&s), sizeof s);
     auto it = g_samplers.find(key);
     if (it != g_samplers.end()) return it->second;
@@ -2403,6 +2454,12 @@ void ab_cycle_tick() {
         static uint64_t l_ee = 0, l_eu = 0;
         printf("[EARLYZ] state %s: draws eligible %llu, drawn with the early-test variant %llu\n", g_ab_state.c_str(), (unsigned long long)(g_early_eligible - l_ee), (unsigned long long)(g_early_used - l_eu));
         {
+            static uint64_t l_ed = 0, l_eu2 = 0;
+            printf("[EPILOGUE] state %s: draws that could use a specialised epilogue %llu, drawn with it %llu\n", g_ab_state.c_str(),
+                   (unsigned long long)(g_epi_drawn - l_ed), (unsigned long long)(g_epi_used - l_eu2));
+            l_ed = g_epi_drawn; l_eu2 = g_epi_used;
+        }
+        {
             char hb[400]; int hk = snprintf(hb, sizeof hb, "[EARLYZ] draws with the alpha-test code so far, by alpha function 0-7 (7 always), without / with alpha to coverage:");
             for (int a = 0; a < 8; ++a) hk += snprintf(hb + hk, sizeof hb - hk, " %d:%llu/%llu", a, (unsigned long long)g_alpha_hist[a][0], (unsigned long long)g_alpha_hist[a][1]);
             hk += snprintf(hb + hk, sizeof hb - hk, " | by depth control (stencil, z test, z write bits):");
@@ -2443,6 +2500,7 @@ void ab_cycle_tick() {
     g_rt_pool = has('J') ? 3 : has('Z') ? 1 : 0;   // Z, J: compressed render targets (gl_rt.inc)
     g_early_z = has('F');   // F: early depth tests where the alpha test cannot discard, or depth and stencil are not written (program_early)
     g_early_force_ab = false;   // z is out after run 55: the tester saw transparency broken nearly everywhere (alpha references are about 0.5)
+    g_epi_ab = has('e');   // e: pixel shader epilogues specialised for the draw (epilogue_ps); exact
     lsw_async_walk_set(has('I'));   // I: the frame's ring walk on its own thread (kernel_stubs.cpp)
     lsw_kick_walk_set(has('k'));    // k (lower case; every capital is taken): with I, the walker starts at each kick (async_walk_kick)
     lsw_hsio_nowait_set(has('h'));  // h: flushes do not wait for the GPU, as on a console whose CPU-GPU link trained (lsw_hsio_nowait_set)
@@ -2869,6 +2927,7 @@ PresentSrc replay() {
         if (vs) {
             RpScope rp(RP_PROGRAM);
             prog = program(vs, ps, gs);
+            const GLuint prog_base = prog;
             if (prog && ps && !r.ps_writes_depth && early_ps(ps)) {
                 const uint32_t* sys = reinterpret_cast<const uint32_t*>(f.arena.data() + r.cb_sys_off);
                 const uint32_t func = (sys[0] >> 11) & 7;
@@ -2882,11 +2941,17 @@ PresentSrc replay() {
                 // State F: the alpha test cannot discard, or (run 42: every such draw has the test on) the draw writes neither depth nor stencil
                 // but tests depth: then a discard after an early test changes nothing either.
                 else if (g_early_z && ((func == 7 && sys[44] == 0) || (r.depthcontrol & 7) == 2)) prog = program_early(vs, ps, gs, prog);
-                else if (g_bench_prewarm) program_early(vs, ps, gs, prog);   // builds the variant in the background for the bench, draws as before
             }
             if (prog && ps && !r.ps_writes_depth && (g_bench_trivial || g_bench_prewarm)) {   // log56 bench; built in the background before
                 const GLuint p = program_trivial(vs, ps, gs, prog);
                 if (g_bench_trivial) { if (p != prog) ++g_bench_trivial_used; prog = p; }
+            }
+            if (prog && prog == prog_base && ps && !r.ps_writes_depth && (g_epi_ab || g_bench_epi)) {   // state e (epilogue_ps)
+                const uint32_t* sys = reinterpret_cast<const uint32_t*>(f.arena.data() + r.cb_sys_off);
+                const GLuint p = program_epilogue(vs, ps, gs, prog, sys[0], sys[44]);
+                ++g_epi_drawn;
+                if (p != prog) ++g_epi_used;
+                prog = p;
             }
         }
         if (!prog) { ++no_prog; continue; }
@@ -2966,7 +3031,7 @@ PresentSrc replay() {
         g_sc.bind_ubo(3, g_arena, r.cb_bool_off, 40 * 4);
         g_sc.bind_ubo(4, g_arena, r.cb_fetch_off, 192 * 4);
         if (r.cb_derived_off) g_sc.bind_ubo(kLswFetchDerivedBinding, g_arena, r.cb_derived_off, kLswFetchDerivedBytes);
-        for (const UnitBind& u : units) g_sc.bind_unit(u.unit, u.target, u.tex, u.sampler, view_swizzle_on(), u.swz);
+        for (const UnitBind& u : units) g_sc.bind_unit(u.unit, u.target, g_bench_texnone ? 0 : u.tex, u.sampler, view_swizzle_on() && !g_bench_texnone, u.swz);
         rp_close(RP_BIND, t_bind, t_bind_in);
         {
             RpScope rp(RP_STATE);
@@ -3304,8 +3369,10 @@ PresentSrc gpu_bench(const PresentSrc& shown) {
     const Variant variants[] = {
         {"plain", 0, false, false, false},
         {"resolves off", 0, false, false, true},
-        {"early-z forced", 0, false, false, false},
+        {g_epi_ab ? "epilogues not specialised" : "epilogues specialised", 0, false, false, false},
         {"trivial pixel shaders", 0, false, false, false},
+        {"textures unbound", 0, false, false, false},
+        {"anisotropic filtering off", 0, false, false, false},
         {"resolve copies off", 0, false, false, false},
         {"full-size resolve copies off", 0, false, false, false},
         {"reduced-size resolve copies off", 0, false, false, false},
@@ -3332,6 +3399,10 @@ PresentSrc gpu_bench(const PresentSrc& shown) {
         g_bench_copy_quarter = false;
         g_bench_nocopy_cleared = !strcmp(v.label, "copies with a clear after off");
         g_bench_trivial = !strcmp(v.label, "trivial pixel shaders");
+        g_epi_ab = g_ab_state.find('e') != std::string::npos && strcmp(v.label, "epilogues not specialised") != 0;
+        g_bench_epi = !strcmp(v.label, "epilogues specialised");
+        g_bench_texnone = !strcmp(v.label, "textures unbound");
+        g_bench_noaniso = !strcmp(v.label, "anisotropic filtering off");
         const uint64_t trivial0 = g_bench_trivial_used;
         const uint64_t forced0 = g_early_forced;
         last = replay();
@@ -3341,7 +3412,8 @@ PresentSrc gpu_bench(const PresentSrc& shown) {
         arena_fence();
         gpu_prof_finish();
     }
-    g_bench_kind = -1; g_bench_label = nullptr; g_bench_noresolve = false; g_bench_nocopy = false; g_bench_nocopy_size = 0; g_bench_copy_quarter = false; g_bench_nocopy_cleared = false; g_bench_trivial = false;
+    g_bench_kind = -1; g_bench_label = nullptr; g_bench_noresolve = false; g_bench_nocopy = false; g_bench_nocopy_size = 0; g_bench_copy_quarter = false; g_bench_nocopy_cleared = false; g_bench_trivial = false; g_bench_texnone = false; g_bench_noaniso = false;
+    g_bench_epi = false; g_epi_ab = g_ab_state.find('e') != std::string::npos;
     g_early_z = early0;
     lsw_glthread_call(bench_dedupe_job, reinterpret_cast<void*>(uintptr_t(dedupe0)));
     g_replay_same = false;

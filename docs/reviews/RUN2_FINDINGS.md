@@ -1915,3 +1915,37 @@ A colour resolve that clears its source leaves that source dead. Its destination
 - **Bench "trivial pixel shaders":** each pixel shader becomes one that writes the same outputs a constant and keeps a discard where there was one. Against the plain frame this gives the shaders' own cost; against "pixels off", the filling. It decides between better translated shaders and less filling.
 - **Bench "copies with a clear after off":** colour resolves from and into the origin that clear their source, which are the copies a texture hand-over could remove.
 - **Dropped from the bench:** "early-z on", "B off" and the quarter-area copy.
+
+## Run 56: `0.0.62-log56` handheld, 3 November 2026: the time is inside the pixel shaders
+
+Handheld, 109 s in the heavy area. No fault.
+
+**Handheld bench (10 benches, plain frame median 46.5 ms):**
+
+| Change | Saving |
+| --- | --- |
+| Trivial pixel shaders | -26.3 ms (-58 %) |
+| Pixels off | -26.3 ms (-64 %) |
+| Copies with a clear after off | -1.9 ms (-4.3 %) |
+| All resolve copies off | -4.1 ms |
+| Early depth test forced | -9.7 ms |
+
+- **Filling costs next to nothing.** Rasterising, the late depth test and the colour writes are what a trivial shader leaves, and that frame is as fast as one with no pixels at all. The handheld GPU time is the pixel shaders' own work: arithmetic and texture fetches.
+- **The texture hand-over would reach about 1.9 ms (4 %).** That is real but secondary.
+- **f:** -0.5 % (90 %: -8.6 to +9.4). f is out after four runs without a gain.
+
+**What the world's costliest shader does per pixel** (`6F9BED73E5CE1620`, 6.5 ms per heavy handheld frame):
+1. One texture fetch and a few multiplies.
+2. Then the translator's epilogue, which is the same in every translated pixel shader: the alpha test, whose function is read from the system constants each pixel; the alpha-to-coverage code; a gamma conversion for each colour output behind a flag; and an exponent bias on each output.
+
+These inputs are fixed for a whole draw. They appear in 218 of the 521 pixel shaders in `private/glprogs2` (alpha test) and in all 521 (the gamma flag).
+
+## Log 57 (handheld)
+
+- **State e:** the epilogue specialised per draw. The alpha test function, alpha to coverage and the two gamma flags become constants in a variant compiled for that combination, so the compiler drops the branches not taken. This is exact: the arithmetic of the branch taken is unchanged, and the all-samples `gl_SampleMask` write goes only when alpha to coverage is off. Until a variant is compiled, the draw uses the shader as before. `[EPILOGUE]` counts the draws that use it.
+- **Bench:**
+  - "epilogues specialised" (or "not specialised" in e);
+  - "textures unbound": every fetch runs but reads no memory, so this is the arithmetic left;
+  - "anisotropic filtering off": bench only, because the filter is a quality setting.
+  - "early-z forced" and its background variants are gone.
+- **States:** `MAPXSHNLUBIkhwr,MAPXSHNLUBIkhwre`.

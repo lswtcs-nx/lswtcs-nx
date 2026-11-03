@@ -1272,3 +1272,27 @@ The device's 2x MSAA comes from the video mode (`sub_8248CE98`, present paramete
 - **Profile:** U, WY, R, G and E on `MAPXSHNL`, 8 states every 6 s, one pass. Each letter is on in 4 states and any two in 2. G is the parity of U, W, R and E is U xor R, so a letter's effect mixes with those pair effects.
 
 **What run 34 decides:** which of the five stay on. `agedlate` high or flicker in E states: E goes. W faster with no fault: move more of the record work off the turn. `[GLGPU]`'s top programs give the first GPU list.
+
+## Run 34: `0.0.40-log34`, 2 November 2026: W rejected again, the GPU is now the wall
+
+`Gungan_A` to `E` once and the hub; no crash, no `[SPINLOCK]`. Archived in `private/runs/run34-log34`, with two captures (replays 6102 and 6481). The tester saw small visual differences, things shining differently, only in motion.
+
+| Letter | Load-matched, all frames (90 %) | At 1300+ draws (90 %, 12 visits) |
+| --- | --- | --- |
+| U | +5.2 % (-2.2 to +12.8) | +6.7 % (-10.9 to +28.1) |
+| WY | -11.5 % (-17.2 to -5.5) | -26.4 % (-34.1 to -15.8) |
+| R | -5.9 % (-12.5 to +1.2) | -2.4 % (-19.1 to +16.5) |
+| G | +5.1 % (-2.2 to +13.5) | +2.1 % (-15.5 to +23.0) |
+| E | +3.6 % (-3.3 to +11.3) | +3.1 % (-14.6 to +25.9) |
+
+Audio 98-100 % in every state. Each letter is mixed with some pair (G with U+W+R, E with U+R).
+
+- **W is out, third time.** Idle guest time rises from about 10 s to 20-27 s per state: the game waits for the walk, on a shared core at a low priority.
+- **U stays:** positive in runs 33 and 34, both intervals on the heavy side reaching well above 0 or close, audio fine. No forced wait; 38 returns to the turn, all `KeSetEvent`.
+- **R and G stay out:** no measurable gain.
+- **The shimmer, most likely E (not shown).** Both captures fell in one state, `MAPXSHNLRGE`, and the tester saw nothing in run 33, which had none of R, G, E. R and G only change priorities. E can hand the GPU a page up to 3 frames late (`agedlate` 81 in 2.4 M skips), and a page that sat still and then changes fits particle and glow data. The stills cannot show it. E is out, for a gain within noise.
+- **The GPU now limits even the heaviest frames.** Sampled `[GLGPU]` at 1300+ draws: 44-54 ms (plain draws 18-29, quads 9-12, rects 7-10, resolves 5-6), with timestamps inflating it; frames there take about 46 ms and the render thread waits on fences 13 ms. Further CPU work may show little until that moves.
+
+## Probes without a console
+
+- **View table shortcut and `-fPIE`** (`addr_probe.sh`): `ppc_recomp.359.cpp` loses 3.0 % of its instructions and 4.6 % of memory instructions. 23 % of guest accesses are stack-relative. On 62 % of the turn that is a couple of percent at best, below what a run can measure, and it rests on stacks staying below `0xA0000000`. Not taken.

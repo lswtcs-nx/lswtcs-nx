@@ -294,7 +294,7 @@ The measurements below are from heavy frames (1300+ draws, the start of `Gungan_
    - **The tools exist:** libnx has `nvGpuChannelZcullBind`, `nvGpuGetZcullCtxSize` and `nvGpuGetZcullInfo`, and deko3d turns ZCULL on by default. deko3d's code is a working reference on this GPU (ZLIB licence: take its technique and register sequence, write our own code).
    - **Steps:**
      - read deko3d's ZCULL setup;
-     - bind a ZCULL context buffer on Mesa's GPU channel;
+     - the kernel binding is already done: libdrm_nouveau binds a ZCULL context on Mesa's channel (see "Deko3D study" below);
      - program ZCULL storage and region for the depth target in nvc0, invalidating on depth clears and target changes;
      - an A/B state plus a bench variant, with a pixel comparison as in state V.
    - **Risk:** GPU faults while it is misprogrammed. It will take several rounds.
@@ -309,8 +309,53 @@ The measurements below are from heavy frames (1300+ draws, the start of `Gungan_
 - **Handheld render resolution.** Pixels are about 60 % of the handheld GPU frame.
 - **Clocks:** handheld GPU 307 MHz against 384 or 460, and docked CPU.
 - **The fourth core.** It needs a launch from a title whose NPDM allows core 3, and it would relieve the other threads, not the main one.
-- **A Deko3D backend.** That is the author's later priority. It would remove Mesa's CPU cost (render thread and Mesa worker, about 20 ms per docked frame on cores 1-2) and bring ZCULL natively.
+- **A Deko3D backend.** That is the author's later priority. It would remove Mesa's CPU cost (render thread and Mesa worker, about 20 ms per docked frame on cores 1-2) and bring ZCULL natively. The study below finds no large gain from it on its own.
 - **Making the measured states defaults:**
   - Older letters M A P X S H N L U B.
   - Newer letters I k h w r e g.
   - **h needs the author's review:** it makes the game behave as on a console whose CPU-GPU link trained, as Xenia's stub reports.
+
+## Deko3D study (3 November 2026)
+
+**Question:** would moving the renderer to deko3d bring a large FPS gain at stock clocks?
+
+**Answer: not on its own.** The one large GPU item it brings, ZCULL, can be had on Mesa.
+
+**The ceiling.** The CPU runs at 1020 MHz in both modes. Docked heavy frames (29-30 FPS) sit at the CPU wall, so any GPU-side change in handheld (24.8 FPS) reaches about +20 % at most in heavy scenes. That holds for Deko, ZCULL and resolution alike.
+
+**Docked.** The wall is the main guest thread, about 85 % guest code. Deko would remove Mesa's render thread and worker (about 20 ms per frame on cores 1-2), and neither runs on that thread. At most it trims the main thread's 3 ms of waits: under 10 %, unmeasured.
+
+**Handheld, against the run 60 bench (36.4 ms):**
+
+| Part | ms | With Deko |
+| --- | --- | --- |
+| Pixel shaders | about 17 | Same. deko3d's compiler (`uam`) is nouveau's codegen, fed the same GLSL. |
+| Hidden layers, inside the 17 | unknown share | ZCULL, on by default. Mesa can have it too (below). |
+| Resolves | about 5 | Hand-over is possible on either API. |
+| Vertices | 2-3 | Same. |
+| Per-draw cost and present | about 10 | The only part that could differ; unmeasured. The prototype binds 6 uniform buffers per stage per draw, so it is not cheaper by design. log61's state-off variant sizes this part. |
+| Colour compression | memory is about half the GPU time (run 38 estimate) | Possible with deko3d's compression flag. On Mesa it blurred (run 40). Unmeasured. |
+
+**What a migration costs:**
+- **The prototype is unfinished.** `deko_backend.cpp` (835 lines, 18 headers) reads the same recorder, but cold launch passed 0 of 3, and EDRAM and resource ownership are not done.
+- **No shader compiler on the console.** `uam` is a host program (`tools/bin/uam.exe`), and the prototype stops at any shader it lacks. The game makes variants at run time, and e and g add more: 1017 programs saved now against 509 sources in run 35. Deko needs an offline catalogue that covers every variant, or `uam` built for the console.
+- **The GL-side work would be redone and remeasured:** resolves, fetch fold, epilogues, early depth rules and the walker hand-off.
+- **It is the author's priority and decision.**
+
+**ZCULL on Mesa is smaller than planned.** From deko3d's source (ZLIB; technique and register values only):
+- **The kernel binding is done.** libdrm_nouveau 1.0.1, the installed version, allocates a ZCULL context and binds it to Mesa's channel (`pushbuf.c`, `nvGpuChannelZcullBind`).
+- **nouveau already writes the per-shader test mask** (`ZCULL_TEST_MASK`, 0x11 when the shader writes depth). 13 of the 1017 saved programs write `gl_FragDepth`, so most draws could use ZCULL.
+- **What is missing is the 3D engine's setup.** deko3d writes it in two places:
+  - **At init:** `ZCULL_REGION` 0 (nouveau writes 0x3f, "deactivate"), `0x1968` = 0x11, test mask 0, stencil criteria at `0xdd8`.
+  - **When a depth target is bound:**
+    - width and height aligned to `nvGpuGetZcullInfo()` (32 pixels);
+    - layer size = aligned area / `pixel_squares_by_aliquots`;
+    - `0x7e0` = image size << 16 and layer size, `0x15c8` = 2, `ZCULL_WIDTH` = width, height and layers, window offsets 0;
+    - invalidate when the depth target's address changes. deko3d uses method `0x4b2` for that; nouveau's header names `ZCULL_INVALIDATE` at `0x1958`. Which one works needs checking.
+  - nouveau's `#if 0` `nvc0_validate_zcull` writes the same `0x7e0` and `0x15c8`, but it guesses the sizes and uses the desktop address registers.
+- **Open risks:**
+  - depth written where ZCULL does not see it (copies, `gl_FragDepth` restores of old EDRAM contents) needs an invalidate;
+  - pooled render targets reuse addresses at other sizes;
+  - GPU faults while the setup is wrong.
+
+**Recommendation:** no migration now. ZCULL on Mesa stays item 1, now without the kernel part. Reopen Deko if log61 shows a large per-draw part that Mesa cannot shed, or if the author chooses it for other reasons (hitches, memory). Even then, handheld gains stop at the CPU wall.

@@ -1000,6 +1000,14 @@ int g_bench_kind = -1;
 bool g_bench_prewarm = false;
 const char* g_bench_label = nullptr;
 bool g_bench_noresolve = false, g_bench_nocopy = false;
+// log54 bench: resolve copies off by destination size, 1 = full size (1024 pixels wide or more), 2 = reduced (narrower). Run 53's bench:
+// all resolve copies were 3.2 ms of a 20.8 ms docked frame; this says which group a cheaper resolve path should go after first.
+int g_bench_nocopy_size = 0;
+bool bench_skips_copy(const LswGpuDrawRec& r) {
+    if (g_bench_nocopy) return true;
+    if (!g_bench_nocopy_size) return false;
+    return (r.rs_dest_pitch >= 1024) == (g_bench_nocopy_size == 1);
+}
 bool g_gpuprof_noubo = false, g_gpuprof_notex = false, g_gpuprof_nostate = false;
 bool g_blit_stamp = false;   // blit() stamps itself as GK_TEXSRC (set around texture_source)
 uint64_t g_gpuprof_verts = 0;
@@ -2772,7 +2780,7 @@ PresentSrc replay() {
             ++draw_i;
             if (gpurt && !g_bench_noresolve) {
                 RpScope rp(RP_RESOLVE);
-                const bool copy = dead[rec_i] != 2 && !g_bench_nocopy;   // bench: "resolve copies off" keeps the clears
+                const bool copy = dead[rec_i] != 2 && !bench_skips_copy(r);   // bench: "resolve copies off" keeps the clears
                 if (!copy) ++dead_resolves;
                 static std::vector<LswGpuDrawRec> held;   // resolves of an untiled group whose clears wait
                 if (ut.clear[rec_i]) {
@@ -3236,6 +3244,8 @@ PresentSrc gpu_bench(const PresentSrc& shown) {
         {"resolves off", 0, false, false, true},
         {"early-z forced", 0, false, false, false},
         {"resolve copies off", 0, false, false, false},
+        {"full-size resolve copies off", 0, false, false, false},
+        {"reduced-size resolve copies off", 0, false, false, false},
         {"pixels off", 1, false, false, false},
         {"pixels+verts off", 2, false, false, false},
         {"pixels+verts+UBO off", 3, false, false, false},
@@ -3254,6 +3264,7 @@ PresentSrc gpu_bench(const PresentSrc& shown) {
         g_bench_label = v.label;
         g_early_force = !strcmp(v.label, "early-z forced");
         g_bench_nocopy = !strcmp(v.label, "resolve copies off");
+        g_bench_nocopy_size = !strcmp(v.label, "full-size resolve copies off") ? 1 : !strcmp(v.label, "reduced-size resolve copies off") ? 2 : 0;
         const uint64_t forced0 = g_early_forced;
         last = replay();
         if (g_early_force) printf("[GPUBENCH] early-z forced: %llu draws with the variant\n", (unsigned long long)(g_early_forced - forced0));
@@ -3261,7 +3272,7 @@ PresentSrc gpu_bench(const PresentSrc& shown) {
         arena_fence();
         gpu_prof_finish();
     }
-    g_bench_kind = -1; g_bench_label = nullptr; g_bench_noresolve = false; g_bench_nocopy = false;
+    g_bench_kind = -1; g_bench_label = nullptr; g_bench_noresolve = false; g_bench_nocopy = false; g_bench_nocopy_size = 0;
     g_early_z = early0;
     lsw_glthread_call(bench_dedupe_job, reinterpret_cast<void*>(uintptr_t(dedupe0)));
     g_replay_same = false;

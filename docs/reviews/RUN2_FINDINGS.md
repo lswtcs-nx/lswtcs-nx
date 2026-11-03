@@ -1818,3 +1818,12 @@ So resolve copies are the largest GPU item on our side for handheld. They come f
 
 - **r joins the base.** States: `MAPXSHNLUBI,MAPXSHNLUBIkhwr,MAPXSHNLUBIkhwrf`; f is still open.
 - **`[THREADCPU]` now ends with "guest calls per replay".** These are guest function entries over all threads, so the main thread's CPU per call sizes the call-overhead route (inlining, LTO) before a build is spent on it.
+
+**Added to log 54 before it ran (the tester asked for more in the same session, and wants handheld next):**
+- **State G again** (`MAPXSHNLUBIkhwrG`): every guest thread except the XAudio thread runs at 0x2E. In run 34, before I, it was +5.1 % (-2.2 to +13.5). The main thread is the wall again, and the second shader-compile worker shares core 0 with it at 0x3B.
+- **The bench splits resolve copies by destination size:** full size (1024 pixels wide or more) against reduced. A cheaper resolve path should go after the larger group first.
+- **Handheld ground work, from run 53's docked heavy frames (91 frames, 23.6 ms of GPU each):**
+  - Ten programs take about 12 ms.
+  - Two of them are single full-screen draws: files `91834C0972EDD8A1` at 1.45 ms and `283E052419BCC461` at 1.29 ms per frame. These are post passes, and in handheld they should cost about 2.5 times as much.
+  - Their GLSL is on the SD card (`sdmc:/lswtcs/glprogs2/<file>.glsl3`). The local copy in `private/glprogs2` predates the current translator and does not have them.
+  - Reading them comes before any translator change for handheld.

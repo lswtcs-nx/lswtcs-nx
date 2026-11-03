@@ -8789,6 +8789,19 @@ PPC_FUNC(__imp__VdInitializeScalerCommandBuffer) {
            dest_ptr, dest_count);
     ctx.r3.u32 = dest_count;
 }
+// A/B state h (log51): the game as on a console whose CPU-GPU link trained. sub_822B9240 stores !VdIsHSIOTrainingSucceeded() in
+// 0x82FE0E00 once at boot, and only sub_822AEEB0 reads it again (the boot path only prints a warning): with it set, every flush waits for
+// the newest fence, i.e. for the GPU to have read everything submitted (run 50: about 3 times per heavy frame, each time the segment
+// kicked 0.1 ms before). On a console that trained, it is 0 and the flush never waits; the game then relies on its phase, ring-space
+// and fence waits elsewhere, which this runtime serves. The stub below still returns 0 at boot (see its note); h only clears the word
+// while the state is on, and puts the 1 back after.
+extern "C" void lsw_hsio_nowait_set(int on) {
+    uint8_t* base = g_base;
+    if (!base) return;
+    static bool seen = false;
+    if (!seen) { if (PPC_LOAD_U32(0x82FE0E00u) == 0) return; seen = true; }   // not yet set by the boot path: leave it alone
+    PPC_STORE_U32(0x82FE0E00u, on ? 0u : 1u);
+}
 PPC_FUNC(__imp__VdIsHSIOTrainingSucceeded) {
     PPC_FUNC_PROLOGUE();
     // Return 0 (training NOT done) so the init code sets *(0x82FE0E00)=1,

@@ -1690,3 +1690,21 @@ Diagnostics only. `[FENCEWAIT]` by state, for fence waits that wait for the walk
 - the walker's start latency after a hand-off.
 
 States are unchanged.
+
+## Run 50: `0.0.56-log50` docked, 3 November 2026: the game waits for the GPU at every flush
+
+Docked. No fault.
+
+- **`[FENCEWAIT]`, heaviest frames in I with k.** There were 2.7-3.0 waits per frame. Every one was for the newest segment, kicked 0.10-0.13 ms before, with no kick after it. The walker started 0.04-0.05 ms after a hand-off. So the walker is not late: the game waits for what it has just submitted.
+- **FPS.** k gave 22.4 against 25.7 FPS at 1300+ draws, -8.9 % load-matched (90 %: -16.4 to -1.0). k is out.
+- **Fence values step by 2.** `sub_822AE3F0` writes a fence packet and adds 2 to the counter at `dev+10908`. So "put - 2" is the newest fence: the wait means "everything submitted is read".
+- **The waiting caller is `sub_822AEEB0`.** It is the flush, and it waits only when the word at `0x82FE0E00` is set and bit 1 of `dev+10941` is clear. Afterwards it sets bit 1, and the port clears it again at once.
+- **The word is set from `VdIsHSIOTrainingSucceeded`.** `sub_822B9240` stores `!VdIsHSIOTrainingSucceeded()` there once at boot. Besides the flush, only that boot code reads it, to print a warning.
+- **The port's stub returns 0, so training "failed".** Xenia returns 1. On a console whose CPU-GPU link trained, the flush never waits. Here it waits about 3 times per heavy frame, and each time the whole walk lands on the critical path.
+
+## Log 51
+
+- **State h** clears `0x82FE0E00` while it is on, and puts the 1 back after. The flush then behaves as on a console that trained. The game still has its phase, ring-space and other fence waits, which the runtime serves.
+- **The boot stub is unchanged.** Its note says that returning 1 at boot blocked the flush's submission path. That note predates walks at phase, ring and VdSwap waits.
+- **States:** `MAPXSHNLUBI,MAPXSHNLUBIh,MAPXSHNLUBIkh`.
+- **Risk:** something in this runtime may lean on the flush wait. If so, h shows hangs or corrupt frames. VdSwap still waits for the frame's walk, so the walker trails by at most one frame.

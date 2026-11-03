@@ -176,8 +176,15 @@ extern "C" void lsw_bo_check_finish() {
     if (!g_armed.load(std::memory_order_acquire)) return;
     if (FILE* f = OpenReport()) { lsw_bo_check_dump(f, nullptr, 0); std::fclose(f); }
 }
+extern "C" volatile int lsw_nvc0_rt_compress;   // mesa_compress_edits.py
 extern "C" int __wrap_nouveau_bo_new(nouveau_device* d, uint32_t flags, uint32_t align, uint64_t size,
                                       nouveau_bo_config* config, nouveau_bo** out) {
+    // A render target of states Z and J: a big-page mapping, as deko3d gives compressed images. Horizon may otherwise map a compressed kind without compression.
+    if ((lsw_nvc0_rt_compress & 1) && config) {
+        align = 0x20000;
+        size = (size + 0x1FFFF) & ~uint64_t(0x1FFFF);
+        printf("[BOKIND] render target kind 0x%02X, %llu KB, aligned 128 KB\n", unsigned(config->nvc0.memtype), (unsigned long long)(size >> 10));
+    }
     const int rc = __real_nouveau_bo_new(d, flags, align, size, config, out);
     const auto caller = reinterpret_cast<uintptr_t>(__builtin_return_address(0));
     if (!rc && out && *out) Observe([&] { g_ledger.Created(reinterpret_cast<uintptr_t>(*out), reinterpret_cast<uintptr_t>(d), Read(reinterpret_cast<uintptr_t>(*out)), Here(caller)); });

@@ -2307,6 +2307,7 @@ void ab_cycle_tick() {
     lsw_native_mix_set(has('N'));
     lsw_audio_offturn_set(has('U'));
     lsw_spin_real_set(has('L'));
+    g_rt_pool = has('J') ? 3 : has('Z') ? 1 : 0;   // Z, J: compressed render targets (gl_rt.inc)
     lsw_nvc0_cb_dedupe = has('B');   // B: nouveau skips constant buffer binds that change nothing (mesa_cbdedupe_edits.py)
     lsw_shm_age_set(has('E'));
     lsw_quantum_div_set(has('Q') ? 4 : 0);
@@ -2896,7 +2897,7 @@ PresentSrc replay() {
             present = {single_fbo(it->second.t), std::min<uint32_t>(it->second.t.w, kSceneW), std::min<uint32_t>(it->second.t.h, kSceneH)};
             shown = "resolve";
         } else {
-            auto ct = g_rts.find((uint64_t(0) << 40) | (uint64_t(1280) << 16) | uint64_t(kDxgiRGBA8));
+            auto ct = g_rts.find((uint64_t(g_rt_pool) << 56) | (uint64_t(0) << 40) | (uint64_t(1280) << 16) | uint64_t(kDxgiRGBA8));
             if (ct != g_rts.end() && ct->second.t.tex) { present = {single_fbo(ct->second.t), kSceneW, kSceneH}; shown = "RT0"; }
         }
         if (g_num_workers > 0 && !prog_wait_mode()) {   // keep this complete frame for frames held while programs compile

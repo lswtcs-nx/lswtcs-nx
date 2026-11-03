@@ -131,17 +131,31 @@ void msaa_scale(uint32_t surf_info, uint32_t& sx, uint32_t& sy) {
 }
 void clear_color_tex(const HostTex& t, const float* c, const int* rect);
 void clear_depth_tex(const HostTex& t, float z, int stencil, const int* rect);
+// States Z and J compare GPU memory traffic: each draws to its own set of targets, so a state change loses their contents for a frame.
+// 0 as before; 1 compressed depth kinds on a big-page mapping; 3 also compressed 32-bit colour (mesa_compress_edits.py).
+extern "C" volatile int lsw_nvc0_rt_compress;
+extern "C" int lsw_glthread_call(void (*fn)(void*), void* arg);
+uint32_t g_rt_pool = 0;
+extern bool g_glpipe;   // defined with the upload code below
+void rt_compress_job(void* v) { lsw_nvc0_rt_compress = int(reinterpret_cast<uintptr_t>(v)); }
+void rt_compress_set(uint32_t v) {
+    void* arg = reinterpret_cast<void*>(uintptr_t(v));
+    if (g_glpipe) lsw_glthread_call(rt_compress_job, arg);   // in order with the allocation, which may run on Mesa's worker
+    else rt_compress_job(arg);
+}
 Rt* rt_get(bool depth, uint32_t base, uint32_t w, uint32_t fmt) {
     if (w == 0 || w > 8192) return nullptr;
-    const uint64_t key = (uint64_t(depth) << 63) | (uint64_t(base & 0xFFF) << 40) | (uint64_t(w) << 16) | uint64_t(fmt);
+    const uint64_t key = (uint64_t(depth) << 63) | (uint64_t(g_rt_pool) << 56) | (uint64_t(base & 0xFFF) << 40) | (uint64_t(w) << 16) | uint64_t(fmt);
     auto it = g_rts.find(key);
     if (it != g_rts.end()) return it->second.t.tex ? &it->second : nullptr;
     Rt rt;
     rt.depth = depth;
+    if (g_rt_pool) rt_compress_set(g_rt_pool);
     rt.t = host_tex_create(w, kRtH, depth ? uint32_t(kDxgiD32S8) : fmt);
+    if (g_rt_pool) rt_compress_set(0);
     if (depth) clear_depth_tex(rt.t, 1.0f, 0, nullptr);
     else { const float z[4] = {}; clear_color_tex(rt.t, z, nullptr); }
-    printf("[GLRT] new %s RT base=%u %ux%u fmt=%u (total %zu, %llu MB)\n", depth ? "depth" : "color", base, w, kRtH, fmt,
+    printf("[GLRT] new %s RT pool=%u base=%u %ux%u fmt=%u (total %zu, %llu MB)\n", depth ? "depth" : "color", g_rt_pool, base, w, kRtH, fmt,
            g_rts.size() + 1, (unsigned long long)(g_rt_bytes >> 20));
     fflush(stdout);
     return &(g_rts[key] = rt);

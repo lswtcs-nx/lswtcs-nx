@@ -1415,3 +1415,18 @@ Handheld, GPU 307.2 MHz, memory 1331.2 MHz, states `MAPXSHNLU` and `MAPXSHNLUB`,
 **GPU time splits about evenly between clock and memory (estimate).** From 41 ms at 307 and 1331 MHz, and 25.5 ms at 768 and 1600 MHz, with time = core / clock + memory / memory clock: about 20 ms core and 21 ms memory handheld. It assumes both parts scale cleanly, and the two samples differ in pixel queries.
 
 So less memory traffic is the most promising same-quality GPU target. Colour targets are single-sample, kind `0xfe`, uncompressed (`nvc0_mt_choose_storage_type`). Whether depth really gets compression tags on this path is unverified (`PORT_RESEARCH.md`).
+
+## Log 39: `0.0.44-log39`, a test of GPU compression
+
+Not yet run on hardware. Handheld, one pass. It tests whether less memory traffic lowers the GPU's time, with no change meant to the picture.
+
+**What reading the sources shows:**
+- Mesa already requests compressed depth kinds (`nvc0_mt_choose_storage_type`) and allocates them at 4 KB alignment. deko3d rounds compressed images to a big page and asks nvmap for that alignment (`dk_image.cpp`, `dk_memblock.cpp`).
+- So depth may be running uncompressed today, with the kind falling back in Horizon. That is an inference: nvservices is closed, and nvmap's result is not visible from here.
+- 32-bit colour at one sample gets kind `0xfe`, uncompressed. The `0xdb` line is commented out in Mesa as "makes things blurry". deko3d uses the same kind, `NvKind_C32_2CRA`, for these images.
+- No `libdrm_nouveau` change is needed. Its `nvMapCreate` takes the alignment from `nouveau_bo_new`, which this port already wraps.
+- Resolves sample targets through draws, so the 2D engine's compression flag does not come into them. Captures may read compressed targets wrongly.
+
+**States:** `MAPXSHNLUB` as today; `+Z` depth on a 128 KB-aligned mapping; `+ZJ` also `0xdb` for 32-bit colour. Each has its own render targets (`g_rt_pool`, about 170 MB each), so a state change can lose their contents for one frame every 6 s. `[BOKIND]` lists the allocations.
+
+`[WALKWHY]` adds the distance from fence to put. Mostly 1 means the game waits for the segment it just kicked, and the walker thread is out.

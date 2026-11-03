@@ -6314,7 +6314,7 @@ static uint64_t g_walk_last_end = 0, g_walk_gap_ns = 0, g_walk_gap_max = 0;
 // When the ring's write pointer moved first since the last walk: from there to the walk, a walker on its own thread could already have worked.
 static uint64_t g_kicks = 0, g_kick_first = 0, g_kick_wait_ns = 0, g_kick_waits = 0;
 // Fence waits that found work in the ring: the fence was done already (the wait did not need this walk), it was the newest one, or an older one not yet done.
-static uint64_t g_fence_done = 0, g_fence_newest = 0, g_fence_older = 0;
+static uint64_t g_fence_done = 0, g_fence_newest = 0, g_fence_older = 0, g_fence_behind[5];
 extern "C" PPC_FUNC(__imp__sub_822AE048);
 // Strong definition: the kick, which stores the write pointer. Replaces the recompiled weak alias, only to note the time.
 PPC_FUNC(sub_822AE048) {
@@ -6330,6 +6330,8 @@ static void walk_fence_note(uint32_t fence, uint32_t put, uint32_t get) {
     if (!fence || uint32_t(put - fence) > uint32_t(put - get)) ++g_fence_done;
     else if (fence == put) ++g_fence_newest;
     else ++g_fence_older;
+    const uint32_t behind = put - fence;   // put is the next segment's fence, so 1 is the segment just kicked
+    ++g_fence_behind[behind < 4 ? behind : 4];
 }
 static void walk_site_note(int site, uint64_t t0, uint32_t rptr0) {
     const uint64_t t1 = gp_now();
@@ -6364,6 +6366,8 @@ extern "C" void lsw_walk_sites_report(const char* state) {
     snprintf(b + k, sizeof b - k, " between walks %.1f ms in %llu, longest %.1f ms | kicks %llu, first kick to walk %.1f ms over %llu | fence waits with work: done already %llu, newest %llu, older %llu",
              (g_walk_gap_ns - last_gap) / 1e6, (unsigned long long)walks, g_walk_gap_max / 1e6, (unsigned long long)(g_kicks - l_kicks), (g_kick_wait_ns - l_kw) / 1e6, (unsigned long long)(g_kick_waits - l_kwn),
              (unsigned long long)(g_fence_done - l_fd), (unsigned long long)(g_fence_newest - l_fn), (unsigned long long)(g_fence_older - l_fo));
+    printf("[WALKWHY] state %s, fence waits with work, by distance from put (0, 1, 2, 3, 4+): %llu %llu %llu %llu %llu\n", state, (unsigned long long)g_fence_behind[0], (unsigned long long)g_fence_behind[1],
+           (unsigned long long)g_fence_behind[2], (unsigned long long)g_fence_behind[3], (unsigned long long)g_fence_behind[4]);
     last_gap = g_walk_gap_ns; g_walk_gap_max = 0;
     l_kicks = g_kicks; l_kw = g_kick_wait_ns; l_kwn = g_kick_waits; l_fd = g_fence_done; l_fn = g_fence_newest; l_fo = g_fence_older;
     puts(b);

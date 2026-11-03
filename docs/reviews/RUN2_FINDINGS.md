@@ -1827,3 +1827,43 @@ So resolve copies are the largest GPU item on our side for handheld. They come f
   - Two of them are single full-screen draws: files `91834C0972EDD8A1` at 1.45 ms and `283E052419BCC461` at 1.29 ms per frame. These are post passes, and in handheld they should cost about 2.5 times as much.
   - Their GLSL is on the SD card (`sdmc:/lswtcs/glprogs2/<file>.glsl3`). The local copy in `private/glprogs2` predates the current translator and does not have them.
   - Reading them comes before any translator change for handheld.
+
+## Run 54: `0.0.60-log54`, docked then handheld, 3 November 2026: the scheduling work holds; handheld needs the early depth test
+
+Two sessions. The tester stayed in the heavy area at the start of `Gungan_B` for 126 s docked and 82 s handheld. No fault or hang. The `glprogs2` folder did not come with the logs.
+
+**Docked, load-matched, 1300+ draws:**
+- Ikhwr against I: +21.7 % (90 %: +14.4 to +33.3). Pooled with run 53: +15.5 % (+7.4 to +24.1). The scheduling work since run 46 is now a measured gain.
+- f against no f: +1.5 % (-4.7 to +8.8); pooled with run 53, +2.2 % (-4.1 to +10.0).
+- G against Ikhwr: +1.7 % (-4.0 to +7.2).
+- FPS by state: I 24.5, Ikhwr 29.3, Ikhwrf 30.2, IkhwrG 30.7.
+
+**Guest calls per heavy docked frame:** about 155 k, with 23-27 ms of main-thread CPU, so about 160 ns of guest code per call. The prologue and call overhead is a small part of that. Inlining or LTO could reach perhaps 5-10 % of the main thread, which is not the next step.
+
+**Handheld (GPU 307 MHz), load-matched, 1300+ draws:**
+- k, h, w and r together against I: +8.5 % (+0.3 to +17.5).
+- G: -6.5 % (-15.6 to +5.4). G is out.
+- FPS by state: I 20.0, Ikhwr 21.3, Ikhwrf 22.6, IkhwrG 20.2.
+
+**Handheld GPU bench (7 benches, plain frame median 46.5 ms):**
+
+| Change | Saving |
+| --- | --- |
+| Early depth test forced | -7.2 ms (-17 %) |
+| All resolve copies off | -4.4 ms (-9.4 %) |
+| Full-size resolve copies off | -3.1 ms |
+| Reduced-size resolve copies off | -1.1 ms |
+| Pixels off | -28.6 ms (-62 %) |
+
+Docked, the same forced early test was -4.2 ms of 23.0.
+
+**Why the early test matters so much:** `[EARLYZ]` shows the alpha-test code in nearly every world draw. The alpha function is GREATER (1.89 M draws) or GEQUAL (0.78 M), never ALWAYS, and 2.56 M of those draws test and write depth. A shader that can discard while depth is written gets its depth test after shading on nouveau. So hidden pixels are shaded in full. State F's safe subset finds almost nothing to take.
+
+**The full-size copies cost more than their bytes.** About three a frame, roughly one 1280x704 screen in all, take 3.1 ms handheld, several times the memory traffic they need.
+
+## Log 55 (for handheld)
+
+- **State z:** the bench's forced early depth test, shown. It is not exact: a pixel the alpha test discards still writes depth, so something drawn later behind a cut-out (leaves, grates, a fading object) can disappear. It is a visual test for the tester, and the author decides on any use.
+- **`[EARLYZ]`** adds a histogram of the alpha test references (0, up to 0.25, 0.5, 0.75, above). If they are 0, the inexact case is only fully transparent texels, which also points at an exact route.
+- **New bench variant:** full-size resolve copies over a quarter of their area. If that still costs most of the 3.1 ms, the cost is the wait around each copy and not the copy.
+- **States:** `MAPXSHNLUBIkhwr,MAPXSHNLUBIkhwrz,MAPXSHNLUBIkhwrf,MAPXSHNLUBIkhwrfz`. I is no longer a state. G is out, and f stays in a 2x2 design with z.

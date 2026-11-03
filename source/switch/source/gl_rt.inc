@@ -444,7 +444,8 @@ void do_resolve(const LswGpuDrawRec& r, bool copy = true, bool clears = true) {
         g_dest_first.emplace(r.rs_dest, g_replays);
         Rt* src = depth_src ? rt_depth(r.surf_info, r.depth_info) : rt_color(r.surf_info, r.color_info);
         if (src) {
-            const int32_t w = x1 - x0, h = y1 - y0;
+            int32_t w = x1 - x0, h = y1 - y0;
+            if (g_bench_copy_quarter && r.rs_dest_pitch >= 1024) { w = std::max(1, w / 2); h = std::max(1, h / 2); }   // bench only
             uint32_t dw = std::max<uint32_t>(r.rs_dest_pitch, uint32_t(r.rs_dest_x + w));
             uint32_t dh = std::max<uint32_t>(r.rs_dest_height, uint32_t(r.rs_dest_y + h));
             dw = std::min<uint32_t>(dw, 8192); dh = std::min<uint32_t>(dh, 8192);

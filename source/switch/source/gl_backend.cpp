@@ -784,6 +784,13 @@ GLuint program(const LswGlShader* vs, const LswGlShader* ps, const LswGlShader* 
 // set to always pass and whose alpha to coverage is off, where that code never discards. Testing first then changes nothing in the
 // picture and skips shading pixels that fail the depth test.
 bool g_early_z = false, g_early_force = false;   // force: GPUBENCH only, every draw with the alpha-test code (an upper bound, never shown)
+// A/B state z (log55): the bench's forced early depth test, shown, as a visual test. Run 54: nearly every world draw has the alpha test
+// (GREATER or GEQUAL, never ALWAYS) and writes depth, so nouveau tests depth after the pixel shader for all of them; forcing the early
+// test was -17 % of GPU time in both modes (handheld -7.2 ms of 46.5). It is not exact: a pixel the alpha test discards still writes
+// depth, so something drawn later behind a cut-out (leaves, grates, fading objects) can go missing. The tester looks; the author decides.
+bool g_early_force_ab = false;
+// [EARLYZ] alpha test references of those draws (system constant alpha_test_reference): 0, up to 0.25, 0.5, 0.75, above.
+uint64_t g_alpha_ref_hist[5];
 uint64_t g_early_eligible = 0, g_early_used = 0, g_early_forced = 0;
 uint64_t g_alpha_hist[8][2], g_alpha_depth[8];   // depth: by RB_DEPTHCONTROL bits 0-2 (stencil, z test, z write)   // draws whose program has the alpha-test code, by alpha function (7 = always) and alpha to coverage
 std::unordered_set<GLuint> g_early_progs;   // the early-test programs, for the [GLGPU] program lines
@@ -1003,6 +1010,9 @@ bool g_bench_noresolve = false, g_bench_nocopy = false;
 // log54 bench: resolve copies off by destination size, 1 = full size (1024 pixels wide or more), 2 = reduced (narrower). Run 53's bench:
 // all resolve copies were 3.2 ms of a 20.8 ms docked frame; this says which group a cheaper resolve path should go after first.
 int g_bench_nocopy_size = 0;
+// log55 bench: full-size resolve copies over half their width and height. Run 54, handheld: those copies were 3.1 ms for about three a
+// frame, several times what their bytes need; if a quarter of the area still costs most of it, the cost is the wait around each copy.
+bool g_bench_copy_quarter = false;
 bool bench_skips_copy(const LswGpuDrawRec& r) {
     if (g_bench_nocopy) return true;
     if (!g_bench_nocopy_size) return false;
@@ -2354,6 +2364,8 @@ void ab_cycle_tick() {
             for (int a = 0; a < 8; ++a) hk += snprintf(hb + hk, sizeof hb - hk, " %d:%llu/%llu", a, (unsigned long long)g_alpha_hist[a][0], (unsigned long long)g_alpha_hist[a][1]);
             hk += snprintf(hb + hk, sizeof hb - hk, " | by depth control (stencil, z test, z write bits):");
             for (int a = 0; a < 8; ++a) hk += snprintf(hb + hk, sizeof hb - hk, " %d:%llu", a, (unsigned long long)g_alpha_depth[a]);
+            hk += snprintf(hb + hk, sizeof hb - hk, " | by reference (0, <=0.25, <=0.5, <=0.75, more):");
+            for (int a = 0; a < 5; ++a) hk += snprintf(hb + hk, sizeof hb - hk, " %llu", (unsigned long long)g_alpha_ref_hist[a]);
             puts(hb);
         }
         l_ee = g_early_eligible; l_eu = g_early_used;
@@ -2387,6 +2399,7 @@ void ab_cycle_tick() {
     lsw_spin_real_set(has('L'));
     g_rt_pool = has('J') ? 3 : has('Z') ? 1 : 0;   // Z, J: compressed render targets (gl_rt.inc)
     g_early_z = has('F');   // F: early depth tests where the alpha test cannot discard, or depth and stencil are not written (program_early)
+    g_early_force_ab = has('z');   // z: early depth tests for every draw with the alpha-test code (not exact; see g_early_force_ab)
     lsw_async_walk_set(has('I'));   // I: the frame's ring walk on its own thread (kernel_stubs.cpp)
     lsw_kick_walk_set(has('k'));    // k (lower case; every capital is taken): with I, the walker starts at each kick (async_walk_kick)
     lsw_hsio_nowait_set(has('h'));  // h: flushes do not wait for the GPU, as on a console whose CPU-GPU link trained (lsw_hsio_nowait_set)
@@ -2817,8 +2830,12 @@ PresentSrc replay() {
                 const uint32_t* sys = reinterpret_cast<const uint32_t*>(f.arena.data() + r.cb_sys_off);
                 const uint32_t func = (sys[0] >> 11) & 7;
                 ++g_alpha_hist[func][sys[44] != 0];
+                {
+                    float ref; memcpy(&ref, &sys[41], sizeof ref);
+                    ++g_alpha_ref_hist[ref <= 0.0f ? 0 : ref <= 0.25f ? 1 : ref <= 0.5f ? 2 : ref <= 0.75f ? 3 : 4];
+                }
                 ++g_alpha_depth[r.depthcontrol & 7];
-                if (g_early_force) { const GLuint p = program_early(vs, ps, gs, prog); if (p != prog) ++g_early_forced; prog = p; }
+                if (g_early_force || g_early_force_ab) { const GLuint p = program_early(vs, ps, gs, prog); if (p != prog) ++g_early_forced; prog = p; }
                 // State F: the alpha test cannot discard, or (run 42: every such draw has the test on) the draw writes neither depth nor stencil
                 // but tests depth: then a discard after an early test changes nothing either.
                 else if (g_early_z && ((func == 7 && sys[44] == 0) || (r.depthcontrol & 7) == 2)) prog = program_early(vs, ps, gs, prog);
@@ -3246,6 +3263,7 @@ PresentSrc gpu_bench(const PresentSrc& shown) {
         {"resolve copies off", 0, false, false, false},
         {"full-size resolve copies off", 0, false, false, false},
         {"reduced-size resolve copies off", 0, false, false, false},
+        {"full-size resolve copies at a quarter area", 0, false, false, false},
         {"pixels off", 1, false, false, false},
         {"pixels+verts off", 2, false, false, false},
         {"pixels+verts+UBO off", 3, false, false, false},
@@ -3265,6 +3283,7 @@ PresentSrc gpu_bench(const PresentSrc& shown) {
         g_early_force = !strcmp(v.label, "early-z forced");
         g_bench_nocopy = !strcmp(v.label, "resolve copies off");
         g_bench_nocopy_size = !strcmp(v.label, "full-size resolve copies off") ? 1 : !strcmp(v.label, "reduced-size resolve copies off") ? 2 : 0;
+        g_bench_copy_quarter = !strcmp(v.label, "full-size resolve copies at a quarter area");
         const uint64_t forced0 = g_early_forced;
         last = replay();
         if (g_early_force) printf("[GPUBENCH] early-z forced: %llu draws with the variant\n", (unsigned long long)(g_early_forced - forced0));
@@ -3272,7 +3291,7 @@ PresentSrc gpu_bench(const PresentSrc& shown) {
         arena_fence();
         gpu_prof_finish();
     }
-    g_bench_kind = -1; g_bench_label = nullptr; g_bench_noresolve = false; g_bench_nocopy = false; g_bench_nocopy_size = 0;
+    g_bench_kind = -1; g_bench_label = nullptr; g_bench_noresolve = false; g_bench_nocopy = false; g_bench_nocopy_size = 0; g_bench_copy_quarter = false;
     g_early_z = early0;
     lsw_glthread_call(bench_dedupe_job, reinterpret_cast<void*>(uintptr_t(dedupe0)));
     g_replay_same = false;

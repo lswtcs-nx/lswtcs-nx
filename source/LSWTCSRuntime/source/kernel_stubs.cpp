@@ -451,6 +451,8 @@ static void pm4_walk_site(void* ctxp, int site);
 static bool walk_fence_note(uint32_t fence, uint32_t put, uint32_t get);
 static void walk_fence_after(uint32_t fence, uint32_t put, uint32_t get);
 static bool async_walk_try(uint32_t fence, uint32_t put);
+static bool async_walk_running();
+static uint64_t g_aw_phase_skips = 0;
 static void async_walk_join(int site);
 // The D3D device seen at fence waits, and its put (next segment fence) when the last walk with work ended: a fence below it had its
 // segment in the ring then, so that walk already read it.
@@ -517,6 +519,13 @@ extern "C" void lswtcs_ad6a0_phase(uint8_t* base, uint32_t dev, uint32_t phase, 
     static int on = -1;
     if (on < 0) { const char* e = getenv("LSWTCS_GETPHASE"); on = (!e || e[0] != '0') ? 1 : 0; }
     if (!on) return;
+    // State I: the guest returns at once when the requested phase is the current one (sub_822AD6A0: (phase - cur) & 3 == 0): its circular
+    // buffer is still in the lap our last completed walk reported. The memory it reuses then belongs to commands walked before that report,
+    // not to the walk running now, so do not wait for it here (run 43: nearly every hand-off was waited for at this point).
+    if (async_walk_running()) {
+        const uint32_t mirror_now = PPC_LOAD_U32(dev + 10896);
+        if (mirror_now >= 0x80000000u && ((phase - PPC_LOAD_U32(mirror_now + 4)) & 3) == 0) { ++g_aw_phase_skips; return; }
+    }
     pm4_walk_site(ctxp, WALK_PHASE);   // GPU-phase wait: execute what was submitted before reporting the phase reached
     uint32_t mirror = PPC_LOAD_U32(dev + 10896);
     // The mirror block lives in GPU physical memory (0xA0xxxxxx, e.g. 0xA0214000)
@@ -6412,6 +6421,7 @@ static void async_walker_body(int id) {
         g_aw_busy = false;
     }
 }
+static bool async_walk_running() { return g_aw_busy.load() || g_aw_pending.load(); }
 static void async_walk_join(int site) {
     if (t_async_walker || (!g_aw_busy.load() && !g_aw_pending.load())) return;
     const uint64_t t0 = gp_now();
@@ -6465,10 +6475,10 @@ extern "C" void lsw_walk_sites_report(const char* state) {
              (unsigned long long)(g_fence_done - l_fd), (unsigned long long)(g_fence_newest - l_fn), (unsigned long long)(g_fence_older - l_fo));
     static uint64_t l_isr = 0, l_isr_ns = 0, l_awk = 0, l_aww = 0, l_awns = 0, l_awj[WALK_SITES + 1], l_awjn[WALK_SITES + 1];
     printf("[ASYNCWALK] state %s: handed to the walker %llu, walks there %llu, %.1f ms | waits for it at fence %llu %.1f ms, ring %llu %.1f ms, phase %llu %.1f ms, "
-           "swap %llu %.1f ms, VdSwap %llu %.1f ms | interrupts dropped %llu\n", state, (unsigned long long)(g_aw_kicks - l_awk), (unsigned long long)(g_aw_walks - l_aww),
+           "swap %llu %.1f ms, VdSwap %llu %.1f ms | phase waits not needing it %llu | interrupts dropped %llu\n", state, (unsigned long long)(g_aw_kicks - l_awk), (unsigned long long)(g_aw_walks - l_aww),
            (g_aw_walk_ns - l_awns) / 1e6, (unsigned long long)(g_aw_joins[0] - l_awj[0]), (g_aw_join_ns[0] - l_awjn[0]) / 1e6, (unsigned long long)(g_aw_joins[1] - l_awj[1]),
            (g_aw_join_ns[1] - l_awjn[1]) / 1e6, (unsigned long long)(g_aw_joins[2] - l_awj[2]), (g_aw_join_ns[2] - l_awjn[2]) / 1e6, (unsigned long long)(g_aw_joins[3] - l_awj[3]),
-           (g_aw_join_ns[3] - l_awjn[3]) / 1e6, (unsigned long long)(g_aw_joins[4] - l_awj[4]), (g_aw_join_ns[4] - l_awjn[4]) / 1e6, (unsigned long long)g_aw_isr_dropped);
+           (g_aw_join_ns[3] - l_awjn[3]) / 1e6, (unsigned long long)(g_aw_joins[4] - l_awj[4]), (g_aw_join_ns[4] - l_awjn[4]) / 1e6, (unsigned long long)g_aw_phase_skips, (unsigned long long)g_aw_isr_dropped);
     l_awk = g_aw_kicks; l_aww = g_aw_walks; l_awns = g_aw_walk_ns;
     for (int i = 0; i <= WALK_SITES; ++i) { l_awj[i] = g_aw_joins[i]; l_awjn[i] = g_aw_join_ns[i]; }
     printf("[WALKWHY] state %s: guest interrupt callbacks from walks %llu, %.1f ms\n", state, (unsigned long long)(g_isr_fired - l_isr), (g_isr_ns - l_isr_ns) / 1e6);

@@ -1516,3 +1516,29 @@ Docked, states `MAPXSHNLUB` and `MAPXSHNLUBI`. Not yet run on hardware.
 - The thread holds the turn for the ring and leaves it for each IB of 4096 dwords or more, as W does, on core 1 (`LSWTCS_WALKOFF_CORE=1`). A guest interrupt on that thread would be dropped and counted; run 42 had none.
 - `[ASYNCWALK]`: hand-offs, the walker's time, and waits for it by site.
 - **State F is safe now for draws that test depth but write neither depth nor stencil.** A discard after an early test changes nothing for them. `[EARLYZ]` adds their count by depth control; the bench's "early-z on" measures the gain.
+
+## Run 43: `0.0.49-log43` handheld, 3 November 2026: state I runs, but the phase wait undoes it
+
+Handheld (the tester could not dock). States `MAPXSHNLUB` and `MAPXSHNLUBI`. The whole pass played through, with no interrupt dropped on the walker.
+
+- **The hand-off works.** Per 6 s state in I, 125-350 walks went to the walker thread, and it walked each one. In the heaviest stretch that was 191 walks in 1699 ms, about 8.9 ms each.
+- **There was almost no overlap.** Nearly every hand-off was waited for at the next phase wait, for about as long as the walk took: 192 waits, 1685 ms. No wait happened at a fence, ring wait or VdSwap. The phase hook (`lswtcs_ad6a0_phase`) runs at the entry of `sub_822AD6A0`, before the guest's own check, so it waited even when the guest would have returned at once.
+- **What the phase wait guards.** `sub_822ADD38` allocates from a circular buffer. The phase wait checks the buffer's lap against the GPU's. When the requested phase is the current one, `(phase - cur) & 3 == 0`, the guest returns: the memory it reuses was released at our last completed walk, not by the walk now running.
+- **log44 skips the wait in that case.** It still waits when the lap has changed. `[ASYNCWALK]` counts the skips.
+- **FPS:** I +1.3 % at 1300+ draws load-matched (90 %: -9.4 to +13.5). Handheld, the GPU sets the pace, and the walk did not overlap anyway.
+
+**Early depth tests are closed.** Draws with the alpha-test code, by depth control:
+
+| Depth control | Draws |
+| --- | --- |
+| Test and write (6) | 2.41 M |
+| Test without write (2) | 0.13 M |
+| No depth (0) | 4.5 k |
+
+The safe rule therefore covers about 5 % of them, and the bench's "early-z on" moved -0.46 ms (median; range -5.3 to +3.6). Forced early tests saved 8.1 ms (median), but they would let alpha-tested pixels write depth.
+
+**Bench:**
+- Resolves off: -5.7 ms (12.8 %).
+- Copies off: -3.8 ms. One bench was out of line.
+- Pixels off: -27.6 ms, so pixel work is about two thirds of the frame.
+- The costliest programs now carry their GLSL file in `[GLGPU]`. The second costliest, `CA8722BD02CAB82B`, has 576 lines of straight-line code with six texture reads and no loops. Nothing there is an obvious waste.

@@ -1304,3 +1304,40 @@ Same behaviour as log34 outside sampled frames: profile `MAPXSHNLU`, no change t
 - **`[GLPASS]`**, in frames already sampled by `LSWTCS_GLGPUPROF` and in captures: GPU ms, draws, vertices and pixels per render pass, resolves with their cost and destination. First 40 frames of 1000+ draws, 8 lighter ones.
 - **`[GLINV]`** (`LSWTCS_GLINV=1`), running totals from every 16th replay, printed every 1600: targets and formats, EDRAM reuse (old contents loaded, returns to a target, one base with two formats, colour and depth at one base), resolves by format and clear, textures by format and source, primitives, state counts, largest frame and memory.
 - Not included: a replayable frame dump on Switch. The capture writer is desktop only (`lsw_frame_capture_writer.inc`), so a same-frame Mesa and Deko comparison still needs that port.
+
+## Run 35: `0.0.41-log35`, 2 November 2026: the shimmer is gone, the main pass is not limited by fill
+
+One state (`MAPXSHNLU`), handheld, GPU 307.2 MHz, memory 1331.2 MHz. No record of any earlier run being docked.
+
+**Picture:** the tester reports the shimmer gone, so state E (age-based page skipping) is out for good. One pass, without E; E was not retested.
+
+**FPS by draws**, frames over 400 ms dropped (12, mostly captures):
+
+| Draws | Frames | FPS | Median ms | p95 ms |
+| --- | --- | --- | --- | --- |
+| 0-499 | 5661 | 44.4 | 21.3 | 34.9 |
+| 500-999 | 1802 | 29.1 | 33.1 | 44.4 |
+| 1000-1299 | 590 | 26.3 | 30.5 | 72.9 |
+| 1300-1666 | 337 | 22.7 | 34.8 | 74.3 |
+| 1667+ | 928 | 20.3 | 42.2 | 77.2 |
+
+**GPU in heavy frames** (`[GLPASS]`, 1000+ draws, 21 frames; 4 captures and 3 frames of 90 ms or more left out): 31 passes, 1830 draws, 312 000 vertices, 10.9 Mpx, about 41 ms.
+
+| Target | Draws | Vertices | Draw ms | Mpx | Resolves | Resolve ms |
+| --- | --- | --- | --- | --- | --- | --- |
+| Main scene, 1280 2x MSAA, two colour targets | 1612 | 200 636 | 22.0 | 1.64 | 0 | 0 |
+| 640 wide, depth 1838 | 3 | 7 920 | 3.5 | 0.69 | 14 | 2.0 |
+| 1280, depth 1864 | 60 | 12 768 | 4.6 | 1.21 | 2 | 0.3 |
+| Main scene, one colour target | 79 | 1 074 | 2.1 | 0.12 | 3 | 1.5 |
+| 1280, depth 1838 | 25 | 2 664 | 0.8 | 0.90 | 8 | 1.6 |
+
+- **The main pass is more than half the GPU's time, with the screen covered about once.** 1.64 Mpx is less than one layer of 1280x720 at 2x. One pixel shader, `D669ECCA44168448`, takes 7.5 ms over 1021 draws and about 50 samples each, so fill does not explain that pass.
+- Fit over passes: 6.4 us per draw, 36 us per 1000 vertices, 0.58 ms per Mpx, 0.24 ms per pass (shares 29, 33, 17, 20 %). R2 is 0.55: an indication only.
+- By draw kind: plain 17.1 ms, quads 9.0 (128 draws), rects 7.0 (13), resolves 6.1 (30), points 0.8, present 1.1.
+- 59 % of resolves (4914 of 8375) only clear; their copy is already skipped.
+
+**Inventory for a renderer** (`[GLINV]`, 500 frames, 295 514 draws): 149 programs, 10 geometry shaders, 4 blend and 8 depth states. Two colour targets in 76 % of draws. Stencil in 0.5 %, polygon offset never, 32-bit indices never, 18 % without indices. Up to 9 textures per draw, DXT1, DXT3 and DXT5 mostly. Same EDRAM base at another pitch 9.7 times a frame, old contents loaded 1.6 times, return to a target 5.7 times. Colour and depth never share a base. 171 MB of targets, 182 MB of textures. The memory figure in the log is useless: it reports the whole heap. About 3 % of texture binds are cube units given a 2D fetch or nothing, and get a dummy; no visible effect known.
+
+**Shaders:** all 509 distinct sources (110 vertex, 389 pixel, 10 geometry) compile with deko3d's `uam` once samplers are numbered per stage, 2.65 MB in total. This is offline: it says nothing about speed.
+
+**Decision:** Deko stays undecided. Pixel and vertex work is the same shaders from a related compiler, so only draw and state cost, compression and Zcull could differ, and those are not separated yet. Next is run 36, profile only and docked: the omission split shows what each part costs, and the docked clocks show how much FPS the GPU holds back.

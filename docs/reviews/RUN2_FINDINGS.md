@@ -2048,3 +2048,27 @@ TGSI stays the default. The same NRO runs both sessions:
 `private/session-tools/run_pair.py` compares two sessions load-matched. Runs 58 and 59 in the same state differed by +0.1 % (90 %: -5.2 to +5.5), so only a difference above about 5 % will show.
 
 The first NIR boot misses Mesa's disk cache, so the 698 saved programs compile again; with TGSI they take about 95 ms each with the cache.
+
+## Run 60: `0.0.66-log60` handheld, TGSI then NIR, 3 November 2026: NIR is out
+
+Two sessions on the same NRO.
+
+**Session 1 (TGSI, 102 s in the heavy area):**
+- d was -3.1 % load-matched (90 %: -10.1 to +4.1), 24.2 against 24.8 FPS.
+- In the bench, turning d off cost 1.8 ms (median; range -4.8 to +5.4).
+- d stays open.
+
+**Session 2 (`NV50_PROG_USE_NIR=1`, 62 s in the heavy area):**
+- **What the tester saw:** small shadow errors and darker lighting.
+- **Speed:** load-matched against session 1, -21.2 % in the base state (90 %: -26.2 to -16.3; 19.4 against 24.6 FPS) and -18.4 % in d.
+- **Compiling:** NIR compiles cost about 540 ms of worker time per program against about 95 ms with TGSI (with its disk cache). 337 of 862 boot-queued programs were still queued when the session ended. Even so, nearly every heavy-area draw used its specialised variant, so most of the slowdown is not missing programs.
+- **The crash on leaving the level:** a compile worker linking a program (`st_link_nir` → `nvc0_program_translate` → `nv50_ir::Function::convertToSSA` → `RenamePass::search` → `LValue::LValue`), a null access at 0x20.
+- **NIR is out.** The Mesa edits are reverted in the tree and `mesa_nir_full_edits.py` is no longer applied by `tools/build_mesa.sh`; the script stays with that note. `libnir` is no longer linked, and the NRO is back to 115 MB with no NIR code.
+
+**What makes ZCULL reachable:** libnx has `nvGpuChannelZcullBind`, `nvGpuGetZcullCtxSize` and `nvGpuGetZcullInfo`, and deko3d enables ZCULL by default. See CPU_ROADMAP.md, "Zoom out after run 60".
+
+## Log 61
+
+- **The build is back to TGSI only.** States: `MAPXSHNLUBIkhwreg,MAPXSHNLUBIkhwregd` (d still open).
+- **New bench variant, "pixels+verts+UBO+tex+state off":** what is left is the per-draw cost, the resolves and present.
+- **The next real step is ZCULL** (roadmap item 1). It needs reading deko3d before a build.

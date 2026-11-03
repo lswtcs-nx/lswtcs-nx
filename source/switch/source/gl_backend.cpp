@@ -3522,6 +3522,7 @@ PresentSrc gpu_bench(const PresentSrc& shown) {
         {"pixels+verts off", 2, false, false, false},
         {"pixels+verts+UBO off", 3, false, false, false},
         {"pixels+verts+UBO+tex off", 4, false, false, false},
+        {"pixels+verts+UBO+tex+state off", 5, false, false, false},   // log61: what is left is per-draw cost, resolves and present
         {"plain again", 0, false, false, false},
     };
     const uint64_t replay_id = g_replays;

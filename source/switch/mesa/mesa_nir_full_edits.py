@@ -3,7 +3,10 @@ really selects nouveau's NIR front end. devkitPro's patch drops that path with `
 state tracker and in nvc0; with them in place the variable changed only nouveau_screen.c and shaders stayed on TGSI (checked on the
 log60 ELF: no NIR code linked at all). Here each such guard whose block is about NIR becomes `#if 1`, which keeps the non-Switch
 branch and drops any `#else`. Guards about the draw module, glthread, SPIR-V and the rest stay. Default stays TGSI.
-Applied after mesa_nir_edits.py. Usage: python mesa_nir_full_edits.py <mesa-src-dir>"""
+NOT APPLIED (tools/build_mesa.sh): run 60's NIR session drew wrong shadows and darker light, ran 21 % slower (load-matched, 90 %
+-26 to -16) and crashed in nv50_ir's SSA pass compiling a vertex shader. Using it again also needs libnir linked: libEGL.a does not
+merge it, meson builds it as a thin archive, and its SPIR-V objects are named ".._spirv_*" (see git history of CMakeLists.txt).
+Usage: python mesa_nir_full_edits.py <mesa-src-dir>"""
 import os, re, sys
 root = sys.argv[1]
 MARK = '#if 1 /* LSWTCS mesa_nir_full_edits.py: NIR path kept on the Switch */'

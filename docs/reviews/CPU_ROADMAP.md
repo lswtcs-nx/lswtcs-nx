@@ -255,3 +255,62 @@ Next, in order:
 - If neither, the main thread's own guest code is the wall. Then the routes are generated-code changes (LTO, the quantum counter, plain memory). Those need two builds and a cross-run comparison.
 
 **Handheld:** the clock is the lever, and it is not ours. On our side the next item is resolves drawn straight into their destination, at most part of 5.5 ms.
+
+## Zoom out after run 60 (3 November 2026)
+
+The measurements below are from heavy frames (1300+ draws, the start of `Gungan_B`) at stock clocks.
+
+| | Docked | Handheld |
+| --- | --- | --- |
+| FPS, before | 24.4 (run 46, no I) | 20.0 (run 54, I only) |
+| FPS, now | 29-30 (run 54, I k h w r) | 24.8 (run 60, plus e g) |
+| Limit | Main guest thread on core 0: about 24 ms of CPU and 3 ms of waits | GPU: 36-40 ms per frame |
+
+**Kept, with evidence:**
+- **Docked:** I, k, h, w, r. Ikhwr against I is +15.5 % over runs 53-54 (90 %: +7.4 to +24.1).
+- **Handheld:** e is +10.4 % (+0.9 to +20.5), and g is exact but small. On handheld, k, h, w and r together are +8.5 % (+0.3 to +17.5).
+- **Out:**
+  - z broke transparency.
+  - p (depth pre-pass): -5.6 %.
+  - G, f and K: no gain.
+  - NIR: wrong shadows, darker light, -21 %, and a crash in `nv50_ir`.
+- **Open:** d. It was -3.1 % in FPS (-10.1 to +4.1), but the bench showed 1.8 ms saved.
+
+**The handheld GPU frame (run 60 bench, plain frame median 36.4 ms):**
+- **Pixel shaders' own work, about 17 ms.**
+  - About three quarters is arithmetic and a quarter texture memory. Filling (raster, late depth, colour writes) costs next to nothing.
+  - Much of it is hidden layers shaded in full. Every world draw has the alpha test (references about 0.5), so nouveau tests depth after the shader. The forced early test was -20 % but wrong.
+- **Resolves, about 5 ms.** The copies are about 4 ms, and about 2 ms of those could become texture hand-overs.
+- **Vertices:** 2-3 ms.
+- **The rest, about 10 ms:** per-draw cost, resolves and present. log61's bench adds a state-off variant to size the per-draw part.
+
+**Docked:** guest code is about 85 % of the main thread. At about 155 k guest calls per frame and 160 ns each, inlining or LTO could reach 5-10 % at most.
+
+### Plan, in order
+
+1. **ZCULL in nouveau, for handheld.** It is exact and the largest item within reach.
+   - **Why it fits:** the GPU's coarse depth culling works with shaders that discard.
+   - **This Mesa:** it is off (`nvc0_validate_zcull` under `#if 0`, `ZCULL_REGION` deactivated at screen init).
+   - **The tools exist:** libnx has `nvGpuChannelZcullBind`, `nvGpuGetZcullCtxSize` and `nvGpuGetZcullInfo`, and deko3d turns ZCULL on by default. deko3d's code is a working reference on this GPU (ZLIB licence: take its technique and register sequence, write our own code).
+   - **Steps:**
+     - read deko3d's ZCULL setup;
+     - bind a ZCULL context buffer on Mesa's GPU channel;
+     - program ZCULL storage and region for the depth target in nvc0, invalidating on depth clears and target changes;
+     - an A/B state plus a bench variant, with a pixel comparison as in state V.
+   - **Risk:** GPU faults while it is misprogrammed. It will take several rounds.
+   - **Reach:** part of the forced early test's 20 %.
+2. **Resolve texture hand-over (about 2 ms, 5 %).** Render targets have one fixed height, so a destination that takes the target's texture needs a per-fetch coordinate scale (through the fetch fold) and exact edges under clamping. Alternatively, render targets could be sized to their resolve.
+3. **The full-screen post passes (about 3-5 ms in two or three passes).** Measure a hand-cleaned version of the costliest pass in the bench first, and change the translator's control-flow output only if that pays.
+4. **Docked, generated code:** inlining or LTO on the hot units, compared over two sessions with `private/session-tools/run_pair.py`. Runs 58 and 59 in the same state differed by +0.1 % (90 %: -5.2 to +5.5).
+5. **Settle d** in a run where nothing else changes.
+
+### The author's decisions (the largest levers, not ours)
+
+- **Handheld render resolution.** Pixels are about 60 % of the handheld GPU frame.
+- **Clocks:** handheld GPU 307 MHz against 384 or 460, and docked CPU.
+- **The fourth core.** It needs a launch from a title whose NPDM allows core 3, and it would relieve the other threads, not the main one.
+- **A Deko3D backend.** That is the author's later priority. It would remove Mesa's CPU cost (render thread and Mesa worker, about 20 ms per docked frame on cores 1-2) and bring ZCULL natively.
+- **Making the measured states defaults:**
+  - Older letters M A P X S H N L U B.
+  - Newer letters I k h w r e g.
+  - **h needs the author's review:** it makes the game behave as on a console whose CPU-GPU link trained, as Xenia's stub reports.

@@ -1772,3 +1772,49 @@ Neither k with h nor w has an interval clear of 0 over both runs. The mechanism 
 - **State r:** the ring-space wait ends once the walker's position (published after each ring packet, so after its IB) has left the window. The hook then stores that position as the read pointer, as the CP would. It falls back to the old path if the walker stops first or the ring size does not match. `[ASYNCWALK]` counts the releases and the fallbacks.
 - **State f:** the off-turn walk may run on core 1 or core 2 (mask 6, `lsw_offcore_begin_mask`), so the kernel puts it where there is time.
 - **States:** `MAPXSHNLUBI,MAPXSHNLUBIkhw,MAPXSHNLUBIkhwr,MAPXSHNLUBIkhwrf`. I stays as the control.
+
+## Run 53: `0.0.59-log53` docked, 3 November 2026: r removes the ring-space wait
+
+Docked. No fault and no hang. 15 visits at 1300+ draws, 78 s.
+
+**FPS at 1300+ draws:**
+
+| State | FPS |
+| --- | --- |
+| I | 27.4 |
+| I with k, h and w | 27.5 |
+| I with k, h, w and r | 30.8 |
+| I with k, h, w, r and f | 31.2 |
+
+**Load-matched, 1300+ draws:**
+- r (with against without): +7.3 % (90 %: -0.5 to +14.6).
+- Ikhwr against Ikhw: +6.0 % (-7.3 to +17.2).
+- Ikhwrf against Ikhwr: +2.9 % (-8.8 to +20.7).
+- Ikhwrf against Ikhw: +9.1 % (+0.5 to +20.4), on 3 visits each.
+- Ikhw against I: +0.1 % here; pooled with run 52, +6.0 % (-0.7 to +14.1).
+
+**r works as designed:**
+- The ring-space wait fell from 1.5-3.2 ms per heavy frame (Ikhw) to 0.00 in every r visit.
+- About 700 releases per visit and no fallback.
+- The render replay median was 13.9 ms in Ikhwr and 12.4 ms in Ikhwrf.
+
+**Where the main thread's time goes in Ikhwr, heavy frames:**
+- It holds the turn about 90 % of the time, almost all of it running guest code.
+- The waits left are:
+  - present waiting for the previous frame's replay: about 4 % of its samples;
+  - `walk_wait_other` (VdSwap and `pm4_walk_now` waiting for an off-turn walk): about 4 %;
+  - the phase wait: about 1 %.
+- That is roughly 3 ms per frame of waiting against about 24 ms of CPU.
+
+**Docked now meets the game's own code.** The scheduling work since run 46 (I, k, h, w, r) has taken the main thread's waits from over 10 ms per heavy frame to about 3. Further docked gains need the guest code itself to run faster. Its profile is flat: the top 30 functions are 42 % of the samples, and the D3D layer (0x822B0000) is about 15 %.
+
+**GPU, from the docked bench (8 benches, plain frame median 20.8 ms):**
+- resolve copies: -3.2 ms (-15 %);
+- pixels: -7.6 ms (-37 %).
+
+So resolve copies are the largest GPU item on our side for handheld. They come from two sources: the main 1280-wide target's resolves (about 2.2 ms docked) and the downsample chain (about 1.2 ms).
+
+## Log 54
+
+- **r joins the base.** States: `MAPXSHNLUBI,MAPXSHNLUBIkhwr,MAPXSHNLUBIkhwrf`; f is still open.
+- **`[THREADCPU]` now ends with "guest calls per replay".** These are guest function entries over all threads, so the main thread's CPU per call sizes the call-overhead route (inlining, LTO) before a build is spent on it.

@@ -334,8 +334,14 @@ extern "C" void lsw_guest_place_set(int prio, int core0) {
 // [THREADCPU] (gl_backend.cpp, at each A/B state change): every registered thread's CPU time over the state that ended, per replay.
 // Run 46: state I moved the walk off the main thread by the walk counters, but FPS rose 11 % where the walk had been 10-15 ms of a
 // 40 ms frame, and the main thread's sampled share of walk code barely fell. This measures each thread directly, by state.
+extern "C" unsigned lswtcs_gil_ctr;   // kernel_stubs.cpp: +1 at every guest function entry (PPC_FUNC_PROLOGUE), any thread
 extern "C" void lsw_thread_cpu_report(const char* state, unsigned long long replays) {
     static uint64_t last[kMaxThreads];
+    // log54: guest function entries per replay. Run 53: the main thread runs guest code 85 % of its turn, so the cost each generated call
+    // pays (prologue counter, weak non-inlined call, context traffic) sets how much inlining or LTO could reach.
+    static unsigned last_calls = 0;
+    const unsigned calls_now = lswtcs_gil_ctr, calls = calls_now - last_calls;
+    last_calls = calls_now;
     static unsigned long long last_replays = 0;
     static bool primed = false;
     const unsigned long long n = replays - last_replays;
@@ -351,6 +357,7 @@ extern "C" void lsw_thread_cpu_report(const char* state, unsigned long long repl
         if (primed && n && d / 1e6 / double(n) >= 0.2 && k < int(sizeof b) - 48)
             k += snprintf(b + k, sizeof b - k, " %s/%d %.2f", g_targets[i].name, g_targets[i].sched_id, d / 1e6 / double(n));
     }
+    if (primed && n && k < int(sizeof b) - 48) k += snprintf(b + k, sizeof b - k, " | guest calls per replay %.0f k", calls / 1e3 / double(n));
     if (primed) { puts(b); fflush(stdout); }
     primed = true;
 }

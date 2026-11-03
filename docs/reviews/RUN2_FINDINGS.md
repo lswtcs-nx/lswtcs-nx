@@ -2156,3 +2156,26 @@ Handheld, stock clocks (CPU 1020, GPU 307.2, memory 1331.2 MHz), states `MAPXSHN
 - **Pixel check:** it is now generic. `LSWTCS_EXACTCHECK=900` with `LSWTCS_EXACTWHAT=q` prints `[EXACTCHECK]`, and a flagged frame keeps `xcheck_q_<replay>_*.png`. The ZCULL variant leaves the bench.
 
 **Expected:** up to the quads' fixed cost, about 2 ms (5 %), if it comes from the geometry shader and not from the stamps. The bench and the stamp-free variant separate the two.
+
+## Run 63: `0.0.69-log63` handheld, 3 November 2026: quads without the geometry shader are exact and a little faster
+
+Handheld, stock clocks, states `MAPXSHNLUBIkhwregd` and `MAPXSHNLUBIkhwregdq`, about 4 minutes in the level. No crash.
+
+- **q is exact.** All three `[EXACTCHECK]` frames (1343-2040 records, 178-230 quad draws as triangles) matched to the pixel: 0 px against 0 px of noise. No quad draw had its indices in shared memory. Only the first frames of a new program kept the geometry shader while it built.
+- **q saves about 1 ms of GPU time.**
+  - Bench: "quads as triangles" -1.24 ms (3 benches, all below 0: -2.3 to -0.4). "Quads through the geometry shader" +0.44 ms (6 benches, -0.4 to +3.8). The quads' own column moves by -1.7 and +1.1 ms.
+  - FPS at 1300+ draws: 26.8 with q against 25.8 without, raw. Load-matched: -2.0 % (90 %: -9.7 to +5.2), 9 visits each, so no FPS conclusion.
+- **Decision: q joins the base.** It is exact, and the bench agrees in both directions.
+- **d confirmed a third time:** turning it off costs +1.38 ms (+0.4 to +2.5, 9 benches).
+- **The per-draw stamps cost little:** the stamp-free frame is 0.6 ms faster (median of 9; -2.2 to +0.2).
+- **So the 10 ms left with everything off is mostly not GPU work in normal frames.** With pixels, vertices, buffers, textures and state off, the GPU runs out of work and waits for the render thread and Mesa's worker to submit the frame. That residual measures the submission time. In a normal frame the GPU has about 36 ms of work against a submission time well below that, so the residual hides under the real work. This is an inference: the bench does not time the CPU side of each variant.
+
+**Where handheld stands:**
+- **GPU:** about 36 ms in heavy frames (bench plain median 36.2; unstamped `[GLSPAN]` 39-41 ms at the heaviest). The main parts are:
+  - pixel work, about 22 ms (world draws about 11, quads about 4, full-screen passes about 5);
+  - resolves, about 5 ms;
+  - vertices, about 2.5 ms.
+- **CPU wall:** docked heavy frames run at 29-30 FPS at the same CPU clock. So GPU savings beyond about 4 ms no longer raise handheld FPS.
+- **What is left that is exact:**
+  - **The resolve texture hand-over, at most about 2 ms.** It needs a coordinate scale and edge clamping per fetch.
+  - **The full-screen passes.** The costliest (`91834C0972EDD8A1`, about 3 ms) is a single loop of the translator's skip-flag control flow with 4 texture fetches. A hand-cleaned version is unmeasured.

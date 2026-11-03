@@ -360,3 +360,21 @@ The measurements below are from heavy frames (1300+ draws, the start of `Gungan_
   - GPU faults while the setup is wrong.
 
 **Recommendation:** no migration now. ZCULL on Mesa stays item 1, now without the kernel part. Reopen Deko if log61 shows a large per-draw part that Mesa cannot shed, or if the author chooses it for other reasons (hitches, memory). Even then, handheld gains stop at the CPU wall.
+
+## Update after run 63 (3 November 2026)
+
+**Kept:** d (fetch constants; three benches, 1.3-1.8 ms) and q (quads without the geometry shader; exact, about 1 ms). **Out:** c (ZCULL). It is exact, but every depth-writing draw has a real alpha test, so ZCULL has nothing to learn from.
+
+**Handheld now:**
+- Heavy frames run at about 26-27 FPS, with about 36 ms of GPU work per frame.
+- Docked runs 29-30 FPS at the same CPU clock. So about 4 ms of GPU savings brings handheld to the CPU wall, and anything past that needs CPU work.
+- The bench's leftover with everything off (about 10 ms) is mostly the GPU waiting for submission, not GPU cost (RUN2_FINDINGS.md, run 63).
+
+**Options left:**
+
+| Option | Size | Notes |
+| --- | --- | --- |
+| Resolve texture hand-over | at most about 2 ms handheld | Needs a coordinate scale and edge clamping per fetch. Complex. |
+| Full-screen passes | the costliest is about 3 ms | Gain unmeasured. |
+| CPU wall (docked, and handheld once the GPU drops) | inlining or LTO estimated at 5-10 %; PGO unmeasured | Compared across two sessions with `run_pair.py`. |
+| Author's levers | larger | Handheld resolution and GPU clock. |

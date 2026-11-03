@@ -464,6 +464,18 @@ static uint32_t g_fence_dev = 0, g_put_at_walk = 0;
 // the put of the last hand-off instead, which counts a segment the walker is still reading, so the game's second fence wait of a frame
 // waited for the walker.
 static std::atomic<uint32_t> g_put_done{0}, g_aw_target{0};
+// log49: how far the ring has really been read, while a walk is still going. Run 48: with state k the walker was always mid-walk at the
+// fence wait, and g_put_done only moves when a walk ends, so the wait waited for everything kicked since (12-14 ms per heavy frame)
+// instead of for its own segment. g_walk_pos is the read position after each ring packet; each kick records the guest's segment
+// counter and the dwords written so far, so a fence's segment counts as read once the reader has passed the kick that submitted it.
+static std::atomic<uint32_t> g_walk_pos{0};
+static std::atomic<bool> g_walk_pos_set{false};
+struct KickMark { uint32_t put; uint64_t written; };
+static KickMark g_kick_marks[64];
+static uint32_t g_kick_mark_n = 0, g_kick_wptr = 0;
+static uint64_t g_kick_written = 0;
+static bool g_kick_wptr_set = false;
+static void walk_pos_publish(uint32_t pos) { g_walk_pos.store(pos, std::memory_order_relaxed); g_walk_pos_set.store(true, std::memory_order_relaxed); }
 static int g_imlog_left_fwd();
 // sub_822AE698 is D3D's BlockOnFence(dev=r3, fence=r4): returns once (put-fence) >= (put-get), where
 // put = [dev+10908] (next segment fence) and get = *[dev+10896] (last fence the GPU completed).
@@ -6232,6 +6244,7 @@ static void pm4_process_ring(uint32_t wptr_dwords) {
     }
 
     g_rb_rptr_dwords = pos;
+    walk_pos_publish(pos);
     pm4_publish_rptr();
 }
 
@@ -6361,6 +6374,13 @@ static void async_walk_kick();
 // to start the walker on what was just submitted.
 PPC_FUNC(sub_822AE048) {
     __imp__sub_822AE048(ctx, base);
+    if (g_rb_size && g_fence_dev) {   // log49: the segment counter and the dwords written, for seg_read
+        const uint32_t rbd = g_rb_size >> 2, w = PPC_LOAD_U32(0x7FC80714u) % rbd;
+        if (!g_kick_wptr_set) { g_kick_wptr = w; g_kick_wptr_set = true; }
+        g_kick_written += (w + rbd - g_kick_wptr) % rbd;
+        g_kick_wptr = w;
+        g_kick_marks[g_kick_mark_n++ & 63] = {PPC_LOAD_U32(g_fence_dev + 10908), g_kick_written};
+    }
     async_walk_kick();
     ++g_kicks;
     if (!g_kick_first) g_kick_first = gp_now();
@@ -6439,6 +6459,22 @@ static void async_walker_body(int id) {
     }
 }
 static bool async_walk_running() { return g_aw_busy.load() || g_aw_pending.load(); }
+// log49: the segment of `fence` has been read. The earliest recorded kick whose segment counter is past the fence put it in the ring
+// (a later one would only be more conservative); it counts as read once the reader is past the dwords written by that kick.
+static uint64_t g_seg_read_hits = 0;
+static bool seg_read(uint32_t fence) {
+    if (!g_kick_mark_n || !g_rb_size || !g_walk_pos_set.load(std::memory_order_relaxed)) return false;
+    const uint32_t rbd = g_rb_size >> 2, n = std::min<uint32_t>(g_kick_mark_n, 64);
+    const KickMark* m = nullptr;
+    for (uint32_t i = 0; i < n && !m; ++i) {
+        const KickMark& k = g_kick_marks[(g_kick_mark_n - n + i) & 63];
+        if (int32_t(k.put - fence) > 0) m = &k;
+    }
+    if (!m) return false;
+    const uint32_t rpos = g_walk_pos.load(std::memory_order_relaxed) % rbd;
+    const int64_t read = int64_t(g_kick_written) - int64_t((g_kick_wptr + rbd - rpos) % rbd);   // the unread part is less than one ring
+    return read >= int64_t(m->written);
+}
 static void async_walk_join(int site) {
     if (t_async_walker || (!g_aw_busy.load() && !g_aw_pending.load())) return;
     const uint64_t t0 = gp_now();
@@ -6451,11 +6487,18 @@ static void async_walk_join(int site) {
 }
 static bool async_walk_try(uint32_t fence, uint32_t put) {
     if (!g_async_walk_on.load(std::memory_order_relaxed) || !gil_on() || g_sched_id < 0) return false;
-    auto done = [fence] { const uint32_t d = g_put_done.load(); return d && int32_t(d - fence) > 0; };
-    if (!done()) {   // the fence's segment is not fully read: if the walker is on it, wait for it; else walk here
+    auto done = [fence] { const uint32_t d = g_put_done.load(); return (d && int32_t(d - fence) > 0) || seg_read(fence); };
+    if (!done()) {   // the fence's segment is not fully read: if the walker is on it, wait until it has passed it; else walk here
         if (!async_walk_running()) return false;
-        async_walk_join(WALK_FENCE);
+        const uint64_t t0 = gp_now();
+        ++g_aw_joins[WALK_FENCE];
+        while (async_walk_running() && !done()) {
+            if (gil_on() && g_sched_id >= 0) sched_yield_turn();   // the walker may be waiting for the turn
+            std::this_thread::sleep_for(std::chrono::microseconds(20));
+        }
+        g_aw_join_ns[WALK_FENCE] += gp_now() - t0;
         if (!done()) return false;
+        if (async_walk_running()) ++g_seg_read_hits;   // released before the walker was done
     }
     if (g_aw_sid < 0) {
         g_aw_sid = g_sched_next_id++;
@@ -6527,11 +6570,11 @@ extern "C" void lsw_walk_sites_report(const char* state) {
     l_awk = g_aw_kicks; l_aww = g_aw_walks; l_awns = g_aw_walk_ns;
     static uint64_t l_ib[3], l_off = 0, l_rejoin = 0;
     const uint64_t ib[3] = {g_ib_ns[0].load(), g_ib_ns[1].load(), g_ib_ns[2].load()}, off = g_wo_off_ns.load(), rejoin = g_wo_rejoin_ns.load();
-    static uint64_t l_kh = 0;
+    static uint64_t l_kh = 0, l_srh = 0;
     printf("[ASYNCWALK] state %s: IB work by thread, main %.1f ms, walker %.1f ms, other %.1f ms | off the turn in big IBs %.1f ms, then waiting for the turn back %.1f ms | "
-           "kick hand-offs %llu\n", state, (ib[0] - l_ib[0]) / 1e6, (ib[1] - l_ib[1]) / 1e6, (ib[2] - l_ib[2]) / 1e6, (off - l_off) / 1e6, (rejoin - l_rejoin) / 1e6,
-           (unsigned long long)(g_aw_kick_handoffs - l_kh));
-    l_kh = g_aw_kick_handoffs;
+           "kick hand-offs %llu | fence waits released mid-walk %llu\n", state, (ib[0] - l_ib[0]) / 1e6, (ib[1] - l_ib[1]) / 1e6, (ib[2] - l_ib[2]) / 1e6, (off - l_off) / 1e6,
+           (rejoin - l_rejoin) / 1e6, (unsigned long long)(g_aw_kick_handoffs - l_kh), (unsigned long long)(g_seg_read_hits - l_srh));
+    l_kh = g_aw_kick_handoffs; l_srh = g_seg_read_hits;
     for (int i = 0; i < 3; ++i) l_ib[i] = ib[i];
     l_off = off; l_rejoin = rejoin;
     for (int i = 0; i <= WALK_SITES; ++i) { l_awj[i] = g_aw_joins[i]; l_awjn[i] = g_aw_join_ns[i]; }
@@ -6571,6 +6614,7 @@ static void pm4_process_ring_flat_impl(bool allow_drain) {
         // the queued lists (it kicks their segments into the ring), then walk what it kicked.
         if (pass && pos == w && allow_drain && g_tile_drain_pending) {
             g_rb_rptr_dwords = pos;
+            walk_pos_publish(pos);
             pm4_publish_rptr();
             g_tile_drain_pending = false;
             g_pm4_walking = false;
@@ -6638,9 +6682,11 @@ static void pm4_process_ring_flat_impl(bool allow_drain) {
                 }
             }
             pos = (pos + adv) % rbd; steps += adv;
+            walk_pos_publish(pos);
         }
         }   // pass
         g_rb_rptr_dwords = pos;
+        walk_pos_publish(pos);
         pm4_publish_rptr();
         g_pm4_walking = false;
         g_walk_end_ms.store(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
@@ -6696,6 +6742,7 @@ static void pm4_process_ring_flat_impl(bool allow_drain) {
     }
 
     g_rb_rptr_dwords = pos;
+    walk_pos_publish(pos);
     pm4_publish_rptr();
 
     if (s_rbflat_logged < 8 && ibs) {
@@ -8678,6 +8725,8 @@ PPC_FUNC(__imp__VdInitializeRingBuffer) {
     g_rb_base = ctx.r3.u32;
     g_rb_size = 1u << (ctx.r4.u32 + 3);   // Xenia InitializeRingBuffer: size_bytes = 1 << (size_log2 + 3) (was <<2: half the ring)
     g_rb_rptr_dwords = 0;
+    walk_pos_publish(0);
+    g_kick_mark_n = 0; g_kick_written = 0; g_kick_wptr_set = false;
     lsw_guest::fill(lsw_host(g_rb_base), 0, g_rb_size);
     dbg_ram("[Vd] VdInitializeRingBuffer base=0x%08X log2=%u size=0x%X bytes\n",
            g_rb_base, ctx.r4.u32, g_rb_size);

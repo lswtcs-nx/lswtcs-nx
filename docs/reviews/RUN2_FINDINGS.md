@@ -1639,3 +1639,27 @@ So run 46's "missing 10 ms" is not contention: the main thread's own work outsid
 - **State k (lower case, since every capital letter is taken):** with I, each kick hands the ring to the walker. A phase or fence wait then waits only for what the walker has not yet read, instead of walking all of it on the main thread.
 - **Expected result:** heavy docked frames from about 36 ms towards 27-30 ms, where the GPU (21 ms) and the main thread's own work (23-26 ms) meet.
 - **States:** `MAPXSHNLUBI,MAPXSHNLUBIk`. `[ASYNCWALK]` reports the kick hand-offs.
+
+## Run 48: `0.0.54-log48` docked, 3 November 2026: k moves the whole walk, and the fence wait waits for all of it
+
+Docked. No fault, and no dropped interrupt.
+
+**Heaviest Gungan frames (143-170 replays per 6 s state):**
+
+| | I | I with k |
+| --- | --- | --- |
+| Main thread CPU per frame | 33.3-34.2 ms | 21.2-26.5 ms |
+| IB work on the main thread | 8.6-9.1 ms | 0 |
+| Walker CPU per frame | 3.7-4.4 ms | 11.0-14.3 ms, all off the turn |
+| Main thread waiting for the walker | about 0 | 11.5-14.3 ms per frame, nearly all at the fence wait |
+
+- **Why the fence wait waited.** It released only once the walker had nothing left. With a kick after every segment, the walker was always busy with segments newer than the awaited one. `g_put_done` moves only when a walk ends.
+- **FPS.** At 1300+ draws, k gave 26.4 against 28.8 FPS. Load-matched it was -7.1 % (90 %: -13.1 to +0.3).
+- **The inputs for an overlap are there.** The walker reads a heavy frame in 11-14 ms of CPU, against 21-26 ms of the main thread's own work.
+
+## Log 49
+
+- **A fence wait waits only for its own segment.** Each kick records the guest's segment counter (`dev+10908`) and the ring dwords written so far, and each walk publishes its read position after every ring packet (`g_walk_pos`). A fence's segment counts as read once the reader has passed the earliest kick whose counter is past the fence (`seg_read`). A fence wait then releases mid-walk; `[ASYNCWALK]` counts those releases.
+- **Safety rule unchanged.** The game still continues only after the awaited segment has been read.
+- **Expected:** in I with k, heavy docked frames of 25-28 ms. By then cores 0 (main), 1 (render and walker) and 2 (XAudio thread and Mesa's worker) are each busy about 25 ms per frame.
+- **States:** `MAPXSHNLUBI,MAPXSHNLUBIk`.

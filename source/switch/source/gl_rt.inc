@@ -136,13 +136,10 @@ void clear_depth_tex(const HostTex& t, float z, int stencil, const int* rect);
 extern "C" volatile int lsw_nvc0_rt_compress;
 extern "C" int lsw_glthread_call(void (*fn)(void*), void* arg);
 uint32_t g_rt_pool = 0;
-extern bool g_glpipe;   // defined with the upload code below
 void rt_compress_job(void* v) { lsw_nvc0_rt_compress = int(reinterpret_cast<uintptr_t>(v)); }
-void rt_compress_set(uint32_t v) {
-    void* arg = reinterpret_cast<void*>(uintptr_t(v));
-    if (g_glpipe) lsw_glthread_call(rt_compress_job, arg);   // in order with the allocation, which may run on Mesa's worker
-    else rt_compress_job(arg);
-}
+// Always through glthread's queue, so the flag is set in order with the allocation on Mesa's worker. Set directly (log39), it was back to 0
+// before the worker allocated, and no render target got the alignment. lsw_glthread_call runs it here when glthread is off.
+void rt_compress_set(uint32_t v) { lsw_glthread_call(rt_compress_job, reinterpret_cast<void*>(uintptr_t(v))); }
 Rt* rt_get(bool depth, uint32_t base, uint32_t w, uint32_t fmt) {
     if (w == 0 || w > 8192) return nullptr;
     const uint64_t key = (uint64_t(depth) << 63) | (uint64_t(g_rt_pool) << 56) | (uint64_t(base & 0xFFF) << 40) | (uint64_t(w) << 16) | uint64_t(fmt);

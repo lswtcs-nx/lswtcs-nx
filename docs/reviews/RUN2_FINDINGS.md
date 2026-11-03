@@ -1430,3 +1430,16 @@ Not yet run on hardware. Handheld, one pass. It tests whether less memory traffi
 **States:** `MAPXSHNLUB` as today; `+Z` depth on a 128 KB-aligned mapping; `+ZJ` also `0xdb` for 32-bit colour. Each has its own render targets (`g_rt_pool`, about 170 MB each), so a state change can lose their contents for one frame every 6 s. `[BOKIND]` lists the allocations.
 
 `[WALKWHY]` adds the distance from fence to put. Mostly 1 means the game waits for the segment it just kicked, and the walker thread is out.
+
+## Run 39: `0.0.44-log39` handheld, 2 November 2026: compression was never on, so it measured noise
+
+The tester saw nothing wrong in any state.
+
+- **Z and J did not take effect.** `[BOKIND]` printed once, for a 4 MB linear buffer, and for none of the 30 render targets the Z and J states created. `rt_compress_set` set the flag directly whenever the pipeline mode was off, while glthread was on and Mesa's worker did the allocation later. The flag was already back to 0 by then. log40 always queues it through `lsw_glthread_call`, which runs it directly when glthread is off.
+- **So the three states were the same, and the run is an A/A test.** At 1300+ draws: `+ZJ` -12.0 % FPS (90 %: -20.6 to -3.4) and `+Z` -8.7 % (-20.8 to +0.1), each from 3-8 visits. GPU per 1000 draws: -4.8 % and +1.3 %, intervals across 0.
+- **An interval that excludes 0 is not enough with this few visits.** Scene differences give about ±10 % at heavy load in a 6-minute pass. Take a letter as real only when it repeats, or when the per-1000-draw GPU figure and FPS agree.
+- **Fence distance: every fence wait with work was for put - 2** (10 324 waits). log40 also records whether the walk's own packets complete that fence or only the stub's write does.
+
+## Log 40: `0.0.45-log40`, the compression test again
+
+Same states, handheld. `[BOKIND]` should list each new render target of Z and J: kinds `0x51` (depth) and, in J, `0xdb` (colour). Not yet run on hardware.

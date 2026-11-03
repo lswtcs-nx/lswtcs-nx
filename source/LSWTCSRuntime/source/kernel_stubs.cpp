@@ -457,6 +457,10 @@ static void async_walk_join(int site);
 // The D3D device seen at fence waits, and its put (next segment fence) when the last walk with work ended: a fence below it had its
 // segment in the ring then, so that walk already read it.
 static uint32_t g_fence_dev = 0, g_put_at_walk = 0;
+// State I: put when the last finished walk started (main thread or walker): every fence below it has its segment fully read. Run 44 used
+// the put of the last hand-off instead, which counts a segment the walker is still reading, so the game's second fence wait of a frame
+// waited for the walker.
+static std::atomic<uint32_t> g_put_done{0}, g_aw_target{0};
 static int g_imlog_left_fwd();
 // sub_822AE698 is D3D's BlockOnFence(dev=r3, fence=r4): returns once (put-fence) >= (put-get), where
 // put = [dev+10908] (next segment fence) and get = *[dev+10896] (last fence the GPU completed).
@@ -6382,7 +6386,7 @@ static void walk_site_note(int site, uint64_t t0, uint32_t rptr0) {
     }
     if (!d) { ++w.empty; return; }
     if (site == WALK_FENCE) g_fence_walk_end = t1;
-    if (g_fence_dev) { uint8_t* base = g_base; g_put_at_walk = PPC_LOAD_U32(g_fence_dev + 10908); }
+    if (g_fence_dev) { uint8_t* base = g_base; g_put_at_walk = PPC_LOAD_U32(g_fence_dev + 10908); g_put_done = g_put_at_walk; }
     if (g_kick_first) { g_kick_wait_ns += t0 > g_kick_first ? t0 - g_kick_first : 0; ++g_kick_waits; g_kick_first = 0; }
     if (g_walk_last_end) { const uint64_t gap = t0 - g_walk_last_end; g_walk_gap_ns += gap; if (gap > g_walk_gap_max) g_walk_gap_max = gap; }
     g_walk_last_end = t1;
@@ -6412,9 +6416,11 @@ static void async_walker_body(int id) {
             g_aw_busy = true;   // before clearing pending, so a joiner never sees both false mid-handoff
             g_aw_pending = false;
         }
+        const uint32_t target = g_aw_target.load();   // the ring holds every segment below this put
         sched_rejoin_urgent(id);
         const uint64_t t0 = gp_now();
         pm4_walk_now(&ctx);
+        g_put_done = target;
         g_aw_walk_ns += gp_now() - t0;
         ++g_aw_walks;
         sched_leave_turn(id);
@@ -6434,13 +6440,17 @@ static void async_walk_join(int site) {
 }
 static bool async_walk_try(uint32_t fence, uint32_t put) {
     if (!g_async_walk_on.load(std::memory_order_relaxed) || !gil_on() || g_sched_id < 0) return false;
-    if (!(g_put_at_walk && int32_t(g_put_at_walk - fence) > 0)) return false;   // the fence's segment was not read yet: walk here
+    auto done = [fence] { const uint32_t d = g_put_done.load(); return d && int32_t(d - fence) > 0; };
+    if (!done()) {   // the fence's segment is not fully read: if the walker is on it, wait for it; else walk here
+        if (!async_walk_running()) return false;
+        async_walk_join(WALK_FENCE);
+        if (!done()) return false;
+    }
     if (g_aw_sid < 0) {
         g_aw_sid = g_sched_next_id++;
         std::thread(async_walker_body, g_aw_sid).detach();
     }
-    async_walk_join(WALK_FENCE);   // one walk at a time
-    g_put_at_walk = put;           // every fence below this one is in the ring the walker is about to read
+    g_aw_target = put;   // a busy walker takes this on its next round; no wait here
     {
         std::lock_guard<std::mutex> lk(g_aw_mtx);
         g_aw_pending = true;

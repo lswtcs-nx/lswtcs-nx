@@ -1542,3 +1542,13 @@ The safe rule therefore covers about 5 % of them, and the bench's "early-z on" m
 - Copies off: -3.8 ms. One bench was out of line.
 - Pixels off: -27.6 ms, so pixel work is about two thirds of the frame.
 - The costliest programs now carry their GLSL file in `[GLGPU]`. The second costliest, `CA8722BD02CAB82B`, has 576 lines of straight-line code with six texture reads and no loops. Nothing there is an obvious waste.
+
+## Run 44: `0.0.50-log44` handheld, 3 November 2026: the phase skip works, the wait moves to the second fence
+
+Handheld again. No fault, and no dropped interrupt.
+
+- **Phase waits no longer wait.** 2570 were skipped as not needing the walk, and only 0-7 per 6 s state still waited, for a few ms.
+- **The wait moved to the frame's second fence wait.** Hand-offs doubled, to about two a frame, and about one in two waited at the next fence wait for about as long as the walk took: in heavy states, 1774 ms of waiting against 1835 ms of walking.
+- **The cause is in log44.** It counted a segment as read once it had been handed over: `g_put_at_walk` was set at the hand-off. So when the game waited for the same fence again right away, the stub waited for the walker.
+- **log45 tracks finished walks** (`g_put_done`: the put when the last finished walk started). A fence wait waits for the walker only when its segment is not read yet, and a busy walker takes a new hand-off on its next round.
+- **FPS with I:** +9.3 % load-matched over all frames (90 %: +1.1 to +17.9), +14.2 % at 1300+ draws (-1.7 to +29.7). That is with little overlap, handheld, and within the noise run 39 measured. It is suggestive, not shown.

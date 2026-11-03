@@ -1708,3 +1708,30 @@ Docked. No fault.
 - **The boot stub is unchanged.** Its note says that returning 1 at boot blocked the flush's submission path. That note predates walks at phase, ring and VdSwap waits.
 - **States:** `MAPXSHNLUBI,MAPXSHNLUBIh,MAPXSHNLUBIkh`.
 - **Risk:** something in this runtime may lean on the flush wait. If so, h shows hangs or corrupt frames. VdSwap still waits for the frame's walk, so the walker trails by at most one frame.
+
+## Run 51: `0.0.57-log51` docked, 3 November 2026: h works, and the render thread becomes the wall
+
+Docked. No fault and no hang in h.
+
+**FPS at 1300+ draws:**
+
+| State | FPS |
+| --- | --- |
+| I | 28.8 |
+| I with h | 25.2 |
+| I with k and h | 26.4 |
+
+h was -8.4 % load-matched (90 %: -17.6 to -0.1).
+
+- **I with h.** The flush no longer waits, but the GPU-phase wait now walks everything on the main thread: 14 ms per heavy frame, and 36.6-37.7 ms of main-thread CPU.
+- **I with k and h.**
+  - The main thread is free: 23.5-25.2 ms of CPU, walks nothing, and waits for the walker only 2.4 ms per frame, mostly at ring-space waits.
+  - The turn is idle 17-20 % of the time, and frames still take about 35 ms.
+  - The state-tagged profile shows where the main thread blocks: in the present path (`gpu_d3d12_present` under `lswtcs_gil_blocking`), waiting for the render thread to take the frame.
+  - The render thread's replay takes 19.6 ms of wall time for about 12 ms of CPU, on core 1. The walker (13 ms per frame) shares that core at a higher priority (0x2D against 0x3B).
+- **CPU per heavy frame in I with k and h:** main 24 ms, walker 13, render 12, Mesa's worker 11, the XAudio guest thread 10-12, XMA 3-4. That is about 75 ms over three cores, so about 25 ms per core at perfect balance. The fourth core (owner's decision) would give the most room.
+
+## Log 52
+
+- **State w:** the off-turn walk runs below the render thread's priority (0x3D), so it fills core 1's gaps instead of preempting the render thread.
+- **States:** `MAPXSHNLUBI,MAPXSHNLUBIkh,MAPXSHNLUBIkhw`.

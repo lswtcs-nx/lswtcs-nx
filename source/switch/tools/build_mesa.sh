@@ -39,6 +39,7 @@ patch -p1 -s -i "$P/gl_XML.py.patch"
 patch -p1 -s -i "$P/glX_XML.py.patch"
 python "$ROOT/switch/mesa/mesa_cache_edits.py" "$PWD"
 python "$ROOT/switch/mesa/mesa_nir_edits.py" "$PWD"
+python "$ROOT/switch/mesa/mesa_nir_full_edits.py" "$PWD"
 python "$ROOT/switch/mesa/mesa_fmz_edits.py" "$PWD"
 python "$ROOT/switch/mesa/mesa_egl_share_edits.py" "$PWD"
 python "$ROOT/switch/mesa/mesa_glthread_edits.py" "$PWD"
@@ -52,4 +53,8 @@ W=$(pwd -W)
 MSYSTEM=MSYS /c/devkitPro/msys2/usr/bin/bash.exe -lc "cd \"\$(cygpath -u '$W')\" && \
   /opt/devkitpro/meson-cross.sh switch ../crossfile.txt build -Db_ndebug=true -Dshader-cache=true && \
   ninja -C build -j$JOBS && DESTDIR=\"\$(cygpath -u '$(cd "$B" && pwd -W)')/install\" ninja -C build install"
+# NIR (mesa_nir_full_edits.py): libEGL.a does not merge libnir, so build it and install it beside libEGL.a (CMakeLists links it).
+MSYSTEM=MSYS /c/devkitPro/msys2/usr/bin/bash.exe -lc "cd \"\$(cygpath -u '$W')\" && ninja -C build -j$JOBS src/compiler/nir/libnir.a"
+# meson makes a thin archive (paths into the build tree): store the objects themselves.
+(cd build/src/compiler/nir/libnir.a.p && rm -f "$B/install/opt/devkitpro/portlibs/switch/lib/libnir.a" && \n  "$DEVKITPRO/devkitA64/bin/aarch64-none-elf-ar" rcs "$B/install/opt/devkitpro/portlibs/switch/lib/libnir.a" *.o .*.o)   # the SPIR-V objects are named ".._spirv_*"
 echo "[build_mesa] installed to $B/install"

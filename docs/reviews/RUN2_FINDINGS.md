@@ -2031,3 +2031,20 @@ The hidden layers are mostly in the one-texture world draws, whose whole shader 
 - **State d:** with e, each fetch's exponent scale (`lsw_fetch_derived[K].w`) and LOD bias (`.z`) become constants when they are exactly 1 and 0 for the draw. That removes four multiplies and a bias per fetch. It is exact and aimed at the one-texture world variants that are shaded layer upon layer.
 - **Bench:** "fetch constants specialised" (or "not specialised" in d) replaces the pre-pass variant.
 - **States:** `MAPXSHNLUBIkhwreg,MAPXSHNLUBIkhwregd`.
+
+**Log 60, second session: nouveau's NIR shader front end.** The tester asked for it. `NV50_PROG_USE_NIR=1` alone did nothing:
+- devkitPro's switch-mesa drops the NIR path with 26 `#ifndef __SWITCH__` guards across the state tracker (`st_program.c`, `st_context.c`, `st_shader_cache.c`, `st_glsl_to_ir.cpp`) and nvc0 (`nvc0_screen.c`, `nvc0_program.c`, `nvc0_state.c`, `nv50_ir.cpp`). `mesa_nir_edits.py` had freed only the variable in `nouveau_screen.c`.
+- `libEGL.a` does not merge Mesa's `libnir`, and the log60 ELF had no NIR code at all.
+
+**What changed for this session:**
+- `source/switch/mesa/mesa_nir_full_edits.py` turns each NIR guard into `#if 1`, and leaves the draw module, glthread and SPIR-V guards in place.
+- `tools/build_mesa.sh` builds `libnir` and stores it beside `libEGL.a` as a full archive. meson makes a thin one, and its SPIR-V objects are named `.._spirv_*`.
+- `CMakeLists.txt` links `libnir.a` in a group with `libEGL.a`.
+
+TGSI stays the default. The same NRO runs both sessions:
+- the first with `env.txt`;
+- the second with `env-nir.txt`, which is `env.txt` plus `NV50_PROG_USE_NIR=1`.
+
+`private/session-tools/run_pair.py` compares two sessions load-matched. Runs 58 and 59 in the same state differed by +0.1 % (90 %: -5.2 to +5.5), so only a difference above about 5 % will show.
+
+The first NIR boot misses Mesa's disk cache, so the 698 saved programs compile again; with TGSI they take about 95 ms each with the cache.

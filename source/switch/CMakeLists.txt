@@ -193,6 +193,13 @@ set(LSW_MESA_CACHE_LIB "${CMAKE_CURRENT_SOURCE_DIR}/mesa/build/install/opt/devki
 if(EXISTS "${LSW_MESA_CACHE_LIB}/libEGL.a")
     message(STATUS "LSWTCS: linking switch-mesa with shader disk cache from ${LSW_MESA_CACHE_LIB}")
     set(LSW_MESA_LIBS "${LSW_MESA_CACHE_LIB}/libEGL.a" "${LSW_MESA_CACHE_LIB}/libglapi.a" z)
+    # NIR (mesa_nir_full_edits.py): libEGL.a does not merge Mesa's libnir, so it is linked on its own, grouped with libEGL.a
+    # because each refers to the other.
+    if(EXISTS "${LSW_MESA_CACHE_LIB}/libnir.a")
+        message(STATUS "LSWTCS: linking Mesa's NIR library (NV50_PROG_USE_NIR=1 selects it at run time)")
+        set(LSW_MESA_LIBS -Wl,--start-group "${LSW_MESA_CACHE_LIB}/libEGL.a" "${LSW_MESA_CACHE_LIB}/libnir.a" -Wl,--end-group
+            "${LSW_MESA_CACHE_LIB}/libglapi.a" z)
+    endif()
 else()
     message(STATUS "LSWTCS: stock switch-mesa (no shader disk cache; run tools/build_mesa.sh)")
     set(LSW_MESA_LIBS EGL glapi)

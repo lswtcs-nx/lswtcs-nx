@@ -2007,3 +2007,27 @@ Handheld, two passes through the heavy area. No fault.
 - **Counters and bench:** `[PREPASS]` counts eligible and used draws. The bench toggles it ("depth pre-pass on" or "off").
 - **One-texture shaders are left out:** their alpha path is nearly the whole shader, so a pre-pass would cost what it saves.
 - **States:** `MAPXSHNLUBIkhwreg,MAPXSHNLUBIkhwregp`.
+
+## Run 59: `0.0.65-log59` handheld, 3 November 2026: the depth pre-pass loses
+
+Handheld, two passes through the heavy area (81 s and 50 s). No fault. About 60-70 draws per heavy frame took the pre-pass once their variants were compiled.
+
+**State p:**
+- **FPS:** -5.6 % load-matched (90 %: -11.8 to +0.7); 23.3 against 24.8 FPS at 1300+ draws.
+- **Bench, same frame:** +1.2 ms with it on and -1.0 ms with it off.
+- The second pass over vertices and the alpha path costs more than the hidden pixels it skips in the multi-texture draws.
+- **p is out.**
+
+The hidden layers are mostly in the one-texture world draws, whose whole shader is the alpha path, so no pre-pass can help there.
+
+**What is left for the hidden layers:**
+- The exact remedy is the GPU's coarse depth culling (ZCULL), which works with shaders that discard.
+- This Mesa's nouveau has it switched off (`nvc0_validate_zcull` under `#if 0`, and `ZCULL_REGION` deactivated at screen init). Turning it on would mean programming the ZCULL storage and region, likely with the kernel's ZCULL binding. That is a hardware research project, not a next step.
+
+**Untested and available:** nouveau's NIR shader front end (`NV50_PROG_USE_NIR=1`, enabled for the Switch build by `mesa_nir_edits.py`). It applies to a whole session only, cannot be an A/B state, and its stability on these shaders in Mesa 20.1 is unknown.
+
+## Log 60 (handheld)
+
+- **State d:** with e, each fetch's exponent scale (`lsw_fetch_derived[K].w`) and LOD bias (`.z`) become constants when they are exactly 1 and 0 for the draw. That removes four multiplies and a bias per fetch. It is exact and aimed at the one-texture world variants that are shaded layer upon layer.
+- **Bench:** "fetch constants specialised" (or "not specialised" in d) replaces the pre-pass variant.
+- **States:** `MAPXSHNLUBIkhwreg,MAPXSHNLUBIkhwregd`.

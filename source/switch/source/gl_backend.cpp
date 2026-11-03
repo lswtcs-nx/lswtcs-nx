@@ -863,14 +863,48 @@ uint64_t g_epi_used = 0, g_epi_drawn = 0;
 // A/B state g (log58), with e: also the shaders that write depth (run 57: the second costliest full-screen pass, 283E052419BCC461, writes
 // depth and kept its epilogue), and each component of the output exponent bias that is exactly 1 (a multiply per output, every shader).
 bool g_epi_ext = false;
-const LswGlShader* epilogue_ps(const LswGlShader* ps, uint32_t flags, uint32_t a2m, uint32_t bias_one = 0) {
+// A/B state d (log60), with e: each texture fetch's exponent scale and LOD bias (lsw_fetch_derived[K].w and .z, lsw_glsl_fold.h) become
+// constants when they are exactly 1 and 0 for the draw, as they nearly always are: four multiplies and a bias per fetch. Run 59: the
+// one-texture world variants are the ones shaded layer upon layer, and those multiplies are a fair part of what is left in them.
+// d bits: K for .w == 1, 32 + K for .z == 0, only for slots the shader reads.
+bool g_epi_derived = false;
+uint64_t epi_derived_bits(const LswGlShader* ps, const float* derived) {
+    static std::unordered_map<const LswGlShader*, uint64_t> present;
+    auto it = present.find(ps);
+    if (it == present.end()) {
+        uint64_t m = 0;
+        for (int k = 0; k < 32; ++k) {
+            const std::string slot = "lsw_fetch_derived[" + std::to_string(k) + "].";
+            if (ps->glsl.find(slot + "w") != std::string::npos) m |= 1ull << k;
+            if (ps->glsl.find(slot + "z") != std::string::npos) m |= 1ull << (32 + k);
+        }
+        it = present.emplace(ps, m).first;
+    }
+    uint64_t bits = 0;
+    for (int k = 0; k < 32; ++k) {
+        if (((it->second >> k) & 1) && derived[k * 4 + 3] == 1.0f) bits |= 1ull << k;
+        if (((it->second >> (32 + k)) & 1) && derived[k * 4 + 2] == 0.0f) bits |= 1ull << (32 + k);
+    }
+    return bits;
+}
+struct EpiKey {
+    const LswGlShader* ps; uint32_t combo; uint64_t d;
+    bool operator==(const EpiKey& o) const { return ps == o.ps && combo == o.combo && d == o.d; }
+};
+struct EpiKeyHash {
+    size_t operator()(const EpiKey& k) const {
+        return size_t(uint64_t(reinterpret_cast<uintptr_t>(k.ps)) * 0x9E3779B97F4A7C15ull ^ uint64_t(k.combo) * 0xC2B2AE3D27D4EB4Full ^ k.d * 0x165667B19E3779F9ull);
+    }
+};
+uint64_t mix64(uint64_t x) { x ^= x >> 30; x *= 0xBF58476D1CE4E5B9ull; x ^= x >> 27; x *= 0x94D049BB133111EBull; return x ^ (x >> 31); }
+const LswGlShader* epilogue_ps(const LswGlShader* ps, uint32_t flags, uint32_t a2m, uint32_t bias_one = 0, uint64_t dbits = 0) {
     static const char* const kFunc = "bitfieldExtract(xe_uniform_system_constants.flags, int(11u), int(3u))";
     static const char* const kA2m = "if (xe_uniform_system_constants.alpha_to_mask != 0u)";
     static const char* const kMask = "gl_SampleMask[0] = -1;";
     static const char* const kGamma[2] = {"if ((xe_uniform_system_constants.flags & 16384u) != 0u)", "if ((xe_uniform_system_constants.flags & 32768u) != 0u)"};
     const uint32_t combo = ((flags >> 11) & 7) | (a2m ? 8u : 0u) | (((flags >> 14) & 3) << 4) | ((bias_one & 15) << 6);
-    static std::unordered_map<uint64_t, std::unique_ptr<LswGlShader>> variants;
-    const uint64_t key = (uint64_t(reinterpret_cast<uintptr_t>(ps)) << 10) ^ combo;
+    static std::unordered_map<EpiKey, std::unique_ptr<LswGlShader>, EpiKeyHash> variants;
+    const EpiKey key{ps, combo, dbits};
     auto it = variants.find(key);
     if (it != variants.end()) return it->second.get();
     std::unique_ptr<LswGlShader> v;
@@ -886,17 +920,22 @@ const LswGlShader* epilogue_ps(const LswGlShader* ps, uint32_t flags, uint32_t a
     for (int i = 0; i < 2; ++i) changed += replace_all(kGamma[i], (flags >> (14 + i)) & 1 ? "if (true)" : "if (false)");
     for (int i = 0; i < 4; ++i)   // state g: a bias of exactly 1 multiplies by 1
         if ((bias_one >> i) & 1) changed += replace_all(std::string("xe_uniform_system_constants.color_exp_bias.") + "xyzw"[i], "1.0");
+    for (int k = 0; k < 32; ++k) {   // state d
+        const std::string slot = "lsw_fetch_derived[" + std::to_string(k) + "].";
+        if ((dbits >> k) & 1) changed += replace_all(slot + "w", "1.0");
+        if ((dbits >> (32 + k)) & 1) changed += replace_all(slot + "z", "0.0");
+    }
     if (changed) {
         v = std::make_unique<LswGlShader>(*ps);
         v->gl = 0;
-        v->key = ps->key ^ ((0xE91ull << 8 | combo) * 0x9E3779B97F4A7C15ull);
+        v->key = ps->key ^ mix64((0xE91ull << 8 | combo) ^ mix64(dbits + 0x5D));
         v->glsl = std::move(g);
     }
     return (variants[key] = std::move(v)).get();
 }
 GLuint program_epilogue(const LswGlShader* vs, const LswGlShader* ps, const LswGlShader* gs, GLuint prog, uint32_t flags, uint32_t a2m,
-                        uint32_t bias_one) {
-    const LswGlShader* e = epilogue_ps(ps, flags, a2m, bias_one);
+                        uint32_t bias_one, uint64_t dbits) {
+    const LswGlShader* e = epilogue_ps(ps, flags, a2m, bias_one, dbits);
     if (!e) return prog;
     const size_t waits = g_frame_wait.size();
     const uint32_t pending = g_prog_pending_draws;
@@ -2565,7 +2604,8 @@ void ab_cycle_tick() {
     g_early_force_ab = false;   // z is out after run 55: the tester saw transparency broken nearly everywhere (alpha references are about 0.5)
     g_epi_ab = has('e');   // e: pixel shader epilogues specialised for the draw (epilogue_ps); exact
     g_epi_ext = has('g');   // g: with e, also depth-writing shaders and an exponent bias of 1 (g_epi_ext)
-    g_prepass_ab = has('p');   // p: depth pre-pass for alpha-tested draws with two or more textures (prepass_ps)
+    g_prepass_ab = has('p');   // p: depth pre-pass (prepass_ps); out after run 59 (-5.6 %), kept for the bench
+    g_epi_derived = has('d');   // d: with e, fetch exponent scales of 1 and LOD biases of 0 as constants (epi_derived_bits)
     lsw_async_walk_set(has('I'));   // I: the frame's ring walk on its own thread (kernel_stubs.cpp)
     lsw_kick_walk_set(has('k'));    // k (lower case; every capital is taken): with I, the walker starts at each kick (async_walk_kick)
     lsw_hsio_nowait_set(has('h'));  // h: flushes do not wait for the GPU, as on a console whose CPU-GPU link trained (lsw_hsio_nowait_set)
@@ -3015,7 +3055,9 @@ PresentSrc replay() {
                 const uint32_t* sys = reinterpret_cast<const uint32_t*>(f.arena.data() + r.cb_sys_off);
                 uint32_t bias_one = 0;   // color_exp_bias is system constant words 48-51
                 if (g_epi_ext) for (int i = 0; i < 4; ++i) bias_one |= uint32_t(sys[48 + i] == 0x3F800000u) << i;
-                const GLuint p = program_epilogue(vs, ps, gs, prog, sys[0], sys[44], bias_one);
+                const uint64_t dbits = g_epi_derived && r.cb_derived_off
+                    ? epi_derived_bits(ps, reinterpret_cast<const float*>(f.arena.data() + r.cb_derived_off)) : 0;
+                const GLuint p = program_epilogue(vs, ps, gs, prog, sys[0], sys[44], bias_one, dbits);
                 ++g_epi_drawn;
                 if (p != prog) ++g_epi_used;
                 prog = p;
@@ -3471,7 +3513,7 @@ PresentSrc gpu_bench(const PresentSrc& shown) {
         {"plain", 0, false, false, false},
         {"resolves off", 0, false, false, true},
         {g_epi_ab ? "epilogues not specialised" : "epilogues specialised", 0, false, false, false},
-        {g_prepass_ab ? "depth pre-pass off" : "depth pre-pass on", 0, false, false, false},
+        {g_epi_derived ? "fetch constants not specialised" : "fetch constants specialised", 0, false, false, false},
         {"trivial pixel shaders", 0, false, false, false},
         {"textures unbound", 0, false, false, false},
         {"resolve copies off", 0, false, false, false},
@@ -3501,7 +3543,9 @@ PresentSrc gpu_bench(const PresentSrc& shown) {
         g_epi_ab = g_ab_state.find('e') != std::string::npos && strcmp(v.label, "epilogues not specialised") != 0;
         g_bench_epi = !strcmp(v.label, "epilogues specialised");
         g_prepass_ab = g_ab_state.find('p') != std::string::npos && strcmp(v.label, "depth pre-pass off") != 0;
-        g_bench_prepass = !strcmp(v.label, "depth pre-pass on");
+        g_bench_prepass = false;
+        g_epi_derived = (g_ab_state.find('d') != std::string::npos && strcmp(v.label, "fetch constants not specialised") != 0) ||
+                        !strcmp(v.label, "fetch constants specialised");
         g_bench_texnone = !strcmp(v.label, "textures unbound");
         g_bench_noaniso = !strcmp(v.label, "anisotropic filtering off");
         const uint64_t trivial0 = g_bench_trivial_used;
@@ -3516,6 +3560,7 @@ PresentSrc gpu_bench(const PresentSrc& shown) {
     g_bench_kind = -1; g_bench_label = nullptr; g_bench_noresolve = false; g_bench_nocopy = false; g_bench_nocopy_size = 0; g_bench_copy_quarter = false; g_bench_nocopy_cleared = false; g_bench_trivial = false; g_bench_texnone = false; g_bench_noaniso = false;
     g_bench_epi = false; g_epi_ab = g_ab_state.find('e') != std::string::npos;
     g_bench_prepass = false; g_prepass_ab = g_ab_state.find('p') != std::string::npos;
+    g_epi_derived = g_ab_state.find('d') != std::string::npos;
     g_early_z = early0;
     lsw_glthread_call(bench_dedupe_job, reinterpret_cast<void*>(uintptr_t(dedupe0)));
     g_replay_same = false;

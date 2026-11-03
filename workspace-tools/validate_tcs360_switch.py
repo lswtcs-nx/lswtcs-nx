@@ -76,6 +76,8 @@ def validate(build, nm):
     symbols = subprocess.run([str(nm), "--defined-only", str(elf)],
                              capture_output=True, text=True, check=True).stdout
     defined = {line.split()[-1] for line in symbols.splitlines() if line.split()}
+    start = [line.split()[0] for line in symbols.splitlines() if line.split()[-1:] == ["_start"]]
+    require(len(start) == 1 and int(start[0], 16) == 0, "_start must be at address 0: the NRO header and entry live there")
     required = {"lsw_glthread_call", "lsw_egl_swap_buffers_worker", "lsw_glthread_sync_hook"}
     require(required <= defined, "Missing patched Mesa definitions")
     link_command = (build / "CMakeFiles/lswtcs.dir/link.txt").read_text()

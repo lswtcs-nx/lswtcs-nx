@@ -1383,3 +1383,5 @@ Docked again, to compare with run 36. Not yet run on hardware.
 - **Function order** (`hot_order.ld`, `tools/make_hot_order.py`): 2042 sampled guest functions placed hottest first, 3.7 MB apart at most against 73 MB. Compare the state without B against run 36.
 - **`[WALKWHY]`**: per state, walks by the guest wait that caused them (fence, ring space, phase, VdSwap), time, ring dwords, and the time between walks. It decides whether a walker thread can run in parallel.
 - `LSWTCS_GLGPUPROF=150`, `LSWTCS_GLGPUPIX=0`, for more GPU samples per state.
+
+**The first log37 build did not start (three tries, same day).** The section ordering file put guest functions ahead of `.crt0`, so `_start` moved from address 0 to `0x3825E4` and the NRO header overwrote guest code at the start of the image. The ordering file now keeps `.crt0` first, and `validate_tcs360_switch.py` fails when `_start` is not at 0. Fixed build: `_start` and `__nx_mod0` at the same addresses as log35. Not yet run on hardware.

@@ -22,7 +22,7 @@ for name,n in c.most_common():
     if m and n>=2:hot.append('__imp__sub_'+m.group(1))
 hot=list(dict.fromkeys(hot))
 with open(out,'w',newline='\n') as f:
-    f.write('.text : {\n')
+    f.write('.text : {\n  KEEP(*(.crt0))\n')   # the NRO's header and entry stay at address 0
     for h in hot:f.write(f'  *(.text.{h})\n')
     f.write('}\n')
 print(len(hot),'functions')

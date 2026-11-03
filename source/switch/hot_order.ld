@@ -1,4 +1,5 @@
 .text : {
+  KEEP(*(.crt0))
   *(.text.__imp__sub_8231ED30)
   *(.text.__imp__sub_8231D470)
   *(.text.__imp__sub_82320328)

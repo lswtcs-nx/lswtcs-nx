@@ -331,6 +331,29 @@ extern "C" void lsw_guest_place_set(int prio, int core0) {
             g_targets[i].home_mask = core0 ? 1 : g_targets[i].start_mask;
         }
 }
+// [THREADCPU] (gl_backend.cpp, at each A/B state change): every registered thread's CPU time over the state that ended, per replay.
+// Run 46: state I moved the walk off the main thread by the walk counters, but FPS rose 11 % where the walk had been 10-15 ms of a
+// 40 ms frame, and the main thread's sampled share of walk code barely fell. This measures each thread directly, by state.
+extern "C" void lsw_thread_cpu_report(const char* state, unsigned long long replays) {
+    static uint64_t last[kMaxThreads];
+    static unsigned long long last_replays = 0;
+    static bool primed = false;
+    const unsigned long long n = replays - last_replays;
+    last_replays = replays;
+    char b[900];
+    int k = snprintf(b, sizeof b, "[THREADCPU] state %s: %llu replays, CPU ms per replay (name/scheduler id):", state, n);
+    const int count = g_target_count.load(std::memory_order_acquire);
+    for (int i = 0; i < count; ++i) {
+        uint64_t ticks = 0;
+        if (R_FAILED(svcGetInfo(&ticks, InfoType_ThreadTickCount, g_targets[i].handle, UINT64_MAX))) continue;
+        const uint64_t cpu = armTicksToNs(ticks), d = cpu - last[i];
+        last[i] = cpu;
+        if (primed && n && d / 1e6 / double(n) >= 0.2 && k < int(sizeof b) - 48)
+            k += snprintf(b + k, sizeof b - k, " %s/%d %.2f", g_targets[i].name, g_targets[i].sched_id, d / 1e6 / double(n));
+    }
+    if (primed) { puts(b); fflush(stdout); }
+    primed = true;
+}
 extern "C" void lsw_prof_note_draws(uint32_t draws) {
     g_draws.store(draws, std::memory_order_relaxed);
     g_last_frame_tick.store(armGetSystemTick(), std::memory_order_relaxed);

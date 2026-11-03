@@ -240,3 +240,18 @@ Next, in order:
 
 - **The walk on its own thread (I) now overlaps fully.** No fence wait waits for it. The main thread holds the turn 24 % less. Handheld FPS does not change, because handheld is limited by the GPU. Docked decides whether I becomes the default.
 - **Handheld GPU.** Compared with the 360's GPU, the handheld clock gives about two thirds of the shader throughput, and FPS sits near that ratio. The items left on our side are resolve copies (at most 5.5 ms) and nothing else of that size. The handheld GPU clock stays the largest lever, and it is not ours.
+
+## Zoom out after run 46 (3 November 2026)
+
+**Where each mode stands, heavy Gungan frames:**
+- **Docked (I on):** 37 ms per frame. The main thread is busy for about 31 ms of it, the GPU takes 21 ms (resolve copies 3.2 ms), and the render thread's replay takes about 19 ms.
+- **Handheld:** 49 ms of GPU per frame. Pixel work is about 33 ms of that, and resolve copies 5.5 ms. The CPU does not limit handheld.
+
+**The largest open item is docked.** The walk was 10-15 ms of the main thread per frame without I. Moving it off should have taken frames towards 25-28 ms, where the GPU and render thread meet. Instead they went from 41 to 37 ms. About 10 ms per frame is unaccounted for. log47 measures it: CPU per thread by state, IB time by thread, and the walker's core.
+
+**Next steps, depending on what log47 shows:**
+- If walk work remains on the main thread, finishing I is the largest CPU item left (up to about 25 % docked).
+- If the main thread slows beside the walker, cut the walker's memory traffic, mainly the page hashes.
+- If neither, the main thread's own guest code is the wall. Then the routes are generated-code changes (LTO, the quantum counter, plain memory). Those need two builds and a cross-run comparison.
+
+**Handheld:** the clock is the lever, and it is not ours. On our side the next item is resolves drawn straight into their destination, at most part of 5.5 ms.

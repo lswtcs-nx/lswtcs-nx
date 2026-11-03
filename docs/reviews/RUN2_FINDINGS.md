@@ -1584,3 +1584,24 @@ Docked, at GPU 768 MHz and memory 1600 MHz. No fault, no dropped interrupt, and 
 - **I is part of every state now.** The state without I stays as the control (`MAPXSHNLUBI,MAPXSHNLUB`).
 - **The `getenv` check is read once.**
 - **Each hwprof sample carries its A/B state.** The state goes in the band's high bits, and `[ABCYCLE]` prints the "profile tag". `tools/hwprof_report.py --state NAME` reports one state. This gives the main thread's own profile with I. That profile picks between the generated-code routes: LTO, the quantum counter, and plain memory.
+
+## Log 47: why I gave 11 % and not 30 %
+
+log46 was not run; log47 replaces it and keeps its changes.
+
+**The gap.** Without I, the main thread's walks at the heaviest Gungan points were 10-15 ms per frame of about 40 ms (`[WALKWHY]`, run 46). With the walk fully off the main thread, the main thread would take about 21-25 ms per frame, and the GPU (21 ms) or the render thread (19 ms) would set the pace. Instead:
+- Frames took 37 ms with I.
+- The main thread still held about 85 % of the turn.
+- In the sampled profile, walk code (record path, page hashes, IB parse) was 32 % of the main thread's turn over both states, against 36 % in run 42, which never had I.
+- The walker's samples are 94 % waiting, although `[ASYNCWALK]` counts 13 ms of walking per frame.
+
+**Three explanations fit:**
+1. Part of the walk still runs on the main thread.
+2. The main thread's own work slows while the walker streams guest memory.
+3. The walker shares core 1 with the render thread.
+
+**What log47 measures:**
+- `[THREADCPU]`: every thread's CPU ms per replay, by state.
+- `[ASYNCWALK]`: top-level IB time on the main thread, the walker and other threads, and the walker's time off the turn and waiting for it.
+- State K: the walker's big IBs on core 2 instead of core 1.
+- States `MAPXSHNLUBI,MAPXSHNLUBIK,MAPXSHNLUB`, with hwprof samples tagged by state (log46).

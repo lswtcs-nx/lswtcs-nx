@@ -453,6 +453,9 @@ static void walk_fence_after(uint32_t fence, uint32_t put, uint32_t get);
 static bool async_walk_try(uint32_t fence, uint32_t put);
 static bool async_walk_running();
 static uint64_t g_aw_phase_skips = 0;
+// [ASYNCWALK] IB work by thread (top-level IBs, wall time): 0 the main thread, 1 the walker, 2 any other. Run 46: by the walk counters
+// the walker did the walk in state I, yet the main thread's sampled share of walk code (record path, page hashes) barely fell.
+static std::atomic<uint64_t> g_ib_ns[3];
 static void async_walk_join(int site);
 // The D3D device seen at fence waits, and its put (next segment fence) when the last walk with work ended: a fence below it had its
 // segment in the ring then, so that walk already read it.
@@ -5436,6 +5439,11 @@ static inline bool pm4_regs_copy(uint32_t reg, const uint32_t* src, uint32_t n) 
     return any != 0;
 }
 static void pm4_extract_ib(uint32_t phys_addr, uint32_t dword_count, int depth) {
+    struct IbTimer {
+        uint64_t t0; int kind;
+        explicit IbTimer(int d) : t0(d == 0 ? gp_now() : 0), kind(t_async_walker ? 1 : g_sched_id == 0 ? 0 : 2) {}
+        ~IbTimer() { if (t0) g_ib_ns[kind].fetch_add(gp_now() - t0, std::memory_order_relaxed); }
+    } ib_timer(depth);
     // IB rejects are counted and the first few logged (IBREJ): a silently skipped IB loses every
     // draw and resolve in it. Xenia masks IB pointers to physical (CpuToGpu: & 0x1FFFFFFF);
     // LSWTCS_IBMASK=0 restores the old unmasked check (pointers with upper bits were dropped).
@@ -6490,6 +6498,12 @@ extern "C" void lsw_walk_sites_report(const char* state) {
            (g_aw_join_ns[1] - l_awjn[1]) / 1e6, (unsigned long long)(g_aw_joins[2] - l_awj[2]), (g_aw_join_ns[2] - l_awjn[2]) / 1e6, (unsigned long long)(g_aw_joins[3] - l_awj[3]),
            (g_aw_join_ns[3] - l_awjn[3]) / 1e6, (unsigned long long)(g_aw_joins[4] - l_awj[4]), (g_aw_join_ns[4] - l_awjn[4]) / 1e6, (unsigned long long)g_aw_phase_skips, (unsigned long long)g_aw_isr_dropped);
     l_awk = g_aw_kicks; l_aww = g_aw_walks; l_awns = g_aw_walk_ns;
+    static uint64_t l_ib[3], l_off = 0, l_rejoin = 0;
+    const uint64_t ib[3] = {g_ib_ns[0].load(), g_ib_ns[1].load(), g_ib_ns[2].load()}, off = g_wo_off_ns.load(), rejoin = g_wo_rejoin_ns.load();
+    printf("[ASYNCWALK] state %s: IB work by thread, main %.1f ms, walker %.1f ms, other %.1f ms | off the turn in big IBs %.1f ms, then waiting for the turn back %.1f ms\n", state,
+           (ib[0] - l_ib[0]) / 1e6, (ib[1] - l_ib[1]) / 1e6, (ib[2] - l_ib[2]) / 1e6, (off - l_off) / 1e6, (rejoin - l_rejoin) / 1e6);
+    for (int i = 0; i < 3; ++i) l_ib[i] = ib[i];
+    l_off = off; l_rejoin = rejoin;
     for (int i = 0; i <= WALK_SITES; ++i) { l_awj[i] = g_aw_joins[i]; l_awjn[i] = g_aw_join_ns[i]; }
     printf("[WALKWHY] state %s: guest interrupt callbacks from walks %llu, %.1f ms\n", state, (unsigned long long)(g_isr_fired - l_isr), (g_isr_ns - l_isr_ns) / 1e6);
     l_isr = g_isr_fired; l_isr_ns = g_isr_ns;

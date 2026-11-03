@@ -58,6 +58,7 @@ extern "C" void lsw_native_mix_set(int on);                    // native_mixer.c
 extern "C" void lsw_audio_offturn_set(int on);                 // audio_offturn.cpp: U (the second audio mixer off the guest turn)
 extern "C" void lsw_spin_real_set(int on);                     // kernel_stubs.cpp: L (guest spinlocks really taken)
 extern "C" void lsw_walk_sites_report(const char* state);   // kernel_stubs.cpp
+extern "C" void lsw_thread_cpu_report(const char* state, unsigned long long replays);   // hw_profiler.cpp: [THREADCPU]
 extern "C" void lsw_async_walk_set(int on);   // kernel_stubs.cpp
 extern "C" volatile int lsw_nvc0_cb_dedupe;   // mesa_cbdedupe_edits.py
 // The A/B state's tag in hwprof.txt (hw_profiler.cpp): 0 none, 1-7 the index in LSWTCS_ABSTATES plus one, 9-15 in LSWTCS_ABSTATES2. Printed on each [ABCYCLE] line.
@@ -2331,6 +2332,7 @@ void ab_cycle_tick() {
     if (!g_ab_state.empty()) {
         lsw_ab_stat_report(g_ab_state.c_str(), (unsigned long long)g_replays);
         lsw_walk_sites_report(g_ab_state.c_str());
+        lsw_thread_cpu_report(g_ab_state.c_str(), (unsigned long long)g_replays);
         static unsigned long long l_sets = 0, l_same = 0, l_bar = 0, l_ser = 0, l_rep = 0;
         static uint64_t l_ee = 0, l_eu = 0;
         printf("[EARLYZ] state %s: draws eligible %llu, drawn with the early-test variant %llu\n", g_ab_state.c_str(), (unsigned long long)(g_early_eligible - l_ee), (unsigned long long)(g_early_used - l_eu));

@@ -450,6 +450,9 @@ enum { WALK_FENCE, WALK_RING, WALK_PHASE, WALK_SWAP, WALK_SITES };
 static void pm4_walk_site(void* ctxp, int site);
 static bool walk_fence_note(uint32_t fence, uint32_t put, uint32_t get);
 static void walk_fence_after(uint32_t fence, uint32_t put, uint32_t get);
+// The D3D device seen at fence waits, and its put (next segment fence) when the last walk with work ended: a fence below it had its
+// segment in the ring then, so that walk already read it.
+static uint32_t g_fence_dev = 0, g_put_at_walk = 0;
 static int g_imlog_left_fwd();
 // sub_822AE698 is D3D's BlockOnFence(dev=r3, fence=r4): returns once (put-fence) >= (put-get), where
 // put = [dev+10908] (next segment fence) and get = *[dev+10896] (last fence the GPU completed).
@@ -457,6 +460,7 @@ static int g_imlog_left_fwd();
 // D3D re-patches shader slots in place that the deferred walk has not read yet -> wrong vfetch strides
 // in the shadow pass); 1 (default) = get = max(get, fence): only the awaited fence is completed.
 extern "C" void ppc_ringbuf_advance_get(uint8_t* base, uint32_t gpu_obj_addr, void* ctxp) {
+    g_fence_dev = gpu_obj_addr;
     const bool noted = ctxp && PPC_LOAD_U32(gpu_obj_addr + 10896) >= 0x80000000u &&
         walk_fence_note(static_cast<PPCContext*>(ctxp)->r4.u32, PPC_LOAD_U32(gpu_obj_addr + 10908), PPC_LOAD_U32(PPC_LOAD_U32(gpu_obj_addr + 10896)));
     pm4_walk_site(ctxp, WALK_FENCE);   // consume what was submitted before claiming the GPU caught up
@@ -6317,12 +6321,16 @@ static uint64_t g_walk_last_end = 0, g_walk_gap_ns = 0, g_walk_gap_max = 0;
 static uint64_t g_kicks = 0, g_kick_first = 0, g_kick_wait_ns = 0, g_kick_waits = 0;
 // Fence waits that found work in the ring: the fence was done already (the wait did not need this walk), it was the newest one, or an older one not yet done.
 static uint64_t g_fence_done = 0, g_fence_newest = 0, g_fence_older = 0, g_fence_behind[5];
+static uint64_t g_fence_walked_before = 0, g_fence_not_walked = 0;
+// Main-thread time a walker thread could overlap: from the frame's fence walk to VdSwap, and from VdSwap to the next kick.
+static uint64_t g_fence_walk_end = 0, g_fence_to_swap_ns = 0, g_fence_to_swap_n = 0, g_swap_t = 0, g_swap_to_kick_ns = 0, g_swap_to_kick_n = 0;
 extern "C" PPC_FUNC(__imp__sub_822AE048);
 // Strong definition: the kick, which stores the write pointer. Replaces the recompiled weak alias, only to note the time.
 PPC_FUNC(sub_822AE048) {
     __imp__sub_822AE048(ctx, base);
     ++g_kicks;
     if (!g_kick_first) g_kick_first = gp_now();
+    if (g_swap_t) { g_swap_to_kick_ns += gp_now() - g_swap_t; ++g_swap_to_kick_n; g_swap_t = 0; }
 }
 static bool walk_fence_note(uint32_t fence, uint32_t put, uint32_t get) {
     if (!g_rb_size) return false;
@@ -6334,6 +6342,7 @@ static bool walk_fence_note(uint32_t fence, uint32_t put, uint32_t get) {
     else ++g_fence_older;
     const uint32_t behind = put - fence;   // put is the next segment's fence, so 1 is the segment just kicked
     ++g_fence_behind[behind < 4 ? behind : 4];
+    if (g_put_at_walk && int32_t(g_put_at_walk - fence) > 0) ++g_fence_walked_before; else ++g_fence_not_walked;
     return true;
 }
 // After that walk: did the ring's own packets complete the awaited fence (the walk was what the game waited for), or is it still
@@ -6348,7 +6357,13 @@ static void walk_site_note(int site, uint64_t t0, uint32_t rptr0) {
     const uint32_t rbd = g_rb_size ? g_rb_size >> 2 : 1, d = (g_rb_rptr_dwords + rbd - rptr0 % rbd) % rbd;
     WalkSite& w = g_walk_sites[site];
     ++w.calls; w.ns += t1 - t0; w.dwords += d;
+    if (site == WALK_SWAP) {
+        if (g_fence_walk_end) { g_fence_to_swap_ns += t0 - g_fence_walk_end; ++g_fence_to_swap_n; g_fence_walk_end = 0; }
+        g_swap_t = t1;
+    }
     if (!d) { ++w.empty; return; }
+    if (site == WALK_FENCE) g_fence_walk_end = t1;
+    if (g_fence_dev) { uint8_t* base = g_base; g_put_at_walk = PPC_LOAD_U32(g_fence_dev + 10908); }
     if (g_kick_first) { g_kick_wait_ns += t0 > g_kick_first ? t0 - g_kick_first : 0; ++g_kick_waits; g_kick_first = 0; }
     if (g_walk_last_end) { const uint64_t gap = t0 - g_walk_last_end; g_walk_gap_ns += gap; if (gap > g_walk_gap_max) g_walk_gap_max = gap; }
     g_walk_last_end = t1;
@@ -6376,8 +6391,10 @@ extern "C" void lsw_walk_sites_report(const char* state) {
     snprintf(b + k, sizeof b - k, " between walks %.1f ms in %llu, longest %.1f ms | kicks %llu, first kick to walk %.1f ms over %llu | fence waits with work: done already %llu, newest %llu, older %llu",
              (g_walk_gap_ns - last_gap) / 1e6, (unsigned long long)walks, g_walk_gap_max / 1e6, (unsigned long long)(g_kicks - l_kicks), (g_kick_wait_ns - l_kw) / 1e6, (unsigned long long)(g_kick_waits - l_kwn),
              (unsigned long long)(g_fence_done - l_fd), (unsigned long long)(g_fence_newest - l_fn), (unsigned long long)(g_fence_older - l_fo));
-    printf("[WALKWHY] state %s, fence waits with work, by distance from put (0, 1, 2, 3, 4+): %llu %llu %llu %llu %llu | completed by the walk %llu, only by the stub %llu\n", state, (unsigned long long)g_fence_behind[0], (unsigned long long)g_fence_behind[1],
-           (unsigned long long)g_fence_behind[2], (unsigned long long)g_fence_behind[3], (unsigned long long)g_fence_behind[4], (unsigned long long)g_fence_by_walk, (unsigned long long)g_fence_by_stub);
+    printf("[WALKWHY] state %s, fence waits with work, by distance from put (0, 1, 2, 3, 4+): %llu %llu %llu %llu %llu | completed by the walk %llu, only by the stub %llu | its segment walked before %llu, not %llu | fence walk to VdSwap %.1f ms over %llu, VdSwap to next kick %.1f ms over %llu\n", state, (unsigned long long)g_fence_behind[0], (unsigned long long)g_fence_behind[1],
+           (unsigned long long)g_fence_behind[2], (unsigned long long)g_fence_behind[3], (unsigned long long)g_fence_behind[4], (unsigned long long)g_fence_by_walk, (unsigned long long)g_fence_by_stub,
+           (unsigned long long)g_fence_walked_before, (unsigned long long)g_fence_not_walked, g_fence_to_swap_ns / 1e6, (unsigned long long)g_fence_to_swap_n,
+           g_swap_to_kick_ns / 1e6, (unsigned long long)g_swap_to_kick_n);
     last_gap = g_walk_gap_ns; g_walk_gap_max = 0;
     l_kicks = g_kicks; l_kw = g_kick_wait_ns; l_kwn = g_kick_waits; l_fd = g_fence_done; l_fn = g_fence_newest; l_fo = g_fence_older;
     puts(b);

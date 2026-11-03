@@ -1443,3 +1443,16 @@ The tester saw nothing wrong in any state.
 ## Log 40: `0.0.45-log40`, the compression test again
 
 Same states, handheld. `[BOKIND]` should list each new render target of Z and J: kinds `0x51` (depth) and, in J, `0xdb` (colour). Not yet run on hardware.
+
+## Run 40: `0.0.45-log40` handheld, 2 November 2026: compression on, no gain, and colour blurs
+
+`[BOKIND]` lists all 30 render targets of Z and J: depth kind `0x17`, colour `0xdb` in J, `0xfe` in Z, all on 128 KB mappings. About 3500 frames in the level.
+
+- **Colour compression blurs the picture.** The tester saw the resolution drop for a few seconds at a time, and nothing else. Both captures of it fell in `+ZJ`, and they look low-resolution. Mesa's comment on `0xdb` holds here. J is also slower: GPU per 1000 draws +10.2 % (90 %: +1.2 to +25.5).
+- **Depth on a big-page mapping changes nothing measurable.** GPU per 1000 draws -3.1 % (-6.9 to +3.8), -0.5 % at 1500+ draws; FPS load-matched +0.7 % at 1300+ (-9.7 to +20.9). Whether the hardware really compresses it is not visible from here.
+- **Decision:** compression is closed on this Mesa path. Both states leave the profile. The code stays: with no Z or J, `g_rt_pool` is 0 and nothing changes.
+- **Fence waits:** all 7738 with work wait for put - 2, and none of them is completed by the ring's own packets; only the stub's write completes it. So the walk at a fence wait is not what reports the fence.
+
+## Log 41: `0.0.46-log41`, docked, one state
+
+`[WALKWHY]` adds three things. First, whether the awaited fence's segment was already in the ring at the previous walk with work, so that walk has read it. Second, main-thread time from the frame's fence walk to VdSwap. Third, from VdSwap to the next kick. If the segment was always read before, a walker thread can take the walk and VdSwap can queue the frame instead of waiting. Not yet run on hardware.

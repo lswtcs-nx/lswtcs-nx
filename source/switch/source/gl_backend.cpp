@@ -860,14 +860,17 @@ GLuint program_trivial(const LswGlShader* vs, const LswGlShader* ps, const LswGl
 // shader and combination, compiled in the background; until it is ready the draw uses the shader as before.
 bool g_epi_ab = false, g_bench_epi = false;
 uint64_t g_epi_used = 0, g_epi_drawn = 0;
-const LswGlShader* epilogue_ps(const LswGlShader* ps, uint32_t flags, uint32_t a2m) {
+// A/B state g (log58), with e: also the shaders that write depth (run 57: the second costliest full-screen pass, 283E052419BCC461, writes
+// depth and kept its epilogue), and each component of the output exponent bias that is exactly 1 (a multiply per output, every shader).
+bool g_epi_ext = false;
+const LswGlShader* epilogue_ps(const LswGlShader* ps, uint32_t flags, uint32_t a2m, uint32_t bias_one = 0) {
     static const char* const kFunc = "bitfieldExtract(xe_uniform_system_constants.flags, int(11u), int(3u))";
     static const char* const kA2m = "if (xe_uniform_system_constants.alpha_to_mask != 0u)";
     static const char* const kMask = "gl_SampleMask[0] = -1;";
     static const char* const kGamma[2] = {"if ((xe_uniform_system_constants.flags & 16384u) != 0u)", "if ((xe_uniform_system_constants.flags & 32768u) != 0u)"};
-    const uint32_t combo = ((flags >> 11) & 7) | (a2m ? 8u : 0u) | (((flags >> 14) & 3) << 4);
+    const uint32_t combo = ((flags >> 11) & 7) | (a2m ? 8u : 0u) | (((flags >> 14) & 3) << 4) | ((bias_one & 15) << 6);
     static std::unordered_map<uint64_t, std::unique_ptr<LswGlShader>> variants;
-    const uint64_t key = (uint64_t(reinterpret_cast<uintptr_t>(ps)) << 6) ^ combo;
+    const uint64_t key = (uint64_t(reinterpret_cast<uintptr_t>(ps)) << 10) ^ combo;
     auto it = variants.find(key);
     if (it != variants.end()) return it->second.get();
     std::unique_ptr<LswGlShader> v;
@@ -881,6 +884,8 @@ const LswGlShader* epilogue_ps(const LswGlShader* ps, uint32_t flags, uint32_t a
     changed += replace_all(kA2m, a2m ? "if (true)" : "if (false)");
     if (!a2m) changed += replace_all(kMask, "");   // writing every sample changes nothing
     for (int i = 0; i < 2; ++i) changed += replace_all(kGamma[i], (flags >> (14 + i)) & 1 ? "if (true)" : "if (false)");
+    for (int i = 0; i < 4; ++i)   // state g: a bias of exactly 1 multiplies by 1
+        if ((bias_one >> i) & 1) changed += replace_all(std::string("xe_uniform_system_constants.color_exp_bias.") + "xyzw"[i], "1.0");
     if (changed) {
         v = std::make_unique<LswGlShader>(*ps);
         v->gl = 0;
@@ -889,8 +894,9 @@ const LswGlShader* epilogue_ps(const LswGlShader* ps, uint32_t flags, uint32_t a
     }
     return (variants[key] = std::move(v)).get();
 }
-GLuint program_epilogue(const LswGlShader* vs, const LswGlShader* ps, const LswGlShader* gs, GLuint prog, uint32_t flags, uint32_t a2m) {
-    const LswGlShader* e = epilogue_ps(ps, flags, a2m);
+GLuint program_epilogue(const LswGlShader* vs, const LswGlShader* ps, const LswGlShader* gs, GLuint prog, uint32_t flags, uint32_t a2m,
+                        uint32_t bias_one) {
+    const LswGlShader* e = epilogue_ps(ps, flags, a2m, bias_one);
     if (!e) return prog;
     const size_t waits = g_frame_wait.size();
     const uint32_t pending = g_prog_pending_draws;
@@ -2501,6 +2507,7 @@ void ab_cycle_tick() {
     g_early_z = has('F');   // F: early depth tests where the alpha test cannot discard, or depth and stencil are not written (program_early)
     g_early_force_ab = false;   // z is out after run 55: the tester saw transparency broken nearly everywhere (alpha references are about 0.5)
     g_epi_ab = has('e');   // e: pixel shader epilogues specialised for the draw (epilogue_ps); exact
+    g_epi_ext = has('g');   // g: with e, also depth-writing shaders and an exponent bias of 1 (g_epi_ext)
     lsw_async_walk_set(has('I'));   // I: the frame's ring walk on its own thread (kernel_stubs.cpp)
     lsw_kick_walk_set(has('k'));    // k (lower case; every capital is taken): with I, the walker starts at each kick (async_walk_kick)
     lsw_hsio_nowait_set(has('h'));  // h: flushes do not wait for the GPU, as on a console whose CPU-GPU link trained (lsw_hsio_nowait_set)
@@ -2946,9 +2953,11 @@ PresentSrc replay() {
                 const GLuint p = program_trivial(vs, ps, gs, prog);
                 if (g_bench_trivial) { if (p != prog) ++g_bench_trivial_used; prog = p; }
             }
-            if (prog && prog == prog_base && ps && !r.ps_writes_depth && (g_epi_ab || g_bench_epi)) {   // state e (epilogue_ps)
+            if (prog && prog == prog_base && ps && (!r.ps_writes_depth || g_epi_ext) && (g_epi_ab || g_bench_epi)) {   // state e (epilogue_ps)
                 const uint32_t* sys = reinterpret_cast<const uint32_t*>(f.arena.data() + r.cb_sys_off);
-                const GLuint p = program_epilogue(vs, ps, gs, prog, sys[0], sys[44]);
+                uint32_t bias_one = 0;   // color_exp_bias is system constant words 48-51
+                if (g_epi_ext) for (int i = 0; i < 4; ++i) bias_one |= uint32_t(sys[48 + i] == 0x3F800000u) << i;
+                const GLuint p = program_epilogue(vs, ps, gs, prog, sys[0], sys[44], bias_one);
                 ++g_epi_drawn;
                 if (p != prog) ++g_epi_used;
                 prog = p;
@@ -3372,10 +3381,7 @@ PresentSrc gpu_bench(const PresentSrc& shown) {
         {g_epi_ab ? "epilogues not specialised" : "epilogues specialised", 0, false, false, false},
         {"trivial pixel shaders", 0, false, false, false},
         {"textures unbound", 0, false, false, false},
-        {"anisotropic filtering off", 0, false, false, false},
         {"resolve copies off", 0, false, false, false},
-        {"full-size resolve copies off", 0, false, false, false},
-        {"reduced-size resolve copies off", 0, false, false, false},
         {"copies with a clear after off", 0, false, false, false},
         {"pixels off", 1, false, false, false},
         {"pixels+verts off", 2, false, false, false},

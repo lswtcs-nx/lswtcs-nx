@@ -1949,3 +1949,33 @@ These inputs are fixed for a whole draw. They appear in 218 of the 521 pixel sha
   - "anisotropic filtering off": bench only, because the filter is a quality setting.
   - "early-z forced" and its background variants are gone.
 - **States:** `MAPXSHNLUBIkhwr,MAPXSHNLUBIkhwre`.
+
+## Run 57: `0.0.63-log57` handheld, 3 November 2026: specialised epilogues are a gain
+
+Handheld, two passes through the heavy area (85 s and 71 s). No fault. The tester brought `glprogs2` again (730 programs).
+
+**State e:**
+- **FPS:** +10.4 % load-matched (90 %: +0.9 to +20.5); 23.6 against 21.1 FPS at 1300+ draws.
+- **Bench, same frame:** -6.0 ms (-13.6 %) where e was off, and +3.3 ms when it was turned off in e. Mean GPU per heavy frame was 37.2 ms with e against 42.5 ms without.
+- **Use:** after the first minutes nearly every eligible draw used its variant, with `[EPILOGUE]` at 100 % in most visits.
+
+The world shader `6F9BED73E5CE1620` went from 6.4 ms to several variants that are far cheaper together.
+
+**Bench, the shaders' cost split:**
+
+| Change | Saving |
+| --- | --- |
+| Trivial pixel shaders | -21.7 ms |
+| Textures unbound | -5.4 ms |
+| Anisotropic filtering off | -0.3 ms |
+
+So about three quarters of the shaders' time is arithmetic and a quarter is texture memory. Anisotropic filtering costs nothing worth discussing.
+
+**Not specialised:** the second costliest full-screen pass (`283E052419BCC461`, 2.3 ms) writes depth, and e excluded depth-writing shaders, a caution it did not need.
+
+## Log 58 (handheld)
+
+- **e joins the base.**
+- **State g:** with e, also the shaders that write depth, and each output exponent bias component that is exactly 1 (one multiply per output in every shader).
+- **States:** `MAPXSHNLUBIkhwre,MAPXSHNLUBIkhwreg`.
+- **Dropped from the bench:** anisotropic filtering, and the split by copy size.

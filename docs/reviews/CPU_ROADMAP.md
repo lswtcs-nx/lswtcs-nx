@@ -298,7 +298,7 @@ The measurements below are from heavy frames (1300+ draws, the start of `Gungan_
      - program ZCULL storage and region for the depth target in nvc0, invalidating on depth clears and target changes;
      - an A/B state plus a bench variant, with a pixel comparison as in state V.
    - **Risk:** GPU faults while it is misprogrammed. It will take several rounds.
-   - **Status:** log62 builds it as state c (`source/switch/mesa/mesa_zcull_edits.py`), with a bench variant and a pixel check (`[ZCULLCHECK]`).
+   - **Status:** log62 builds it as state c (`source/switch/mesa/mesa_zcull_edits.py`), with a bench variant and a pixel check (`[ZCULLCHECK]`). **Run 62: exact, no gain.** Every draw that writes depth has a real alpha test, and ZCULL cannot learn depth from draws that may discard. Closed.
    - **Reach:** part of the forced early test's 20 %.
 2. **Resolve texture hand-over (about 2 ms, 5 %).** Render targets have one fixed height, so a destination that takes the target's texture needs a per-fetch coordinate scale (through the fetch fold) and exact edges under clamping. Alternatively, render targets could be sized to their resolve.
 3. **The full-screen post passes (about 3-5 ms in two or three passes).** Measure a hand-cleaned version of the costliest pass in the bench first, and change the translator's control-flow output only if that pays.

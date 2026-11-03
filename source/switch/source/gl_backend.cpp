@@ -992,6 +992,63 @@ const LswGlShader* mainpass_ps(const LswGlShader* epi_always) {
     }
     return (variants[epi_always] = std::move(v)).get();
 }
+// A/B state q (log63): quad lists drawn as indexed triangles instead of through the quad geometry shader (lsw_gpu_geometry_shader
+// type 3). That shader drops a quad with a NaN position and otherwise emits the strip 0,1,3,2: triangles 0,1,3 and 3,1,2, each with
+// its last vertex as the provoking vertex. Here the same two triangles come from indices: a fixed pattern for non-indexed draws, and
+// the draw's own raw elements reordered for indices in the arena (the vertex shader swaps them, so they are copied as they are).
+// Indices in shared memory keep the shader: guest memory at replay time may differ from what the GPU reads. Only the NaN case can
+// differ, so q has a pixel check (LSWTCS_EXACTCHECK). Run 62's bench: with pixels, vertices, buffers, textures and state off, quad
+// draws still took 2.75 ms for 213, three times a plain draw's cost.
+bool g_quad_tris = false;
+uint64_t g_quad_draws = 0, g_quad_as_tris = 0, g_quad_kept_shm = 0, g_quad_kept_compiling = 0;
+GLuint g_quad_pattern = 0, g_quad_exp = 0;
+uint32_t g_quad_pattern_quads = 0;
+std::vector<uint32_t> g_quad_exp_off;   // per record of the frame: byte offset of its reordered indices in g_quad_exp, or UINT32_MAX
+// Builds the frame's reordered indices and makes the pattern long enough. Leaves the arena bound as the index buffer.
+void quad_expand_frame(const LswGpuFrame& f) {
+    g_quad_exp_off.assign(f.draws.size(), UINT32_MAX);
+    if (!g_quad_tris) return;
+    static std::vector<uint8_t> bytes;
+    static const uint8_t order[6] = {0, 1, 3, 3, 1, 2};
+    bytes.clear();
+    uint32_t pattern_quads = 0;
+    for (size_t i = 0; i < f.draws.size(); ++i) {
+        const LswGpuDrawRec& r = f.draws[i];
+        if (r.kind != 0 || r.gs_type != 3 || r.topology != 10) continue;
+        const uint32_t n = r.ib_count ? r.ib_count : r.vertex_count, quads = n / 4;
+        if (!quads) continue;
+        if (!r.ib_count) { pattern_quads = std::max(pattern_quads, quads); continue; }
+        const uint32_t esz = r.ib_32bit ? 4u : 2u;
+        if (r.ib_shm || uint64_t(r.ib_off) + uint64_t(n) * esz > f.arena.size()) continue;
+        const size_t at = (bytes.size() + 3) & ~size_t(3);
+        bytes.resize(at + size_t(quads) * 6 * esz);
+        const uint8_t* src = f.arena.data() + r.ib_off;
+        uint8_t* dst = bytes.data() + at;
+        for (uint32_t q = 0; q < quads; ++q)
+            for (int k = 0; k < 6; ++k) memcpy(dst + (size_t(q) * 6 + k) * esz, src + (size_t(q) * 4 + order[k]) * esz, esz);
+        g_quad_exp_off[i] = uint32_t(at);
+    }
+    bool bound = false;
+    if (pattern_quads > g_quad_pattern_quads) {
+        uint32_t cap = 4096;
+        while (cap < pattern_quads) cap *= 2;
+        std::vector<uint32_t> idx(size_t(cap) * 6);
+        for (uint32_t q = 0; q < cap; ++q)
+            for (int k = 0; k < 6; ++k) idx[size_t(q) * 6 + k] = q * 4 + order[k];
+        if (!g_quad_pattern) glGenBuffers(1, &g_quad_pattern);
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, g_quad_pattern);
+        glBufferData(GL_ELEMENT_ARRAY_BUFFER, GLsizeiptr(idx.size() * 4), idx.data(), GL_STATIC_DRAW);
+        g_quad_pattern_quads = cap;
+        bound = true;
+    }
+    if (!bytes.empty()) {
+        if (!g_quad_exp) glGenBuffers(1, &g_quad_exp);
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, g_quad_exp);
+        glBufferData(GL_ELEMENT_ARRAY_BUFFER, GLsizeiptr(bytes.size()), bytes.data(), GL_STREAM_DRAW);
+        bound = true;
+    }
+    if (bound) glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, g_arena);
+}
 GLuint program_ready(const LswGlShader* vs, const LswGlShader* ps, const LswGlShader* gs) {   // 0 while it compiles
     const size_t waits = g_frame_wait.size();
     const uint32_t pending = g_prog_pending_draws;
@@ -1237,8 +1294,12 @@ int32_t gpu_pixels_end() {
     glEndQuery(GL_SAMPLES_PASSED);
     return int32_t(g_gpx_used++);
 }
+// log63 bench: only the frame's first and last stamps. Each stamp is a report that flushes the pipeline up to stream output
+// (nvc0_hw_query, 0x00005002: no flush-disable bit), so per-draw stamps may cost GPU time of their own.
+bool g_bench_nostamps = false;
 void gpu_stamp(uint8_t kind, GLuint prog = 0, uint64_t ps_key = 0, int32_t pixels = -1) {
     if (!g_gpuprof_frame) return;
+    if (g_bench_nostamps && kind != GK_START && kind != GK_PRESENT) return;
     const size_t i = g_gpq_labels.size();
     if (i >= g_gpq_pool.size()) {
         const size_t add = std::max<size_t>(256, g_gpq_pool.size());
@@ -2585,6 +2646,13 @@ void ab_cycle_tick() {
             l_zb = lsw_nvc0_zcull_binds; l_zi = lsw_nvc0_zcull_inval; l_zf = lsw_nvc0_zcull_inval_fp; l_zg = lsw_nvc0_zcull_forgets;
             l_zu = lsw_nvc0_zcull_unsupported; l_zc = lsw_nvc0_zcull_clamped;
         }
+        {
+            static uint64_t l_qd, l_qt, l_qs, l_qc;
+            printf("[QUADS] state %s: quad draws %llu, drawn as triangles %llu, kept on the geometry shader: indices in shared memory %llu, "
+                   "program still building %llu\n", g_ab_state.c_str(), (unsigned long long)(g_quad_draws - l_qd),
+                   (unsigned long long)(g_quad_as_tris - l_qt), (unsigned long long)(g_quad_kept_shm - l_qs), (unsigned long long)(g_quad_kept_compiling - l_qc));
+            l_qd = g_quad_draws; l_qt = g_quad_as_tris; l_qs = g_quad_kept_shm; l_qc = g_quad_kept_compiling;
+        }
         static uint64_t l_slot[8];
         char ub[160]; int uk = snprintf(ub, sizeof ub, "[GLUBO] state %s, binding changes by block:", g_ab_state.c_str());
         for (int i = 0; i < 8; ++i) { uk += snprintf(ub + uk, sizeof ub - uk, " %llu", (unsigned long long)(g_ubo_slot[i] - l_slot[i])); l_slot[i] = g_ubo_slot[i]; }
@@ -2625,7 +2693,8 @@ void ab_cycle_tick() {
     lsw_ring_early_set(has('r'));   // r: the ring-space wait ends once the reader is past the window (ring_window_wait)
     lsw_walk_float_set(has('f'));   // f: the off-turn walk on core 1 or 2, whichever has time
     lsw_nvc0_cb_dedupe = has('B');   // B: nouveau skips constant buffer binds that change nothing (mesa_cbdedupe_edits.py)
-    lsw_nvc0_zcull = has('c');   // c (log62): ZCULL, the GPU's coarse depth culling, set up in nouveau (mesa_zcull_edits.py)
+    lsw_nvc0_zcull = has('c');   // c (log62): ZCULL set up in nouveau (mesa_zcull_edits.py); out after run 62, exact but no gain
+    g_quad_tris = has('q');   // q (log63): quad lists as indexed triangles, without the quad geometry shader (quad_expand_frame)
     lsw_shm_age_set(has('E'));
     lsw_quantum_div_set(has('Q') ? 4 : 0);
     g_polyofs_on = has('O');
@@ -2959,6 +3028,7 @@ PresentSrc replay() {
     g_frame_groups = ut.groups;
     lsw_prof_note_draws(uint32_t(f.draws.size()));
     rp_close(RP_PLAN, t_plan, t_plan_in);
+    quad_expand_frame(f);   // state q
     GLuint ebo_bound = g_arena;   // arena_upload bound the arena as the index buffer
     const uint64_t t_loop = gp_now(), t_loop_in = g_rp_scoped;
     LswGpuDrawRec rmod;   // a record with the untiling changes (scissor extended / resolve rows shifted)
@@ -3041,10 +3111,21 @@ PresentSrc replay() {
         const auto* ps = static_cast<const LswGlShader*>(r.ps_dxbc);
         const auto* gs = static_cast<const LswGlShader*>(r.gs_dxbc);
         if (r.gs_type && !gs) { ++no_gs; continue; }
+        // State q: the quad geometry shader gives way to indexed triangles once the program without it is built (quad_expand_frame).
+        const LswGlShader* gs_eff = gs;
+        bool quad_tris = false;
+        if (r.gs_type == 3 && r.topology == 10 && vs) {
+            ++g_quad_draws;
+            if (g_quad_tris && (r.ib_count ? r.ib_count : r.vertex_count) >= 4) {
+                if (r.ib_count && g_quad_exp_off[rec_i] == UINT32_MAX) ++g_quad_kept_shm;
+                else if (!program_ready(vs, ps, nullptr)) ++g_quad_kept_compiling;
+                else { gs_eff = nullptr; quad_tris = true; ++g_quad_as_tris; }
+            }
+        }
         GLuint prog = 0, prog_pre = 0, prog_main = 0;
         if (vs) {
             RpScope rp(RP_PROGRAM);
-            prog = program(vs, ps, gs);
+            prog = program(vs, ps, gs_eff);
             const GLuint prog_base = prog;
             if (prog && ps && !r.ps_writes_depth && early_ps(ps)) {
                 const uint32_t* sys = reinterpret_cast<const uint32_t*>(f.arena.data() + r.cb_sys_off);
@@ -3055,13 +3136,13 @@ PresentSrc replay() {
                     ++g_alpha_ref_hist[ref <= 0.0f ? 0 : ref <= 0.25f ? 1 : ref <= 0.5f ? 2 : ref <= 0.75f ? 3 : 4];
                 }
                 ++g_alpha_depth[r.depthcontrol & 7];
-                if (g_early_force || g_early_force_ab) { const GLuint p = program_early(vs, ps, gs, prog); if (p != prog) ++g_early_forced; prog = p; }
+                if (g_early_force || g_early_force_ab) { const GLuint p = program_early(vs, ps, gs_eff, prog); if (p != prog) ++g_early_forced; prog = p; }
                 // State F: the alpha test cannot discard, or (run 42: every such draw has the test on) the draw writes neither depth nor stencil
                 // but tests depth: then a discard after an early test changes nothing either.
-                else if (g_early_z && ((func == 7 && sys[44] == 0) || (r.depthcontrol & 7) == 2)) prog = program_early(vs, ps, gs, prog);
+                else if (g_early_z && ((func == 7 && sys[44] == 0) || (r.depthcontrol & 7) == 2)) prog = program_early(vs, ps, gs_eff, prog);
             }
             if (prog && ps && !r.ps_writes_depth && (g_bench_trivial || g_bench_prewarm)) {   // log56 bench; built in the background before
-                const GLuint p = program_trivial(vs, ps, gs, prog);
+                const GLuint p = program_trivial(vs, ps, gs_eff, prog);
                 if (g_bench_trivial) { if (p != prog) ++g_bench_trivial_used; prog = p; }
             }
             if (prog && prog == prog_base && ps && (!r.ps_writes_depth || g_epi_ext) && (g_epi_ab || g_bench_epi)) {   // state e (epilogue_ps)
@@ -3070,7 +3151,7 @@ PresentSrc replay() {
                 if (g_epi_ext) for (int i = 0; i < 4; ++i) bias_one |= uint32_t(sys[48 + i] == 0x3F800000u) << i;
                 const uint64_t dbits = g_epi_derived && r.cb_derived_off
                     ? epi_derived_bits(ps, reinterpret_cast<const float*>(f.arena.data() + r.cb_derived_off)) : 0;
-                const GLuint p = program_epilogue(vs, ps, gs, prog, sys[0], sys[44], bias_one, dbits);
+                const GLuint p = program_epilogue(vs, ps, gs_eff, prog, sys[0], sys[44], bias_one, dbits);
                 ++g_epi_drawn;
                 if (p != prog) ++g_epi_used;
                 prog = p;
@@ -3087,8 +3168,8 @@ PresentSrc replay() {
                     const LswGlShader* pre = epi ? prepass_ps(epi) : nullptr;
                     const LswGlShader* full = epi7 ? mainpass_ps(epi7) : nullptr;
                     if (pre && full) {
-                        prog_pre = program_ready(vs, pre, gs);
-                        prog_main = program_ready(vs, full, gs);
+                        prog_pre = program_ready(vs, pre, gs_eff);
+                        prog_main = program_ready(vs, full, gs_eff);
                         if (prog_pre && prog_main) ++g_prepass_used; else prog_pre = prog_main = 0;
                     }
                 }
@@ -3223,13 +3304,23 @@ PresentSrc replay() {
             RpScope rp(RP_DRAW);
             // Index source: the arena, or guest memory in shared memory (r.ib_shm, kernel_stubs LSWTCS_IBSHM).
             const GLuint ebo = r.ib_shm ? g_shm : g_arena;
-            if (r.ib_count && ebo != ebo_bound) { glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ebo); ebo_bound = ebo; }
+            if (r.ib_count && !quad_tris && ebo != ebo_bound) { glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ebo); ebo_bound = ebo; }
             GLsizei count = GLsizei(r.ib_count ? r.ib_count : r.vertex_count);
             if (g_gpuprof_frame) g_gpuprof_verts += uint64_t(count);
             if (g_gpuprof_novtx) count = std::min<GLsizei>(count, 6);   // DIAG
             gpu_pixels_begin();
             auto issue = [&] {
-                if (r.ib_count)
+                if (quad_tris) {   // state q: two triangles per quad
+                    const GLsizei n = count / 4 * 6;
+                    if (r.ib_count) {
+                        if (ebo_bound != g_quad_exp) { glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, g_quad_exp); ebo_bound = g_quad_exp; }
+                        glDrawElements(GL_TRIANGLES, n, r.ib_32bit ? GL_UNSIGNED_INT : GL_UNSIGNED_SHORT,
+                                       reinterpret_cast<const void*>(uintptr_t(g_quad_exp_off[rec_i])));
+                    } else {
+                        if (ebo_bound != g_quad_pattern) { glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, g_quad_pattern); ebo_bound = g_quad_pattern; }
+                        glDrawElements(GL_TRIANGLES, n, GL_UNSIGNED_INT, nullptr);
+                    }
+                } else if (r.ib_count)
                     glDrawElements(mode, count, r.ib_32bit ? GL_UNSIGNED_INT : GL_UNSIGNED_SHORT,
                                    reinterpret_cast<const void*>(uintptr_t(r.ib_off)));
                 else
@@ -3522,14 +3613,14 @@ PresentSrc gpu_bench(const PresentSrc& shown) {
     next_ns = gp_now() + every_s * 1000000000ull;
     const bool early0 = g_early_z;
     const int dedupe0 = lsw_nvc0_cb_dedupe;
-    const int zcull0 = lsw_nvc0_zcull;
     struct Variant { const char* label; int kind; bool flip_early, flip_dedupe, noresolve; };
     const Variant variants[] = {
         {"plain", 0, false, false, false},
         {"resolves off", 0, false, false, true},
         {g_epi_ab ? "epilogues not specialised" : "epilogues specialised", 0, false, false, false},
         {g_epi_derived ? "fetch constants not specialised" : "fetch constants specialised", 0, false, false, false},
-        {zcull0 ? "ZCULL off" : "ZCULL on", 0, false, false, false},   // log62: state c
+        {g_quad_tris ? "quads through the geometry shader" : "quads as triangles", 0, false, false, false},   // log63: state q
+        {"plain without per-draw stamps", 0, false, false, false},   // log63: what the per-draw timestamps themselves cost
         {"trivial pixel shaders", 0, false, false, false},
         {"textures unbound", 0, false, false, false},
         {"resolve copies off", 0, false, false, false},
@@ -3548,8 +3639,9 @@ PresentSrc gpu_bench(const PresentSrc& shown) {
     for (const Variant& v : variants) {
         g_early_z = v.flip_early ? !early0 : early0;
         lsw_glthread_call(bench_dedupe_job, reinterpret_cast<void*>(uintptr_t(v.flip_dedupe ? !dedupe0 : dedupe0)));
-        const bool flip_zcull = !strcmp(v.label, "ZCULL off") || !strcmp(v.label, "ZCULL on");
-        lsw_glthread_call(zcull_job, reinterpret_cast<void*>(uintptr_t(flip_zcull ? !zcull0 : zcull0)));
+        g_quad_tris = (g_ab_state.find('q') != std::string::npos) !=
+                      (!strcmp(v.label, "quads through the geometry shader") || !strcmp(v.label, "quads as triangles"));
+        g_bench_nostamps = !strcmp(v.label, "plain without per-draw stamps");
         g_bench_noresolve = v.noresolve;
         g_bench_kind = v.kind;
         g_bench_label = v.label;
@@ -3582,7 +3674,8 @@ PresentSrc gpu_bench(const PresentSrc& shown) {
     g_epi_derived = g_ab_state.find('d') != std::string::npos;
     g_early_z = early0;
     lsw_glthread_call(bench_dedupe_job, reinterpret_cast<void*>(uintptr_t(dedupe0)));
-    lsw_glthread_call(zcull_job, reinterpret_cast<void*>(uintptr_t(zcull0)));
+    g_quad_tris = g_ab_state.find('q') != std::string::npos;
+    g_bench_nostamps = false;
     g_replay_same = false;
     printf("[GPUBENCH] replay %llu, %zu records, state %s: the frame drawn %zu more times above (BENCH lines)\n", (unsigned long long)replay_id, f.draws.size(),
            g_ab_state.c_str(), sizeof variants / sizeof variants[0]);
@@ -3643,17 +3736,23 @@ PresentSrc untile_check(const PresentSrc& shown) {
     return third;
 }
 
-// DIAG (LSWTCS_ZCULLCHECK=N replays, log62): at most every N replays, a frame of 1300+ draws is drawn again with ZCULL off, on and
-// off (mesa_zcull_edits.py, state c), whatever the A/B state. ZCULL set up right changes no pixel, so the frame with it must match the
-// first frame without it as closely as the two frames without it match each other. Flagged frames keep their three images.
-PresentSrc zcull_check(const PresentSrc& shown) {
-    static const uint64_t every = [] { const char* e = getenv("LSWTCS_ZCULLCHECK"); return uint64_t(e ? atoi(e) : 0); }();
+// DIAG (LSWTCS_EXACTCHECK=N replays, LSWTCS_EXACTWHAT=q or c; log62 for c, log63 for q): at most every N replays, a frame of 1300+
+// draws is drawn again with the change off, on and off, whatever the A/B state. An exact change alters no pixel, so the frame with it
+// must match the first frame without it as closely as the two frames without it match each other. Flagged frames keep their images.
+void exact_set(char what, int on) {
+    if (what == 'c') lsw_glthread_call(zcull_job, reinterpret_cast<void*>(uintptr_t(on)));   // queued between the replays' GL calls
+    else if (what == 'q') g_quad_tris = on != 0;
+}
+uint64_t exact_count(char what) { return what == 'c' ? lsw_nvc0_zcull_binds : what == 'q' ? g_quad_as_tris : 0; }
+PresentSrc exact_check(const PresentSrc& shown) {
+    static const uint64_t every = [] { const char* e = getenv("LSWTCS_EXACTCHECK"); return uint64_t(e ? atoi(e) : 0); }();
+    static const char what = [] { const char* e = getenv("LSWTCS_EXACTWHAT"); return e && e[0] ? e[0] : 'q'; }();
     static uint64_t next = 0;
     const LswGpuFrame& f = g_gpu_frame_render;
     if (!every || g_replays < next || f.draws.size() < 1300 || g_capture_frame || g_frame_hold_ns) return shown;
     next = g_replays + every;
     const uint64_t replay_id = g_replays;
-    const int zcull0 = lsw_nvc0_zcull;
+    const int on0 = what == 'c' ? int(lsw_nvc0_zcull) : what == 'q' ? int(g_quad_tris) : 0;
     const uint32_t w = shown.w, h = shown.h;
     std::vector<uint8_t> off, on, off2;
     auto read = [w, h](const PresentSrc& src, std::vector<uint8_t>& px) {
@@ -3663,39 +3762,40 @@ PresentSrc zcull_check(const PresentSrc& shown) {
         glReadPixels(0, 0, GLsizei(w), GLsizei(h), GL_RGBA, GL_UNSIGNED_BYTE, px.data());
         for (size_t k = 3; k < px.size(); k += 4) px[k] = 255;
     };
-    const uint64_t binds0 = lsw_nvc0_zcull_binds;
     g_replay_same = true;
-    lsw_glthread_call(zcull_job, reinterpret_cast<void*>(uintptr_t(0)));
+    exact_set(what, 0);
     const PresentSrc first = replay();
     arena_fence();
     read(first, off);
-    lsw_glthread_call(zcull_job, reinterpret_cast<void*>(uintptr_t(1)));
+    const uint64_t count0 = exact_count(what);
+    exact_set(what, 1);
     const PresentSrc second = replay();
     arena_fence();
     read(second, on);
-    const uint64_t binds_on = lsw_nvc0_zcull_binds - binds0;
-    lsw_glthread_call(zcull_job, reinterpret_cast<void*>(uintptr_t(0)));
+    const uint64_t count_on = exact_count(what) - count0;
+    exact_set(what, 0);
     const PresentSrc third = replay();
     arena_fence();
     read(third, off2);
-    lsw_glthread_call(zcull_job, reinterpret_cast<void*>(uintptr_t(zcull0)));
+    exact_set(what, on0);
     g_replay_same = false;
     const ImageDiff diff = image_diff(off, on, w, h), noise = image_diff(off, off2, w, h);
     static uint32_t checks = 0, flagged = 0, saved = 0;
     ++checks;
     const bool flag = diff.pixels > 256 && diff.pixels > noise.pixels * 4;
     flagged += flag;
-    printf("[ZCULLCHECK] replay %llu, %zu records, state %s: with ZCULL differs in %u px (noise %u), box %d,%d..%d,%d, "
-           "framebuffers with ZCULL %llu%s (check %u, %u flagged)\n",
-           (unsigned long long)replay_id, f.draws.size(), g_ab_state.c_str(), diff.pixels, noise.pixels, diff.pixels ? int(diff.x0) : 0,
-           diff.pixels ? int(diff.y0) : 0, int(diff.x1), int(diff.y1), (unsigned long long)binds_on, flag ? " FLAGGED" : "", checks, flagged);
+    printf("[EXACTCHECK] replay %llu, %zu records, state %s, change %c: differs in %u px (noise %u), box %d,%d..%d,%d, "
+           "%s %llu%s (check %u, %u flagged)\n",
+           (unsigned long long)replay_id, f.draws.size(), g_ab_state.c_str(), what, diff.pixels, noise.pixels, diff.pixels ? int(diff.x0) : 0,
+           diff.pixels ? int(diff.y0) : 0, int(diff.x1), int(diff.y1), what == 'c' ? "framebuffers with ZCULL" : "quad draws as triangles",
+           (unsigned long long)count_on, flag ? " FLAGGED" : "", checks, flagged);
     fflush(stdout);
     if (flag && saved < 10) {
         ++saved;
         char name[48], path[128];
         const std::pair<const char*, std::vector<uint8_t>*> images[] = {{"off", &off}, {"on", &on}, {"off2", &off2}};
         for (const auto& image : images) {
-            snprintf(name, sizeof name, "zcheck_%llu_%s.png", (unsigned long long)replay_id, image.first);
+            snprintf(name, sizeof name, "xcheck_%c_%llu_%s.png", what, (unsigned long long)replay_id, image.first);
             lsw_log_path(path, sizeof path, name);
             save_png(path, std::move(*image.second), int(w), int(h));
         }
@@ -4340,7 +4440,7 @@ void render_thread_main() {
         }
         shown = gpu_bench(shown);
         shown = untile_check(shown);
-        shown = zcull_check(shown);
+        shown = exact_check(shown);
         { RpScope rp(RP_EVICT); evict_textures(); }
         if (g_glpipe) {   // present blit recorded here; GPU-queue cap, swap and fence run on the worker (swap_job)
             { RpScope rp(RP_PRESENT); present_frame(shown); }

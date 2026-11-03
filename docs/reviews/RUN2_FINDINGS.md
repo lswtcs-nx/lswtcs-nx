@@ -2109,3 +2109,50 @@ See CPU_ROADMAP.md, "Deko3D study". In short:
 - Little gain if the hardware cannot tighten ZCULL from alpha-tested draws. The world draws are almost all alpha-tested, so this is the main unknown.
 
 **Expected:** some of the hidden-layer shading goes. The forced early test was -17 to -20 % of the GPU frame, and it was wrong. The pixel check and the bench decide.
+
+## Run 62: `0.0.68-log62` handheld, 3 November 2026: ZCULL is exact and saves nothing
+
+Handheld, stock clocks (CPU 1020, GPU 307.2, memory 1331.2 MHz), states `MAPXSHNLUBIkhwreg` and `MAPXSHNLUBIkhwregc`. No crash. The tester saw no difference in the picture.
+
+- **ZCULL works as set up and is exact.** `[ZCULL]` counts about 4000-5000 framebuffers set up per 6 s visit in heavy play. Every region was cut to fit the 2048-row targets. All six `[ZCULLCHECK]` frames (1512-1983 records) matched to the pixel: 0 px against 0 px of noise.
+- **It saves nothing.**
+  - Bench: "ZCULL on" +0.12 ms (5 benches) and "ZCULL off" -0.32 ms (9 benches), against a noise floor of about ±3 ms.
+  - FPS at 1300+ draws: 27.3 with c against 27.0 without, raw. Load-matched, the base was ahead by 6.1 % (90 %: +1.0 to +11.3) over 13 visits each. The bench shows no GPU change, so the GPU and FPS figures disagree, and this is read as visit noise.
+- **Why ZCULL cannot help here.** `[EARLYZ]` shows that every draw with the alpha-test code has a real test: function 4 (greater) 4.2 M draws, 6 (greater or equal) 1.4 M, never 7 (always). Depth-writing draws without that code are rare. A draw that may discard cannot teach ZCULL its depth, so ZCULL holds little more than the clear value and has nothing to cull. Whether the hardware culled any tile is not measured: the ZCULL statistics counters were not read.
+- **Decision:** c is out. The Mesa edits stay applied; without c they leave the region off as before.
+- **d joins the base.** It is exact, and its bench saved 1.3 ms here ("fetch constants specialised", 14 benches) and 1.8 ms in run 60.
+
+**The bench now has log61's state-off variant** (14 benches, plain frame median 37.0 ms):
+
+| Change | ms |
+| --- | --- |
+| Pixels off | -21.6 |
+| Plus vertices off | -24.0 |
+| Plus uniform buffers off | -25.2 |
+| Plus textures off | -26.4 |
+| Plus state off | -26.6 |
+
+- **About 10.4 ms is left with everything off.** By kind: plain draws 5.4 ms for about 1300 (4 µs each); quads 2.75 ms for 213 (13 µs each); rects 1.7 ms for 22; points 0.8 ms for 72; resolves 3.7 ms.
+- **The quad, rect and point draws all run through a geometry shader.** Each quad draw costs about three times a plain draw even with pixels, vertices, buffers, textures and state off.
+- **Each per-draw stamp is a pipeline report that flushes up to stream output** (nouveau's timestamp query, `0x00005002`, without the flush-disable bit). Part of the 4 µs per draw may be the profiler itself. Unstamped heavy frames (`[GLSPAN]`) take 39-43 ms of GPU time, so the GPU still limits handheld.
+
+## Log 63 (handheld): quads without the geometry shader, state q
+
+**State q** (`quad_expand_frame`, `gl_backend.cpp`): quad lists are drawn as indexed triangles, without the quad geometry shader.
+- The shader emits the strip 0,1,3,2. That is triangles 0,1,3 and 3,1,2, each with its last vertex as the provoking vertex, and q issues exactly those.
+- Non-indexed draws use a fixed index pattern.
+- Draws with indices in the arena get their own raw elements reordered. The vertex shader swaps the elements, so they are copied unchanged.
+- Draws with indices in shared memory keep the shader: guest memory at replay time may differ from what the GPU reads.
+- The program without the shader builds in the background, and draws use the shader until it is ready.
+- **The one known difference:** the shader drops a whole quad when any of its positions is NaN, and plain triangles do not.
+
+**States:** `MAPXSHNLUBIkhwregd,MAPXSHNLUBIkhwregdq` (d in the base).
+
+**New output:**
+- `[QUADS]` per state: quad draws, how many were drawn as triangles, and how many kept the shader, with the reason.
+- **Bench variants:**
+  - "quads as triangles" or "quads through the geometry shader";
+  - "plain without per-draw stamps": only the frame's first and last stamps, to price the profiler's own reports.
+- **Pixel check:** it is now generic. `LSWTCS_EXACTCHECK=900` with `LSWTCS_EXACTWHAT=q` prints `[EXACTCHECK]`, and a flagged frame keeps `xcheck_q_<replay>_*.png`. The ZCULL variant leaves the bench.
+
+**Expected:** up to the quads' fixed cost, about 2 ms (5 %), if it comes from the geometry shader and not from the stamps. The bench and the stamp-free variant separate the two.

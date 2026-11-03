@@ -770,6 +770,40 @@ GLuint program(const LswGlShader* vs, const LswGlShader* ps, const LswGlShader* 
     g_programs.emplace(key, e.prog);   // ready or failed: settled
     return e.prog;
 }
+// State F: early depth and stencil tests for pixel shaders that run late only because of the alpha test the translator emits in each
+// of them (its discard and sample mask: 176 of 499 programs, two discards each and no other). Used only for draws whose alpha test is
+// set to always pass and whose alpha to coverage is off, where that code never discards. Testing first then changes nothing in the
+// picture and skips shading pixels that fail the depth test.
+bool g_early_z = false;
+uint64_t g_early_eligible = 0, g_early_used = 0;
+const LswGlShader* early_ps(const LswGlShader* ps) {
+    static std::unordered_map<const LswGlShader*, std::unique_ptr<LswGlShader>> variants;
+    auto it = variants.find(ps);
+    if (it != variants.end()) return it->second.get();
+    std::unique_ptr<LswGlShader> v;
+    size_t discards = 0;
+    for (size_t at = ps->glsl.find("discard;"); at != std::string::npos; at = ps->glsl.find("discard;", at + 1)) ++discards;
+    const size_t at = ps->glsl.find("\nlayout(");
+    if (discards == 2 && at != std::string::npos && ps->glsl.find("gl_FragDepth") == std::string::npos &&
+        ps->glsl.find("alpha_test_reference") != std::string::npos) {
+        v = std::make_unique<LswGlShader>(*ps);
+        v->gl = 0;
+        v->key = ps->key ^ 0xEA51E7E57ull;
+        v->glsl.insert(at + 1, "layout(early_fragment_tests) in;\n");
+    }
+    return (variants[ps] = std::move(v)).get();
+}
+GLuint program_early(const LswGlShader* vs, const LswGlShader* ps, const LswGlShader* gs, GLuint prog) {
+    const LswGlShader* e = early_ps(ps);
+    if (!e) return prog;
+    ++g_early_eligible;
+    const size_t waits = g_frame_wait.size();
+    const uint32_t pending = g_prog_pending_draws;
+    const GLuint p = program(vs, e, gs);
+    if (!p) { g_frame_wait.resize(waits); g_prog_pending_draws = pending; return prog; }   // still compiling: draw as before, and do not hold the frame for it
+    ++g_early_used;
+    return p;
+}
 
 // ---- DIAG: render-thread profile ----------------------------------------------------------------
 // Leaf stages of a replay (ns, render thread only). [GLSTALL] prints the split of one stalled replay,
@@ -949,6 +983,10 @@ inline GLuint64 gpu_ticks_to_ns(GLuint64 t) { return t / 384 * 625 + t % 384 * 6
 // (no UBO rebinds after the first in a state epoch) / +TEX FROZEN (no texture, swizzle or sampler rebinds) / +STATE
 // FROZEN (no state block changes). Differences = GPU cost of each kind of per-draw change. Pictures wrong for one frame.
 bool g_gpuprof_nopix = false, g_gpuprof_novtx = false;
+// LSWTCS_GPUBENCH (gpu_bench): one heavy frame drawn again with one change at a time, GPU-timed. kind = omission level as GLGPUSPLIT.
+int g_bench_kind = -1;
+const char* g_bench_label = nullptr;
+bool g_bench_noresolve = false;
 bool g_gpuprof_noubo = false, g_gpuprof_notex = false, g_gpuprof_nostate = false;
 bool g_blit_stamp = false;   // blit() stamps itself as GK_TEXSRC (set around texture_source)
 uint64_t g_gpuprof_verts = 0;
@@ -1025,7 +1063,9 @@ void gpu_prof_finish() {
     }
     g_gpx_used = 0;
     const uint64_t total = n > 1 && t[n - 1] > t[0] ? t[n - 1] - t[0] : 0;
-    const char* variant = g_gpuprof_nostate ? " PIXELS+VERTS+UBO+TEX+STATE OFF" : g_gpuprof_notex ? " PIXELS+VERTS+UBO+TEX OFF"
+    char bench_variant[64];
+    if (g_bench_label) snprintf(bench_variant, sizeof bench_variant, " BENCH %s", g_bench_label);
+    const char* variant = g_bench_label ? bench_variant : g_gpuprof_nostate ? " PIXELS+VERTS+UBO+TEX+STATE OFF" : g_gpuprof_notex ? " PIXELS+VERTS+UBO+TEX OFF"
                         : g_gpuprof_noubo ? " PIXELS+VERTS+UBO OFF" : g_gpuprof_novtx ? " PIXELS+VERTS OFF" : g_gpuprof_nopix ? " PIXELS OFF" : "";
     printf("[GLGPU] replay %llu%s: GPU %.2f ms, %llu verts | plain %.2f (%llu) points %.2f (%llu) rects %.2f (%llu) quads %.2f (%llu) "
            "resolves %.2f (%llu) texsrc blits %.2f (%llu, pre %.2f) present %.2f | %.1f Mpx\n", (unsigned long long)g_replays, variant,
@@ -2281,6 +2321,9 @@ void ab_cycle_tick() {
         lsw_ab_stat_report(g_ab_state.c_str(), (unsigned long long)g_replays);
         lsw_walk_sites_report(g_ab_state.c_str());
         static unsigned long long l_sets = 0, l_same = 0, l_bar = 0, l_ser = 0, l_rep = 0;
+        static uint64_t l_ee = 0, l_eu = 0;
+        printf("[EARLYZ] state %s: draws eligible %llu, drawn with the early-test variant %llu\n", g_ab_state.c_str(), (unsigned long long)(g_early_eligible - l_ee), (unsigned long long)(g_early_used - l_eu));
+        l_ee = g_early_eligible; l_eu = g_early_used;
         printf("[NVC0CB] state %s: %llu replays, blocks set %llu, skipped as unchanged %llu, constant cache barriers %llu, serializes %llu\n", g_ab_state.c_str(), (unsigned long long)g_replays - l_rep,
                lsw_nvc0_cb_sets - l_sets, lsw_nvc0_cb_same - l_same, lsw_nvc0_cb_barriers - l_bar, lsw_nvc0_cb_serializes - l_ser);
         static uint64_t l_slot[8];
@@ -2308,6 +2351,7 @@ void ab_cycle_tick() {
     lsw_audio_offturn_set(has('U'));
     lsw_spin_real_set(has('L'));
     g_rt_pool = has('J') ? 3 : has('Z') ? 1 : 0;   // Z, J: compressed render targets (gl_rt.inc)
+    g_early_z = has('F');   // F: early depth tests where the alpha test cannot discard (program_early)
     lsw_nvc0_cb_dedupe = has('B');   // B: nouveau skips constant buffer binds that change nothing (mesa_cbdedupe_edits.py)
     lsw_shm_age_set(has('E'));
     lsw_quantum_div_set(has('Q') ? 4 : 0);
@@ -2516,11 +2560,12 @@ PresentSrc replay() {
         static uint64_t last_heavy = 0;
         if (every && !g_gpuprof_frame && f.draws.size() >= 1300 && g_replays - last_heavy >= every / 5) g_gpuprof_frame = true;
         if (every && g_capture_frame) g_gpuprof_frame = true;   // a captured frame also has its cost per pass, next to its picture and draw list
+        if (g_bench_kind >= 0) g_gpuprof_frame = true;
         inv_frame_begin(f);
         if (g_gpuprof_frame) last_heavy = g_replays;
         static const int split = [] { const char* e = getenv("LSWTCS_GLGPUSPLIT"); return e ? atoi(e) : 0; }();
         static uint64_t samples = 0;
-        const uint64_t kind = g_gpuprof_frame && split ? samples++ % (split >= 2 ? 6 : 3) : 0;
+        const uint64_t kind = g_bench_kind >= 0 ? uint64_t(g_bench_kind) : g_gpuprof_frame && split ? samples++ % (split >= 2 ? 6 : 3) : 0;
         g_gpuprof_nopix = kind >= 1;
         g_gpuprof_novtx = kind >= 2;
         g_gpuprof_noubo = kind >= 3;
@@ -2692,7 +2737,7 @@ PresentSrc replay() {
                        r.rs_rect[0], r.rs_rect[1], r.rs_rect[2], r.rs_rect[3], r.surf_info & 0x3FFF, r.rs_dest, r.rs_dest_pitch,
                        r.rs_dest_height, r.rs_dest_x, r.rs_dest_y, r.rs_dest_fmt, r.rs_clear_color, r.rs_clear_depth);
             ++draw_i;
-            if (gpurt) {
+            if (gpurt && !g_bench_noresolve) {
                 RpScope rp(RP_RESOLVE);
                 const bool copy = dead[rec_i] != 2;
                 if (!copy) ++dead_resolves;
@@ -2724,7 +2769,14 @@ PresentSrc replay() {
         const auto* gs = static_cast<const LswGlShader*>(r.gs_dxbc);
         if (r.gs_type && !gs) { ++no_gs; continue; }
         GLuint prog = 0;
-        if (vs) { RpScope rp(RP_PROGRAM); prog = program(vs, ps, gs); }
+        if (vs) {
+            RpScope rp(RP_PROGRAM);
+            prog = program(vs, ps, gs);
+            if (prog && ps && g_early_z && !r.ps_writes_depth) {   // state F: alpha test always passes (flags bits 11-13 = 7), alpha to coverage off
+                const uint32_t* sys = reinterpret_cast<const uint32_t*>(f.arena.data() + r.cb_sys_off);
+                if (((sys[0] >> 11) & 7) == 7 && sys[44] == 0) prog = program_early(vs, ps, gs, prog);
+            }
+        }
         if (!prog) { ++no_prog; continue; }
         if (env_on("LSWTCS_GLTEST", false)) dump_first_program(vs, ps, gs);
         // 2. Texture sources (may blit composites / views: before any binding).
@@ -3120,6 +3172,53 @@ ImageDiff image_diff(const std::vector<uint8_t>& a, const std::vector<uint8_t>& 
             ++d.bands[y < 320 ? 0 : y < 608 ? 1 : 2];   // the game's tile rows
         }
     return d;
+}
+// DIAG (LSWTCS_GPUBENCH=N seconds): at most every N s, a frame of 1300+ draws is drawn again with one change at a time, each GPU-timed
+// ([GLGPU] ... BENCH <change>). The same frame each time, so scene differences, about +-10 % between A/B visits (run 39), drop out.
+// The game holds for about nine replays. The last replay is the plain frame, and it is the one shown.
+extern "C" volatile int lsw_nvc0_cb_dedupe;
+void bench_dedupe_job(void* v) { lsw_nvc0_cb_dedupe = int(reinterpret_cast<uintptr_t>(v)); }
+PresentSrc gpu_bench(const PresentSrc& shown) {
+    static const uint64_t every_s = [] { const char* e = getenv("LSWTCS_GPUBENCH"); return uint64_t(e ? atoi(e) : 0); }();
+    static uint64_t next_ns = 0;
+    const LswGpuFrame& f = g_gpu_frame_render;
+    if (!every_s || f.draws.size() < 1300 || g_capture_frame || g_frame_hold_ns || gp_now() < next_ns) return shown;
+    next_ns = gp_now() + every_s * 1000000000ull;
+    const bool early0 = g_early_z;
+    const int dedupe0 = lsw_nvc0_cb_dedupe;
+    struct Variant { const char* label; int kind; bool flip_early, flip_dedupe, noresolve; };
+    const Variant variants[] = {
+        {"plain", 0, false, false, false},
+        {early0 ? "early-z off" : "early-z on", 0, true, false, false},
+        {dedupe0 ? "B off" : "B on", 0, false, true, false},
+        {"resolves off", 0, false, false, true},
+        {"pixels off", 1, false, false, false},
+        {"pixels+verts off", 2, false, false, false},
+        {"pixels+verts+UBO off", 3, false, false, false},
+        {"pixels+verts+UBO+tex off", 4, false, false, false},
+        {"plain again", 0, false, false, false},
+    };
+    const uint64_t replay_id = g_replays;
+    g_replay_same = true;
+    PresentSrc last = shown;
+    for (const Variant& v : variants) {
+        g_early_z = v.flip_early ? !early0 : early0;
+        lsw_glthread_call(bench_dedupe_job, reinterpret_cast<void*>(uintptr_t(v.flip_dedupe ? !dedupe0 : dedupe0)));
+        g_bench_noresolve = v.noresolve;
+        g_bench_kind = v.kind;
+        g_bench_label = v.label;
+        last = replay();
+        arena_fence();
+        gpu_prof_finish();
+    }
+    g_bench_kind = -1; g_bench_label = nullptr; g_bench_noresolve = false;
+    g_early_z = early0;
+    lsw_glthread_call(bench_dedupe_job, reinterpret_cast<void*>(uintptr_t(dedupe0)));
+    g_replay_same = false;
+    printf("[GPUBENCH] replay %llu, %zu records, state %s: the frame drawn %zu more times above (BENCH lines)\n", (unsigned long long)replay_id, f.draws.size(),
+           g_ab_state.c_str(), sizeof variants / sizeof variants[0]);
+    fflush(stdout);
+    return last;
 }
 PresentSrc untile_check(const PresentSrc& shown) {
     static const uint64_t every = [] { const char* e = getenv("LSWTCS_GLUNTILECHECK"); return uint64_t(e ? atoi(e) : 0); }();
@@ -3810,6 +3909,7 @@ void render_thread_main() {
                    (unsigned long long)g_replays, t_replay / 1e6, (t_targets - t_capture) / 1e6, (gp_now() - t_targets) / 1e6);
             fflush(stdout);
         }
+        shown = gpu_bench(shown);
         shown = untile_check(shown);
         { RpScope rp(RP_EVICT); evict_textures(); }
         if (g_glpipe) {   // present blit recorded here; GPU-queue cap, swap and fence run on the worker (swap_job)

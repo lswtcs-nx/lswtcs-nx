@@ -218,3 +218,20 @@ Next, in order:
 1. **Memory traffic on the GPU.** Handheld GPU is about half memory (estimate). Find out what compression this Mesa path really gets, then try colour and depth compression. It may need changes in `libdrm_nouveau`, whose source is not in this tree. If Mesa cannot do it, this is the one concrete reason left to reopen a thin Deko comparison, since Deko exposes `DkImageFlags_HwCompression`.
 2. **Resolves:** 6 ms in 30 per frame handheld, with 2.4 ms docked left with pixels off.
 3. **Main thread:** hashes and record path, then LTO on hot units. A few percent each, and they show docked first.
+
+## Zoom out after run 40 (3 November 2026)
+
+**What changed since run 34.** One tile and U were structural and gave the large gains. Every item since has been small or nothing: B, function order, compression. The A/A run 39 shows why measuring them failed: one pass carries about ±10 % between A/B visits at heavy load.
+
+**Method from here:**
+- GPU changes are measured on one frame drawn again (`LSWTCS_GPUBENCH`).
+- CPU changes count only when large (10 % or more), or when they show in direct timings such as `[GPUPAGES]` or `[WALKWHY]`.
+- A letter is not kept on one pass's FPS alone.
+
+**Two candidates are structural, and log41 sizes both:**
+1. **Early depth tests (GPU, handheld).** A third of the programs shade every pixel before the depth test because of an alpha test that is usually off. If the bench shows several ms, it is the largest same-quality GPU item found.
+2. **The walk on its own thread (CPU, docked).** The awaited fence is two segments back, and the ring's packets never complete it. If its segment was always read by an earlier walk, the frame's walk can overlap the game's next frame: about 5-15 ms of the main thread in heavy scenes.
+
+**After those:** whatever the bench shows as the largest remaining GPU part (constant binds or resolves), then the hash and record path.
+
+**Not ours to apply, and the largest levers:** handheld GPU clock, far detail (level of detail), resolution.

@@ -1456,3 +1456,15 @@ Same states, handheld. `[BOKIND]` should list each new render target of Z and J:
 ## Log 41: `0.0.46-log41`, docked, one state
 
 `[WALKWHY]` adds three things. First, whether the awaited fence's segment was already in the ring at the previous walk with work, so that walk has read it. Second, main-thread time from the frame's fence walk to VdSwap. Third, from VdSwap to the next kick. If the segment was always read before, a walker thread can take the walk and VdSwap can queue the frame instead of waiting. Not yet run on hardware.
+
+**log41 grows before it runs (`0.0.47-log41`):** handheld instead of docked, with two additions.
+- **Same-frame GPU bench (`LSWTCS_GPUBENCH=20`, `gpu_bench`).** At most every 20 s, a frame of 1300+ draws is drawn nine more times, each GPU-timed:
+  - plain;
+  - early depth tests flipped;
+  - B flipped;
+  - resolves skipped;
+  - the four cumulative omissions of `GLGPUSPLIT`;
+  - plain again, which is shown.
+
+  Run 39 measured about ±10 % between A/B visits to identical states, too much for 5 % effects. On one frame that noise drops out, and the two plain replays give the floor. `private/session-tools/gpu_bench.py` reads it. The game holds for about half a second each time.
+- **State F, early depth tests (`program_early`).** The translator emits an alpha test in 176 of 499 programs: exactly two discards and a sample-mask write, and no other discard. Either forces depth testing after shading. For a draw whose alpha test always passes (system flags bits 11-13 = 7) and whose alpha to coverage is off, that code cannot discard. Those draws get a variant with `layout(early_fragment_tests)`, so hidden pixels are not shaded. The variant compiles in the background, and the old program is used until it is ready. `[EARLYZ]` counts eligible and served draws. The main pass covers the screen about once, yet takes over half the GPU's time, and one shader spends 7.5 ms on 1021 draws of about 50 samples each. That fits shading that the depth test later rejects. It is a hypothesis.

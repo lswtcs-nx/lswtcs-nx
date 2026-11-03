@@ -1552,3 +1552,15 @@ Handheld again. No fault, and no dropped interrupt.
 - **The cause is in log44.** It counted a segment as read once it had been handed over: `g_put_at_walk` was set at the hand-off. So when the game waited for the same fence again right away, the stub waited for the walker.
 - **log45 tracks finished walks** (`g_put_done`: the put when the last finished walk started). A fence wait waits for the walker only when its segment is not read yet, and a busy walker takes a new hand-off on its next round.
 - **FPS with I:** +9.3 % load-matched over all frames (90 %: +1.1 to +17.9), +14.2 % at 1300+ draws (-1.7 to +29.7). That is with little overlap, handheld, and within the noise run 39 measured. It is suggestive, not shown.
+
+## Run 45: `0.0.51-log45` handheld, 3 November 2026: the walk overlaps, and handheld does not care
+
+Handheld again. No fault, no dropped interrupt, and audio was fine.
+
+- **The overlap works.** Hand-offs per 6 s state were 391-606, and none waited at a fence wait. The only waits left were phase waits, 2-6 per state for 4-26 ms, and 0-5 at VdSwap. In all, 4749 phase waits did not need the walk.
+- **The main thread is free for it.** Over the session, the main guest thread held the turn for 45.6 s in I against 59.9 s without it (-24 %). Idle went from 42.3 s to 58.6 s.
+- **FPS does not move handheld.** Load-matched, I was -0.5 % over all frames (90 %: -8.2 to +7.4) and -2.1 % at 1300+ draws (-16.5 to +12.8). So run 44's +9 % was noise. Handheld waits on the GPU: the bench's plain heavy frame takes 49 ms (41.8-73.5), the same as the 21 FPS measured.
+- **The bench repeats run 42.** Resolve copies cost 5.5 ms, forced early tests 7.4 ms, and B 0.4 ms. With pixels off, the frame takes 33 ms less.
+- **Program costs.** From the per-draw stamps of heavy frames, two programs take 38 % of the GPU time: `CA8722BD02CAB82B` (6 textures, 72 draws) and `6F9BED73E5CE1620` (alpha tested, 207 draws). Neither shows waste. They have no dynamic register indexing and no loops, and texture sampling is cheap (+tex off: 0.6 ms).
+- **Scale.** At 307 MHz, the Tegra X1 does about 157 GFLOPS against about 240 for the 360's GPU (peak figures, rough). The 360 holds about 30 FPS here. Handheld holds 21 at heavy load, close to that ratio. So shader code has little left to give handheld. Clock is the lever: 460.8 MHz is about 236 GFLOPS. That is the owner's decision.
+- **Next.** I needs a docked run of the same build, where the main thread limits. Until then it stays a letter. The next GPU item would be resolves drawn straight into their destination. That saves at most part of the 5.5 ms, and only on passes that meet several conditions.

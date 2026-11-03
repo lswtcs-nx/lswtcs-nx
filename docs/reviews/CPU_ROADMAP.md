@@ -235,3 +235,8 @@ Next, in order:
 **After those:** whatever the bench shows as the largest remaining GPU part (constant binds or resolves), then the hash and record path.
 
 **Not ours to apply, and the largest levers:** handheld GPU clock, far detail (level of detail), resolution.
+
+## Update after run 45 (3 November 2026)
+
+- **The walk on its own thread (I) now overlaps fully.** No fence wait waits for it. The main thread holds the turn 24 % less. Handheld FPS does not change, because handheld is limited by the GPU. Docked decides whether I becomes the default.
+- **Handheld GPU.** Compared with the 360's GPU, the handheld clock gives about two thirds of the shader throughput, and FPS sits near that ratio. The items left on our side are resolve copies (at most 5.5 ms) and nothing else of that size. The handheld GPU clock stays the largest lever, and it is not ours.

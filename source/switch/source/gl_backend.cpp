@@ -66,6 +66,9 @@ extern "C" void lsw_walk_prio_set(int prio);  // kernel_stubs.cpp
 extern "C" void lsw_walk_float_set(int on);   // kernel_stubs.cpp
 extern "C" void lsw_ring_early_set(int on);   // kernel_stubs.cpp
 extern "C" volatile int lsw_nvc0_cb_dedupe;   // mesa_cbdedupe_edits.py
+extern "C" volatile int lsw_nvc0_zcull;       // mesa_zcull_edits.py
+extern "C" unsigned long long lsw_nvc0_zcull_binds, lsw_nvc0_zcull_inval, lsw_nvc0_zcull_inval_fp, lsw_nvc0_zcull_forgets,
+    lsw_nvc0_zcull_unsupported, lsw_nvc0_zcull_clamped;
 // The A/B state's tag in hwprof.txt (hw_profiler.cpp): 0 none, 1-7 the index in LSWTCS_ABSTATES plus one, 9-15 in LSWTCS_ABSTATES2. Printed on each [ABCYCLE] line.
 extern "C" { volatile uint32_t lsw_ab_tag = 0; }
 extern "C" unsigned long long lsw_nvc0_cb_sets, lsw_nvc0_cb_same, lsw_nvc0_cb_barriers, lsw_nvc0_cb_serializes;
@@ -2573,6 +2576,15 @@ void ab_cycle_tick() {
         l_ee = g_early_eligible; l_eu = g_early_used;
         printf("[NVC0CB] state %s: %llu replays, blocks set %llu, skipped as unchanged %llu, constant cache barriers %llu, serializes %llu\n", g_ab_state.c_str(), (unsigned long long)g_replays - l_rep,
                lsw_nvc0_cb_sets - l_sets, lsw_nvc0_cb_same - l_same, lsw_nvc0_cb_barriers - l_bar, lsw_nvc0_cb_serializes - l_ser);
+        {
+            static unsigned long long l_zb, l_zi, l_zf, l_zg, l_zu, l_zc;
+            printf("[ZCULL] state %s: framebuffers with ZCULL %llu, invalidated on a target change %llu, after depth-writing shaders %llu, "
+                   "after blits, copies or foreign clears %llu, depth targets without it %llu, regions cut to fit %llu\n", g_ab_state.c_str(),
+                   lsw_nvc0_zcull_binds - l_zb, lsw_nvc0_zcull_inval - l_zi, lsw_nvc0_zcull_inval_fp - l_zf, lsw_nvc0_zcull_forgets - l_zg,
+                   lsw_nvc0_zcull_unsupported - l_zu, lsw_nvc0_zcull_clamped - l_zc);
+            l_zb = lsw_nvc0_zcull_binds; l_zi = lsw_nvc0_zcull_inval; l_zf = lsw_nvc0_zcull_inval_fp; l_zg = lsw_nvc0_zcull_forgets;
+            l_zu = lsw_nvc0_zcull_unsupported; l_zc = lsw_nvc0_zcull_clamped;
+        }
         static uint64_t l_slot[8];
         char ub[160]; int uk = snprintf(ub, sizeof ub, "[GLUBO] state %s, binding changes by block:", g_ab_state.c_str());
         for (int i = 0; i < 8; ++i) { uk += snprintf(ub + uk, sizeof ub - uk, " %llu", (unsigned long long)(g_ubo_slot[i] - l_slot[i])); l_slot[i] = g_ubo_slot[i]; }
@@ -2613,6 +2625,7 @@ void ab_cycle_tick() {
     lsw_ring_early_set(has('r'));   // r: the ring-space wait ends once the reader is past the window (ring_window_wait)
     lsw_walk_float_set(has('f'));   // f: the off-turn walk on core 1 or 2, whichever has time
     lsw_nvc0_cb_dedupe = has('B');   // B: nouveau skips constant buffer binds that change nothing (mesa_cbdedupe_edits.py)
+    lsw_nvc0_zcull = has('c');   // c (log62): ZCULL, the GPU's coarse depth culling, set up in nouveau (mesa_zcull_edits.py)
     lsw_shm_age_set(has('E'));
     lsw_quantum_div_set(has('Q') ? 4 : 0);
     g_polyofs_on = has('O');
@@ -3499,6 +3512,7 @@ ImageDiff image_diff(const std::vector<uint8_t>& a, const std::vector<uint8_t>& 
 // The game holds for about nine replays. The last replay is the plain frame, and it is the one shown.
 extern "C" volatile int lsw_nvc0_cb_dedupe;
 void bench_dedupe_job(void* v) { lsw_nvc0_cb_dedupe = int(reinterpret_cast<uintptr_t>(v)); }
+void zcull_job(void* v) { lsw_nvc0_zcull = int(reinterpret_cast<uintptr_t>(v)); }   // queued, so it applies between the replays' GL calls
 PresentSrc gpu_bench(const PresentSrc& shown) {
     static const uint64_t every_s = [] { const char* e = getenv("LSWTCS_GPUBENCH"); return uint64_t(e ? atoi(e) : 0); }();
     static uint64_t next_ns = 0;
@@ -3508,12 +3522,14 @@ PresentSrc gpu_bench(const PresentSrc& shown) {
     next_ns = gp_now() + every_s * 1000000000ull;
     const bool early0 = g_early_z;
     const int dedupe0 = lsw_nvc0_cb_dedupe;
+    const int zcull0 = lsw_nvc0_zcull;
     struct Variant { const char* label; int kind; bool flip_early, flip_dedupe, noresolve; };
     const Variant variants[] = {
         {"plain", 0, false, false, false},
         {"resolves off", 0, false, false, true},
         {g_epi_ab ? "epilogues not specialised" : "epilogues specialised", 0, false, false, false},
         {g_epi_derived ? "fetch constants not specialised" : "fetch constants specialised", 0, false, false, false},
+        {zcull0 ? "ZCULL off" : "ZCULL on", 0, false, false, false},   // log62: state c
         {"trivial pixel shaders", 0, false, false, false},
         {"textures unbound", 0, false, false, false},
         {"resolve copies off", 0, false, false, false},
@@ -3532,6 +3548,8 @@ PresentSrc gpu_bench(const PresentSrc& shown) {
     for (const Variant& v : variants) {
         g_early_z = v.flip_early ? !early0 : early0;
         lsw_glthread_call(bench_dedupe_job, reinterpret_cast<void*>(uintptr_t(v.flip_dedupe ? !dedupe0 : dedupe0)));
+        const bool flip_zcull = !strcmp(v.label, "ZCULL off") || !strcmp(v.label, "ZCULL on");
+        lsw_glthread_call(zcull_job, reinterpret_cast<void*>(uintptr_t(flip_zcull ? !zcull0 : zcull0)));
         g_bench_noresolve = v.noresolve;
         g_bench_kind = v.kind;
         g_bench_label = v.label;
@@ -3564,6 +3582,7 @@ PresentSrc gpu_bench(const PresentSrc& shown) {
     g_epi_derived = g_ab_state.find('d') != std::string::npos;
     g_early_z = early0;
     lsw_glthread_call(bench_dedupe_job, reinterpret_cast<void*>(uintptr_t(dedupe0)));
+    lsw_glthread_call(zcull_job, reinterpret_cast<void*>(uintptr_t(zcull0)));
     g_replay_same = false;
     printf("[GPUBENCH] replay %llu, %zu records, state %s: the frame drawn %zu more times above (BENCH lines)\n", (unsigned long long)replay_id, f.draws.size(),
            g_ab_state.c_str(), sizeof variants / sizeof variants[0]);
@@ -3617,6 +3636,66 @@ PresentSrc untile_check(const PresentSrc& shown) {
         const std::pair<const char*, std::vector<uint8_t>*> images[] = {{"merged", &merged}, {"unmerged", &unmerged}, {"merged2", &merged2}};
         for (const auto& image : images) {
             snprintf(name, sizeof name, "ucheck_%llu_%s.png", (unsigned long long)replay_id, image.first);
+            lsw_log_path(path, sizeof path, name);
+            save_png(path, std::move(*image.second), int(w), int(h));
+        }
+    }
+    return third;
+}
+
+// DIAG (LSWTCS_ZCULLCHECK=N replays, log62): at most every N replays, a frame of 1300+ draws is drawn again with ZCULL off, on and
+// off (mesa_zcull_edits.py, state c), whatever the A/B state. ZCULL set up right changes no pixel, so the frame with it must match the
+// first frame without it as closely as the two frames without it match each other. Flagged frames keep their three images.
+PresentSrc zcull_check(const PresentSrc& shown) {
+    static const uint64_t every = [] { const char* e = getenv("LSWTCS_ZCULLCHECK"); return uint64_t(e ? atoi(e) : 0); }();
+    static uint64_t next = 0;
+    const LswGpuFrame& f = g_gpu_frame_render;
+    if (!every || g_replays < next || f.draws.size() < 1300 || g_capture_frame || g_frame_hold_ns) return shown;
+    next = g_replays + every;
+    const uint64_t replay_id = g_replays;
+    const int zcull0 = lsw_nvc0_zcull;
+    const uint32_t w = shown.w, h = shown.h;
+    std::vector<uint8_t> off, on, off2;
+    auto read = [w, h](const PresentSrc& src, std::vector<uint8_t>& px) {
+        px.resize(size_t(w) * h * 4);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, src.fbo);
+        glPixelStorei(GL_PACK_ALIGNMENT, 1);
+        glReadPixels(0, 0, GLsizei(w), GLsizei(h), GL_RGBA, GL_UNSIGNED_BYTE, px.data());
+        for (size_t k = 3; k < px.size(); k += 4) px[k] = 255;
+    };
+    const uint64_t binds0 = lsw_nvc0_zcull_binds;
+    g_replay_same = true;
+    lsw_glthread_call(zcull_job, reinterpret_cast<void*>(uintptr_t(0)));
+    const PresentSrc first = replay();
+    arena_fence();
+    read(first, off);
+    lsw_glthread_call(zcull_job, reinterpret_cast<void*>(uintptr_t(1)));
+    const PresentSrc second = replay();
+    arena_fence();
+    read(second, on);
+    const uint64_t binds_on = lsw_nvc0_zcull_binds - binds0;
+    lsw_glthread_call(zcull_job, reinterpret_cast<void*>(uintptr_t(0)));
+    const PresentSrc third = replay();
+    arena_fence();
+    read(third, off2);
+    lsw_glthread_call(zcull_job, reinterpret_cast<void*>(uintptr_t(zcull0)));
+    g_replay_same = false;
+    const ImageDiff diff = image_diff(off, on, w, h), noise = image_diff(off, off2, w, h);
+    static uint32_t checks = 0, flagged = 0, saved = 0;
+    ++checks;
+    const bool flag = diff.pixels > 256 && diff.pixels > noise.pixels * 4;
+    flagged += flag;
+    printf("[ZCULLCHECK] replay %llu, %zu records, state %s: with ZCULL differs in %u px (noise %u), box %d,%d..%d,%d, "
+           "framebuffers with ZCULL %llu%s (check %u, %u flagged)\n",
+           (unsigned long long)replay_id, f.draws.size(), g_ab_state.c_str(), diff.pixels, noise.pixels, diff.pixels ? int(diff.x0) : 0,
+           diff.pixels ? int(diff.y0) : 0, int(diff.x1), int(diff.y1), (unsigned long long)binds_on, flag ? " FLAGGED" : "", checks, flagged);
+    fflush(stdout);
+    if (flag && saved < 10) {
+        ++saved;
+        char name[48], path[128];
+        const std::pair<const char*, std::vector<uint8_t>*> images[] = {{"off", &off}, {"on", &on}, {"off2", &off2}};
+        for (const auto& image : images) {
+            snprintf(name, sizeof name, "zcheck_%llu_%s.png", (unsigned long long)replay_id, image.first);
             lsw_log_path(path, sizeof path, name);
             save_png(path, std::move(*image.second), int(w), int(h));
         }
@@ -4261,6 +4340,7 @@ void render_thread_main() {
         }
         shown = gpu_bench(shown);
         shown = untile_check(shown);
+        shown = zcull_check(shown);
         { RpScope rp(RP_EVICT); evict_textures(); }
         if (g_glpipe) {   // present blit recorded here; GPU-queue cap, swap and fence run on the worker (swap_job)
             { RpScope rp(RP_PRESENT); present_frame(shown); }

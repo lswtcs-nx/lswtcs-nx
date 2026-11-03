@@ -2072,3 +2072,40 @@ Two sessions on the same NRO.
 - **The build is back to TGSI only.** States: `MAPXSHNLUBIkhwreg,MAPXSHNLUBIkhwregd` (d still open).
 - **New bench variant, "pixels+verts+UBO+tex+state off":** what is left is the per-draw cost, the resolves and present.
 - **The next real step is ZCULL** (roadmap item 1). It needs reading deko3d before a build.
+
+- **Log 61 was not run.** The tester chose ZCULL first, and log62 keeps log61's bench variants.
+
+## Deko3D study, 3 November 2026: no large gain on its own
+
+See CPU_ROADMAP.md, "Deko3D study". In short:
+- Any handheld GPU gain stops at the CPU wall, about +20 % in heavy scenes.
+- The shaders would be the same.
+- The installed libdrm_nouveau already binds a ZCULL context on Mesa's channel.
+
+## Log 62 (handheld): ZCULL in nouveau, state c
+
+**What it does** (`source/switch/mesa/mesa_zcull_edits.py`, register values from deko3d's source):
+- Turns on the region and writes the init values once.
+- Sets the ZCULL size registers from `nvGpuGetZcullInfo()` whenever a depth target is bound.
+- Writes the clear depth hint before depth clears.
+- Invalidates the ZCULL data when:
+  - the depth target changes;
+  - draws with a depth-writing shader have run;
+  - a blit, a copy or a clear of another surface wrote depth.
+- Without c, nothing changes: the region stays off as at screen init.
+
+**Render targets are cut to fit.** They are 2048 rows tall, so at 1280 wide the region covers the top 1632 rows. The game draws in the top rows only. How the GPU treats depth below the region is unverified.
+
+**States:** `MAPXSHNLUBIkhwreg,MAPXSHNLUBIkhwregc`. d leaves the A/B states and stays in the bench.
+
+**New output:**
+- `[ZCULL]` per state: framebuffers set up, invalidations by cause, targets without it, regions cut.
+- Bench variant "ZCULL on" or "ZCULL off": the same frame with ZCULL flipped.
+- `[ZCULLCHECK]` every 900 replays, in any state: the frame drawn with ZCULL off, on, and off again, compared pixel by pixel against the off-off noise. A flagged frame keeps its three images as `zcheck_<replay>_*.png`.
+
+**Risks:**
+- A GPU fault or hang while c is on, if a register is wrong.
+- Objects missing or cut where ZCULL culls wrongly: ask the tester to look in state c.
+- Little gain if the hardware cannot tighten ZCULL from alpha-tested draws. The world draws are almost all alpha-tested, so this is the main unknown.
+
+**Expected:** some of the hidden-layer shading goes. The forced early test was -17 to -20 % of the GPU frame, and it was wrong. The pixel check and the bench decide.

@@ -811,6 +811,43 @@ const LswGlShader* early_ps(const LswGlShader* ps) {
     }
     return (variants[ps] = std::move(v)).get();
 }
+// log56 bench "trivial pixel shaders": every draw's pixel shader replaced by one that writes the same outputs a constant and keeps a
+// discard if the original had one (so depth is still tested late where it was). Against the plain frame it gives the shaders' own cost
+// (arithmetic and texture fetches); against "pixels off" what is left is filling: rasterising, depth and colour writes. Run 55, handheld:
+// pixels were 63 % of the GPU frame, and only this split says whether better translated shaders or less filling is the way.
+bool g_bench_trivial = false;
+uint64_t g_bench_trivial_used = 0;
+const LswGlShader* trivial_ps(const LswGlShader* ps) {
+    static std::unordered_map<const LswGlShader*, std::unique_ptr<LswGlShader>> variants;
+    auto it = variants.find(ps);
+    if (it != variants.end()) return it->second.get();
+    std::unique_ptr<LswGlShader> v;
+    if (ps->glsl.find("gl_FragDepth") == std::string::npos) {
+        std::string src = "#version 430\n", body;
+        for (int i = 0; i < 4; ++i) {
+            const std::string name = "xe_out_fragment_data_" + std::to_string(i);
+            if (ps->glsl.find(name) == std::string::npos) continue;
+            src += "layout(location = " + std::to_string(i) + ") out vec4 " + name + ";\n";
+            body += "    " + name + " = vec4(0.5);\n";
+        }
+        const bool kill = ps->glsl.find("discard;") != std::string::npos;
+        src += "void main() {\n" + std::string(kill ? "    if (gl_FragCoord.x < -1.0) discard;\n" : "") + body + "}\n";
+        v = std::make_unique<LswGlShader>(*ps);
+        v->gl = 0;
+        v->key = ps->key ^ 0x7121A15ull;
+        v->glsl = src;
+    }
+    return (variants[ps] = std::move(v)).get();
+}
+GLuint program_trivial(const LswGlShader* vs, const LswGlShader* ps, const LswGlShader* gs, GLuint prog) {
+    const LswGlShader* t = trivial_ps(ps);
+    if (!t) return prog;
+    const size_t waits = g_frame_wait.size();
+    const uint32_t pending = g_prog_pending_draws;
+    const GLuint p = program(vs, t, gs);
+    if (!p) { g_frame_wait.resize(waits); g_prog_pending_draws = pending; return prog; }   // still compiling: draw as before
+    return p;
+}
 GLuint program_early(const LswGlShader* vs, const LswGlShader* ps, const LswGlShader* gs, GLuint prog) {
     const LswGlShader* e = early_ps(ps);
     if (!e) return prog;
@@ -1013,8 +1050,14 @@ int g_bench_nocopy_size = 0;
 // log55 bench: full-size resolve copies over half their width and height. Run 54, handheld: those copies were 3.1 ms for about three a
 // frame, several times what their bytes need; if a quarter of the area still costs most of it, the cost is the wait around each copy.
 bool g_bench_copy_quarter = false;
+// log56 bench: the resolve copies that could hand their texture over instead of copying. A colour resolve that clears its source right
+// after, from the origin into the origin, leaves the source's contents dead: the destination could take the render target's texture and
+// the target a fresh one, cleared as it would be anyway. Run 55's capture: three of the five full-size copies and most small ones.
+bool g_bench_nocopy_cleared = false;
 bool bench_skips_copy(const LswGpuDrawRec& r) {
     if (g_bench_nocopy) return true;
+    if (g_bench_nocopy_cleared)
+        return r.rs_src < 4 && r.rs_clear_color && r.rs_rect[0] == 0 && r.rs_rect[1] == 0 && r.rs_dest_x == 0 && r.rs_dest_y == 0;
     if (!g_bench_nocopy_size) return false;
     return (r.rs_dest_pitch >= 1024) == (g_bench_nocopy_size == 1);
 }
@@ -2399,7 +2442,7 @@ void ab_cycle_tick() {
     lsw_spin_real_set(has('L'));
     g_rt_pool = has('J') ? 3 : has('Z') ? 1 : 0;   // Z, J: compressed render targets (gl_rt.inc)
     g_early_z = has('F');   // F: early depth tests where the alpha test cannot discard, or depth and stencil are not written (program_early)
-    g_early_force_ab = has('z');   // z: early depth tests for every draw with the alpha-test code (not exact; see g_early_force_ab)
+    g_early_force_ab = false;   // z is out after run 55: the tester saw transparency broken nearly everywhere (alpha references are about 0.5)
     lsw_async_walk_set(has('I'));   // I: the frame's ring walk on its own thread (kernel_stubs.cpp)
     lsw_kick_walk_set(has('k'));    // k (lower case; every capital is taken): with I, the walker starts at each kick (async_walk_kick)
     lsw_hsio_nowait_set(has('h'));  // h: flushes do not wait for the GPU, as on a console whose CPU-GPU link trained (lsw_hsio_nowait_set)
@@ -2841,6 +2884,10 @@ PresentSrc replay() {
                 else if (g_early_z && ((func == 7 && sys[44] == 0) || (r.depthcontrol & 7) == 2)) prog = program_early(vs, ps, gs, prog);
                 else if (g_bench_prewarm) program_early(vs, ps, gs, prog);   // builds the variant in the background for the bench, draws as before
             }
+            if (prog && ps && !r.ps_writes_depth && (g_bench_trivial || g_bench_prewarm)) {   // log56 bench; built in the background before
+                const GLuint p = program_trivial(vs, ps, gs, prog);
+                if (g_bench_trivial) { if (p != prog) ++g_bench_trivial_used; prog = p; }
+            }
         }
         if (!prog) { ++no_prog; continue; }
         static const bool kGlTest = env_on("LSWTCS_GLTEST", false);   // run 46: a getenv here per draw was about 7 % of the render thread
@@ -3256,14 +3303,13 @@ PresentSrc gpu_bench(const PresentSrc& shown) {
     struct Variant { const char* label; int kind; bool flip_early, flip_dedupe, noresolve; };
     const Variant variants[] = {
         {"plain", 0, false, false, false},
-        {early0 ? "early-z off" : "early-z on", 0, true, false, false},
-        {dedupe0 ? "B off" : "B on", 0, false, true, false},
         {"resolves off", 0, false, false, true},
         {"early-z forced", 0, false, false, false},
+        {"trivial pixel shaders", 0, false, false, false},
         {"resolve copies off", 0, false, false, false},
         {"full-size resolve copies off", 0, false, false, false},
         {"reduced-size resolve copies off", 0, false, false, false},
-        {"full-size resolve copies at a quarter area", 0, false, false, false},
+        {"copies with a clear after off", 0, false, false, false},
         {"pixels off", 1, false, false, false},
         {"pixels+verts off", 2, false, false, false},
         {"pixels+verts+UBO off", 3, false, false, false},
@@ -3283,15 +3329,19 @@ PresentSrc gpu_bench(const PresentSrc& shown) {
         g_early_force = !strcmp(v.label, "early-z forced");
         g_bench_nocopy = !strcmp(v.label, "resolve copies off");
         g_bench_nocopy_size = !strcmp(v.label, "full-size resolve copies off") ? 1 : !strcmp(v.label, "reduced-size resolve copies off") ? 2 : 0;
-        g_bench_copy_quarter = !strcmp(v.label, "full-size resolve copies at a quarter area");
+        g_bench_copy_quarter = false;
+        g_bench_nocopy_cleared = !strcmp(v.label, "copies with a clear after off");
+        g_bench_trivial = !strcmp(v.label, "trivial pixel shaders");
+        const uint64_t trivial0 = g_bench_trivial_used;
         const uint64_t forced0 = g_early_forced;
         last = replay();
         if (g_early_force) printf("[GPUBENCH] early-z forced: %llu draws with the variant\n", (unsigned long long)(g_early_forced - forced0));
+        if (g_bench_trivial) printf("[GPUBENCH] trivial pixel shaders: %llu draws with the variant\n", (unsigned long long)(g_bench_trivial_used - trivial0));
         g_early_force = false;
         arena_fence();
         gpu_prof_finish();
     }
-    g_bench_kind = -1; g_bench_label = nullptr; g_bench_noresolve = false; g_bench_nocopy = false; g_bench_nocopy_size = 0; g_bench_copy_quarter = false;
+    g_bench_kind = -1; g_bench_label = nullptr; g_bench_noresolve = false; g_bench_nocopy = false; g_bench_nocopy_size = 0; g_bench_copy_quarter = false; g_bench_nocopy_cleared = false; g_bench_trivial = false;
     g_early_z = early0;
     lsw_glthread_call(bench_dedupe_job, reinterpret_cast<void*>(uintptr_t(dedupe0)));
     g_replay_same = false;

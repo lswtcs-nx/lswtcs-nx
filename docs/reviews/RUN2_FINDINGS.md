@@ -1867,3 +1867,51 @@ Docked, the same forced early test was -4.2 ms of 23.0.
 - **`[EARLYZ]`** adds a histogram of the alpha test references (0, up to 0.25, 0.5, 0.75, above). If they are 0, the inexact case is only fully transparent texels, which also points at an exact route.
 - **New bench variant:** full-size resolve copies over a quarter of their area. If that still costs most of the 3.1 ms, the cost is the wait around each copy and not the copy.
 - **States:** `MAPXSHNLUBIkhwr,MAPXSHNLUBIkhwrz,MAPXSHNLUBIkhwrf,MAPXSHNLUBIkhwrfz`. I is no longer a state. G is out, and f stays in a 2x2 design with z.
+
+## Run 55: `0.0.61-log55` handheld, 3 November 2026: z breaks transparency; resolve copies cost what their pixels cost
+
+Handheld, about 2 minutes in the heavy area. There are two full captures, both in states without z. The tester brought `glprogs2` (now in `private/glprogs2`; the 1 November copy is in `private/glprogs2-2026-11-01`).
+
+**z is out.**
+- The tester saw transparency broken in nearly everything: foliage, studs, and more.
+- `[EARLYZ]` explains it: of the alpha-tested draws, 3.48 M have an alpha test reference between 0.25 and 0.5, 86 k up to 0.25, and 40 k at 0. The test really discards the half-transparent texels of nearly every material.
+- z was +12.6 % load-matched (90 %: -3.8 to +29.2), but the picture rules it out.
+- An exact early test would need the hardware's coarse depth culling, which nouveau does not drive, or a depth pre-pass. With shaders this cheap, a pre-pass would cost about what it saves.
+
+**Handheld bench (10 benches, plain frame median 39.2 ms):**
+
+| Change | Saving |
+| --- | --- |
+| All resolve copies off | -4.2 ms |
+| Full-size resolve copies off | -3.3 ms |
+| Reduced-size resolve copies off | -1.2 ms |
+| Full-size copies at a quarter of their area | -2.4 ms |
+| Pixels off | -24.2 ms (-63 %) |
+
+At a quarter of their area, the full-size copies cost 0.9 ms against 3.3 ms. So their cost follows their pixels, not a wait around each copy.
+
+**The captured frame's full-size resolves:**
+- After the scene: colour 0, colour 1 and depth, each 1280x704. Both colour resolves clear their source.
+- One more colour resolve after a full-screen pass, also clearing.
+- The depth of the final 1280x720 pass, not clearing.
+
+A colour resolve that clears its source leaves that source dead. Its destination could take the render target's texture instead of a copy. That needs the sampled texture to be taller than the destination (render targets are one fixed height), so the fetch would need a coordinate scale.
+
+**MSAA is not the cost:** 2x surfaces already render at one sample per pixel (`LSWTCS_MSAA1X`, default on).
+
+**Costliest programs, handheld heavy frames without z (42.6 ms of GPU each):**
+
+| File | GPU per frame | Draws per frame | What it is |
+| --- | --- | --- | --- |
+| `6F9BED73E5CE1620` | 6.5 ms | 117 | World geometry: one texture, alpha test, two colour outputs |
+| `CA8722BD02CAB82B` | 3.2 ms | 35 | — |
+| `91834C0972EDD8A1` | 3.0 ms | 1 | Full-screen post pass: 734 lines, 42 branches, a control-flow loop, 4 textures |
+| `259828D67C3314E5` | 2.5 ms | 812 | — |
+| `283E052419BCC461` | 2.2 ms | 1 | Full-screen post pass |
+
+## Log 56 (handheld)
+
+- **z removed.** States: `MAPXSHNLUBIkhwr,MAPXSHNLUBIkhwrf`.
+- **Bench "trivial pixel shaders":** each pixel shader becomes one that writes the same outputs a constant and keeps a discard where there was one. Against the plain frame this gives the shaders' own cost; against "pixels off", the filling. It decides between better translated shaders and less filling.
+- **Bench "copies with a clear after off":** colour resolves from and into the origin that clear their source, which are the copies a texture hand-over could remove.
+- **Dropped from the bench:** "early-z on", "B off" and the quarter-area copy.

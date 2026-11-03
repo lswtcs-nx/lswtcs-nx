@@ -1468,3 +1468,27 @@ Same states, handheld. `[BOKIND]` should list each new render target of Z and J:
 
   Run 39 measured about ±10 % between A/B visits to identical states, too much for 5 % effects. On one frame that noise drops out, and the two plain replays give the floor. `private/session-tools/gpu_bench.py` reads it. The game holds for about half a second each time.
 - **State F, early depth tests (`program_early`).** The translator emits an alpha test in 176 of 499 programs: exactly two discards and a sample-mask write, and no other discard. Either forces depth testing after shading. For a draw whose alpha test always passes (system flags bits 11-13 = 7) and whose alpha to coverage is off, that code cannot discard. Those draws get a variant with `layout(early_fragment_tests)`, so hidden pixels are not shaded. The variant compiles in the background, and the old program is used until it is ready. `[EARLYZ]` counts eligible and served draws. The main pass covers the screen about once, yet takes over half the GPU's time, and one shader spends 7.5 ms on 1021 draws of about 50 samples each. That fits shading that the depth test later rejects. It is a hypothesis.
+
+## Run 41: `0.0.47-log41` handheld, 3 November 2026: the bench works, F never applied, the walk can overlap
+
+States `MAPXSHNLUB` and `MAPXSHNLUBF`, four benches.
+
+**Same-frame bench.** Each bench redraws one frame several times with one change each. Replays that change nothing (early-z flipped while no draw qualified) match the final plain replay within 0.1-1.2 ms.
+
+The first plain replay of a bench also carried the stamps of the frame just drawn, so plain counts doubled when that frame was profiled. Deltas below are against "plain again". log42 reports the drawn frame first.
+
+| Change | Per bench (ms) | Share |
+| --- | --- | --- |
+| B off | +1.0, +0.4, +0.4, +0.9 | 1-2 % |
+| Resolves off | -5.4, -5.6, -4.9, -4.7 | 12-15 % |
+| Pixels off and the omissions after it | Not monotonic | — |
+
+Without pixels the GPU outruns the render thread's submission, so those timestamps follow the CPU's pace. They only show that pixel work is well over half of the 33-55 ms frames.
+
+**State F applied to no draw.** `[EARLYZ]` counted 0 eligible draws in both states, so in every draw of a program with the alpha-test code, either the alpha test was on or alpha to coverage was. F's FPS of +17.5 % at 1300+ draws load-matched (90 %: +5.7 to +31.7) comes from identical states: the second A/A result. log42 records the alpha function and coverage of those draws. Its bench adds "early-z forced", which uses the variant for every such draw: an upper bound on the gain, never shown.
+
+**The walk can overlap the game.**
+- In 9558 of 9559 fence waits with work, the awaited fence's segment had already been in the ring at the previous walk with work. The walk at that wait is therefore not needed for that fence.
+- From the frame's fence walk to VdSwap the main thread runs 13.6 ms on average, and from VdSwap to the next kick 11.1 ms.
+- `[GPUPAGES]` puts the walk at 6-9 ms per frame in heavy stretches, so it fits inside the first window.
+- One unknown remains: guest interrupt callbacks fired inside the walk, which run guest code. log42 counts them and their time.

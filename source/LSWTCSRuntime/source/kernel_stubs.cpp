@@ -5956,8 +5956,11 @@ static void pm4_dump_state() {
 
 // Fire graphics interrupt for each set bit in cpu_mask.
 // g_interrupt_ctx must be set by the caller (VdSwap sets it around pm4_process_ring).
+static uint64_t g_isr_fired = 0, g_isr_ns = 0;   // [WALKWHY]: guest interrupt callbacks run from walks, and their time
 static void pm4_fire_interrupt(uint32_t cpu_mask) {
     if (!g_gfx_interrupt_callback) return;
+    ++g_isr_fired;
+    struct IsrTime { uint64_t t0 = gp_now(); ~IsrTime() { g_isr_ns += gp_now() - t0; } } isr_time;
     if (!g_interrupt_ctx) { ++g_isr_lost; return; }
     WalkNeedsTurn need_turn;   // runs the guest ISR (and may drain tile lists)
     PPCFunc* fn = PPC_LOOKUP_FUNC(g_base, g_gfx_interrupt_callback);
@@ -6391,6 +6394,9 @@ extern "C" void lsw_walk_sites_report(const char* state) {
     snprintf(b + k, sizeof b - k, " between walks %.1f ms in %llu, longest %.1f ms | kicks %llu, first kick to walk %.1f ms over %llu | fence waits with work: done already %llu, newest %llu, older %llu",
              (g_walk_gap_ns - last_gap) / 1e6, (unsigned long long)walks, g_walk_gap_max / 1e6, (unsigned long long)(g_kicks - l_kicks), (g_kick_wait_ns - l_kw) / 1e6, (unsigned long long)(g_kick_waits - l_kwn),
              (unsigned long long)(g_fence_done - l_fd), (unsigned long long)(g_fence_newest - l_fn), (unsigned long long)(g_fence_older - l_fo));
+    static uint64_t l_isr = 0, l_isr_ns = 0;
+    printf("[WALKWHY] state %s: guest interrupt callbacks from walks %llu, %.1f ms\n", state, (unsigned long long)(g_isr_fired - l_isr), (g_isr_ns - l_isr_ns) / 1e6);
+    l_isr = g_isr_fired; l_isr_ns = g_isr_ns;
     printf("[WALKWHY] state %s, fence waits with work, by distance from put (0, 1, 2, 3, 4+): %llu %llu %llu %llu %llu | completed by the walk %llu, only by the stub %llu | its segment walked before %llu, not %llu | fence walk to VdSwap %.1f ms over %llu, VdSwap to next kick %.1f ms over %llu\n", state, (unsigned long long)g_fence_behind[0], (unsigned long long)g_fence_behind[1],
            (unsigned long long)g_fence_behind[2], (unsigned long long)g_fence_behind[3], (unsigned long long)g_fence_behind[4], (unsigned long long)g_fence_by_walk, (unsigned long long)g_fence_by_stub,
            (unsigned long long)g_fence_walked_before, (unsigned long long)g_fence_not_walked, g_fence_to_swap_ns / 1e6, (unsigned long long)g_fence_to_swap_n,

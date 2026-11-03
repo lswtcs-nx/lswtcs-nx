@@ -774,8 +774,10 @@ GLuint program(const LswGlShader* vs, const LswGlShader* ps, const LswGlShader* 
 // of them (its discard and sample mask: 176 of 499 programs, two discards each and no other). Used only for draws whose alpha test is
 // set to always pass and whose alpha to coverage is off, where that code never discards. Testing first then changes nothing in the
 // picture and skips shading pixels that fail the depth test.
-bool g_early_z = false;
-uint64_t g_early_eligible = 0, g_early_used = 0;
+bool g_early_z = false, g_early_force = false;   // force: GPUBENCH only, every draw with the alpha-test code (an upper bound, never shown)
+uint64_t g_early_eligible = 0, g_early_used = 0, g_early_forced = 0;
+uint64_t g_alpha_hist[8][2];   // draws whose program has the alpha-test code, by alpha function (7 = always) and alpha to coverage
+std::unordered_set<GLuint> g_early_progs;   // the early-test programs, for the [GLGPU] program lines
 const LswGlShader* early_ps(const LswGlShader* ps) {
     static std::unordered_map<const LswGlShader*, std::unique_ptr<LswGlShader>> variants;
     auto it = variants.find(ps);
@@ -802,6 +804,7 @@ GLuint program_early(const LswGlShader* vs, const LswGlShader* ps, const LswGlSh
     const GLuint p = program(vs, e, gs);
     if (!p) { g_frame_wait.resize(waits); g_prog_pending_draws = pending; return prog; }   // still compiling: draw as before, and do not hold the frame for it
     ++g_early_used;
+    g_early_progs.insert(p);
     return p;
 }
 
@@ -985,8 +988,9 @@ inline GLuint64 gpu_ticks_to_ns(GLuint64 t) { return t / 384 * 625 + t % 384 * 6
 bool g_gpuprof_nopix = false, g_gpuprof_novtx = false;
 // LSWTCS_GPUBENCH (gpu_bench): one heavy frame drawn again with one change at a time, GPU-timed. kind = omission level as GLGPUSPLIT.
 int g_bench_kind = -1;
+bool g_bench_prewarm = false;
 const char* g_bench_label = nullptr;
-bool g_bench_noresolve = false;
+bool g_bench_noresolve = false, g_bench_nocopy = false;
 bool g_gpuprof_noubo = false, g_gpuprof_notex = false, g_gpuprof_nostate = false;
 bool g_blit_stamp = false;   // blit() stamps itself as GK_TEXSRC (set around texture_source)
 uint64_t g_gpuprof_verts = 0;
@@ -1076,9 +1080,13 @@ void gpu_prof_finish() {
            by_kind[GK_OTHER] / 1e6, by_kind[GK_PRESENT] / 1e6, pixels_total / 1e6);
     std::vector<std::pair<GLuint, ProgCost>> top(by_prog.begin(), by_prog.end());
     std::sort(top.begin(), top.end(), [](const auto& a, const auto& b) { return a.second.ns > b.second.ns; });
-    for (size_t i = 0; i < top.size() && i < 10; ++i)
-        printf("[GLGPU]   program %u (PS %016llX): %.2f ms over %u draws, %.2f Mpx\n", top[i].first,
-               (unsigned long long)top[i].second.ps_key, top[i].second.ns / 1e6, top[i].second.draws, top[i].second.pixels / 1e6);
+    for (size_t i = 0; i < top.size() && i < 10; ++i) {
+        uint64_t ckey = 0;   // names the program's GLSL in sdmc:/lswtcs/glprogs2
+        for (const auto& kv : g_programs) if (kv.second == top[i].first) { auto ck = g_prog_ckeys.find(kv.first); if (ck != g_prog_ckeys.end()) ckey = ck->second; break; }
+        printf("[GLGPU]   program %u (PS %016llX, file %016llX%s): %.2f ms over %u draws, %.2f Mpx\n", top[i].first, (unsigned long long)top[i].second.ps_key,
+               (unsigned long long)ckey, g_early_progs.count(top[i].first) ? ", early tests" : "",
+               top[i].second.ns / 1e6, top[i].second.draws, top[i].second.pixels / 1e6);
+    }
     fflush(stdout);
     g_gpq_labels.clear();
 }
@@ -2323,6 +2331,11 @@ void ab_cycle_tick() {
         static unsigned long long l_sets = 0, l_same = 0, l_bar = 0, l_ser = 0, l_rep = 0;
         static uint64_t l_ee = 0, l_eu = 0;
         printf("[EARLYZ] state %s: draws eligible %llu, drawn with the early-test variant %llu\n", g_ab_state.c_str(), (unsigned long long)(g_early_eligible - l_ee), (unsigned long long)(g_early_used - l_eu));
+        {
+            char hb[400]; int hk = snprintf(hb, sizeof hb, "[EARLYZ] draws with the alpha-test code so far, by alpha function 0-7 (7 always), without / with alpha to coverage:");
+            for (int a = 0; a < 8; ++a) hk += snprintf(hb + hk, sizeof hb - hk, " %d:%llu/%llu", a, (unsigned long long)g_alpha_hist[a][0], (unsigned long long)g_alpha_hist[a][1]);
+            puts(hb);
+        }
         l_ee = g_early_eligible; l_eu = g_early_used;
         printf("[NVC0CB] state %s: %llu replays, blocks set %llu, skipped as unchanged %llu, constant cache barriers %llu, serializes %llu\n", g_ab_state.c_str(), (unsigned long long)g_replays - l_rep,
                lsw_nvc0_cb_sets - l_sets, lsw_nvc0_cb_same - l_same, lsw_nvc0_cb_barriers - l_bar, lsw_nvc0_cb_serializes - l_ser);
@@ -2739,7 +2752,7 @@ PresentSrc replay() {
             ++draw_i;
             if (gpurt && !g_bench_noresolve) {
                 RpScope rp(RP_RESOLVE);
-                const bool copy = dead[rec_i] != 2;
+                const bool copy = dead[rec_i] != 2 && !g_bench_nocopy;   // bench: "resolve copies off" keeps the clears
                 if (!copy) ++dead_resolves;
                 static std::vector<LswGpuDrawRec> held;   // resolves of an untiled group whose clears wait
                 if (ut.clear[rec_i]) {
@@ -2772,9 +2785,13 @@ PresentSrc replay() {
         if (vs) {
             RpScope rp(RP_PROGRAM);
             prog = program(vs, ps, gs);
-            if (prog && ps && g_early_z && !r.ps_writes_depth) {   // state F: alpha test always passes (flags bits 11-13 = 7), alpha to coverage off
+            if (prog && ps && !r.ps_writes_depth && early_ps(ps)) {
                 const uint32_t* sys = reinterpret_cast<const uint32_t*>(f.arena.data() + r.cb_sys_off);
-                if (((sys[0] >> 11) & 7) == 7 && sys[44] == 0) prog = program_early(vs, ps, gs, prog);
+                const uint32_t func = (sys[0] >> 11) & 7;
+                ++g_alpha_hist[func][sys[44] != 0];
+                if (g_early_force) { const GLuint p = program_early(vs, ps, gs, prog); if (p != prog) ++g_early_forced; prog = p; }
+                else if (g_early_z && func == 7 && sys[44] == 0) prog = program_early(vs, ps, gs, prog);   // state F: alpha test always passes, no alpha to coverage
+                else if (g_bench_prewarm) program_early(vs, ps, gs, prog);   // builds the variant in the background for the bench, draws as before
             }
         }
         if (!prog) { ++no_prog; continue; }
@@ -3181,6 +3198,7 @@ void bench_dedupe_job(void* v) { lsw_nvc0_cb_dedupe = int(reinterpret_cast<uintp
 PresentSrc gpu_bench(const PresentSrc& shown) {
     static const uint64_t every_s = [] { const char* e = getenv("LSWTCS_GPUBENCH"); return uint64_t(e ? atoi(e) : 0); }();
     static uint64_t next_ns = 0;
+    g_bench_prewarm = every_s != 0;
     const LswGpuFrame& f = g_gpu_frame_render;
     if (!every_s || f.draws.size() < 1300 || g_capture_frame || g_frame_hold_ns || gp_now() < next_ns) return shown;
     next_ns = gp_now() + every_s * 1000000000ull;
@@ -3192,6 +3210,8 @@ PresentSrc gpu_bench(const PresentSrc& shown) {
         {early0 ? "early-z off" : "early-z on", 0, true, false, false},
         {dedupe0 ? "B off" : "B on", 0, false, true, false},
         {"resolves off", 0, false, false, true},
+        {"early-z forced", 0, false, false, false},
+        {"resolve copies off", 0, false, false, false},
         {"pixels off", 1, false, false, false},
         {"pixels+verts off", 2, false, false, false},
         {"pixels+verts+UBO off", 3, false, false, false},
@@ -3199,6 +3219,7 @@ PresentSrc gpu_bench(const PresentSrc& shown) {
         {"plain again", 0, false, false, false},
     };
     const uint64_t replay_id = g_replays;
+    gpu_prof_finish();   // the frame just drawn may be profiled: report it first, or its stamps join the first bench replay (log41)
     g_replay_same = true;
     PresentSrc last = shown;
     for (const Variant& v : variants) {
@@ -3207,11 +3228,16 @@ PresentSrc gpu_bench(const PresentSrc& shown) {
         g_bench_noresolve = v.noresolve;
         g_bench_kind = v.kind;
         g_bench_label = v.label;
+        g_early_force = !strcmp(v.label, "early-z forced");
+        g_bench_nocopy = !strcmp(v.label, "resolve copies off");
+        const uint64_t forced0 = g_early_forced;
         last = replay();
+        if (g_early_force) printf("[GPUBENCH] early-z forced: %llu draws with the variant\n", (unsigned long long)(g_early_forced - forced0));
+        g_early_force = false;
         arena_fence();
         gpu_prof_finish();
     }
-    g_bench_kind = -1; g_bench_label = nullptr; g_bench_noresolve = false;
+    g_bench_kind = -1; g_bench_label = nullptr; g_bench_noresolve = false; g_bench_nocopy = false;
     g_early_z = early0;
     lsw_glthread_call(bench_dedupe_job, reinterpret_cast<void*>(uintptr_t(dedupe0)));
     g_replay_same = false;

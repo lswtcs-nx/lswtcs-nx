@@ -1663,3 +1663,30 @@ Docked. No fault, and no dropped interrupt.
 - **Safety rule unchanged.** The game still continues only after the awaited segment has been read.
 - **Expected:** in I with k, heavy docked frames of 25-28 ms. By then cores 0 (main), 1 (render and walker) and 2 (XAudio thread and Mesa's worker) are each busy about 25 ms per frame.
 - **States:** `MAPXSHNLUBI,MAPXSHNLUBIk`.
+
+## Run 49: `0.0.55-log49` docked, 3 November 2026: the fence wait still waits for the whole walk
+
+Docked. No fault, and no dropped interrupt.
+
+**Heaviest frames:**
+- In I with k, the main thread's CPU per frame is 20.9-25.9 ms. The walker's is 12.7-14.5 ms.
+- Fence waits for the walker take 10.3-13.7 ms per frame, about 3 per frame. That is the walker's whole CPU time.
+- `fence waits released mid-walk` is 0: the reader never passed the awaited segment before it ran out of work.
+
+**FPS:** k gave 23.7 against 26.9 FPS at 1300+ draws, -11.5 % load-matched (90 %: -20.6 to -3.8).
+
+**Reading.** A wait that equals the walker's whole time means the walker and the game never ran side by side. Two causes fit:
+1. The walker cannot start until the game blocks.
+2. The awaited segment is the one just kicked, so its walk cannot have started earlier.
+
+In I, the heavy segment (about 9 ms) was walked at the GPU-phase wait. That wait is the first after the kick, so cause 2 is the more likely. If so, the walk is on the critical path whichever thread does it. Only a faster walk, or a wait that does not need the walk, would help.
+
+## Log 50
+
+Diagnostics only. `[FENCEWAIT]` by state, for fence waits that wait for the walker:
+- the time since the kick that submitted the awaited segment, and since the last kick;
+- how many kicks came after it, and how often it was the newest;
+- how long the walker's walk had been going;
+- the walker's start latency after a hand-off.
+
+States are unchanged.

@@ -470,11 +470,13 @@ static std::atomic<uint32_t> g_put_done{0}, g_aw_target{0};
 // counter and the dwords written so far, so a fence's segment counts as read once the reader has passed the kick that submitted it.
 static std::atomic<uint32_t> g_walk_pos{0};
 static std::atomic<bool> g_walk_pos_set{false};
-struct KickMark { uint32_t put; uint64_t written; };
+struct KickMark { uint32_t put; uint64_t written, t; };
 static KickMark g_kick_marks[64];
 static uint32_t g_kick_mark_n = 0, g_kick_wptr = 0;
 static uint64_t g_kick_written = 0;
 static bool g_kick_wptr_set = false;
+static std::atomic<uint64_t> g_aw_handoff_t{0}, g_aw_walk_t0{0};   // log50: last hand-off not yet started, start of the walker's walk
+static uint64_t g_aw_start_lat_ns = 0, g_aw_starts = 0;
 static void walk_pos_publish(uint32_t pos) { g_walk_pos.store(pos, std::memory_order_relaxed); g_walk_pos_set.store(true, std::memory_order_relaxed); }
 static int g_imlog_left_fwd();
 // sub_822AE698 is D3D's BlockOnFence(dev=r3, fence=r4): returns once (put-fence) >= (put-get), where
@@ -6379,7 +6381,7 @@ PPC_FUNC(sub_822AE048) {
         if (!g_kick_wptr_set) { g_kick_wptr = w; g_kick_wptr_set = true; }
         g_kick_written += (w + rbd - g_kick_wptr) % rbd;
         g_kick_wptr = w;
-        g_kick_marks[g_kick_mark_n++ & 63] = {PPC_LOAD_U32(g_fence_dev + 10908), g_kick_written};
+        g_kick_marks[g_kick_mark_n++ & 63] = {PPC_LOAD_U32(g_fence_dev + 10908), g_kick_written, gp_now()};
     }
     async_walk_kick();
     ++g_kicks;
@@ -6450,9 +6452,12 @@ static void async_walker_body(int id) {
         const uint32_t target = g_aw_target.load();   // the ring holds every segment below this put
         sched_rejoin_urgent(id);
         const uint64_t t0 = gp_now();
+        if (const uint64_t h = g_aw_handoff_t.exchange(0)) { g_aw_start_lat_ns += t0 > h ? t0 - h : 0; ++g_aw_starts; }
+        g_aw_walk_t0 = t0;
         pm4_walk_now(&ctx);
         g_put_done = target;
         g_aw_walk_ns += gp_now() - t0;
+        g_aw_walk_t0 = 0;
         ++g_aw_walks;
         sched_leave_turn(id);
         g_aw_busy = false;
@@ -6462,14 +6467,23 @@ static bool async_walk_running() { return g_aw_busy.load() || g_aw_pending.load(
 // log49: the segment of `fence` has been read. The earliest recorded kick whose segment counter is past the fence put it in the ring
 // (a later one would only be more conservative); it counts as read once the reader is past the dwords written by that kick.
 static uint64_t g_seg_read_hits = 0;
+static const KickMark* seg_mark(uint32_t fence) {   // the earliest recorded kick whose segment counter is past the fence
+    const uint32_t n = std::min<uint32_t>(g_kick_mark_n, 64);
+    for (uint32_t i = 0; i < n; ++i) {
+        const KickMark& k = g_kick_marks[(g_kick_mark_n - n + i) & 63];
+        if (int32_t(k.put - fence) > 0) return &k;
+    }
+    return nullptr;
+}
+// log50 [FENCEWAIT] by state: what a fence wait that has to wait for the walker is waiting for. Run 49: such waits took as long as
+// the walker's whole CPU time (13 ms per heavy frame) and none was released mid-walk, so either the walker cannot start until the
+// game waits, or the awaited segment is the one just kicked.
+static uint64_t g_fw_n = 0, g_fw_since_mark_ns = 0, g_fw_since_kick_ns = 0, g_fw_kicks_after = 0, g_fw_newest = 0, g_fw_nomark = 0,
+                g_fw_walk_age_ns = 0;
 static bool seg_read(uint32_t fence) {
     if (!g_kick_mark_n || !g_rb_size || !g_walk_pos_set.load(std::memory_order_relaxed)) return false;
-    const uint32_t rbd = g_rb_size >> 2, n = std::min<uint32_t>(g_kick_mark_n, 64);
-    const KickMark* m = nullptr;
-    for (uint32_t i = 0; i < n && !m; ++i) {
-        const KickMark& k = g_kick_marks[(g_kick_mark_n - n + i) & 63];
-        if (int32_t(k.put - fence) > 0) m = &k;
-    }
+    const uint32_t rbd = g_rb_size >> 2;
+    const KickMark* m = seg_mark(fence);
     if (!m) return false;
     const uint32_t rpos = g_walk_pos.load(std::memory_order_relaxed) % rbd;
     const int64_t read = int64_t(g_kick_written) - int64_t((g_kick_wptr + rbd - rpos) % rbd);   // the unread part is less than one ring
@@ -6492,6 +6506,20 @@ static bool async_walk_try(uint32_t fence, uint32_t put) {
         if (!async_walk_running()) return false;
         const uint64_t t0 = gp_now();
         ++g_aw_joins[WALK_FENCE];
+        ++g_fw_n;
+        if (const KickMark* m = seg_mark(fence)) {
+            g_fw_since_mark_ns += t0 - m->t;
+            uint32_t after = 0;   // kicks recorded after the one that submitted the fence's segment
+            for (uint32_t i = 0, n = std::min<uint32_t>(g_kick_mark_n, 64); i < n; ++i) {
+                const KickMark& k = g_kick_marks[(g_kick_mark_n - 1 - i) & 63];
+                if (&k == m) break;
+                ++after;
+            }
+            g_fw_kicks_after += after;
+            if (!after) ++g_fw_newest;
+        } else ++g_fw_nomark;
+        if (g_kick_mark_n) g_fw_since_kick_ns += t0 - g_kick_marks[(g_kick_mark_n - 1) & 63].t;
+        if (const uint64_t w0 = g_aw_walk_t0.load()) g_fw_walk_age_ns += t0 > w0 ? t0 - w0 : 0;
         while (async_walk_running() && !done()) {
             if (gil_on() && g_sched_id >= 0) sched_yield_turn();   // the walker may be waiting for the turn
             std::this_thread::sleep_for(std::chrono::microseconds(20));
@@ -6505,6 +6533,7 @@ static bool async_walk_try(uint32_t fence, uint32_t put) {
         std::thread(async_walker_body, g_aw_sid).detach();
     }
     g_aw_target = put;   // a busy walker takes this on its next round; no wait here
+    { uint64_t z = 0; g_aw_handoff_t.compare_exchange_strong(z, gp_now()); }
     {
         std::lock_guard<std::mutex> lk(g_aw_mtx);
         g_aw_pending = true;
@@ -6530,6 +6559,7 @@ static void async_walk_kick() {
     }
     uint8_t* base = g_base;
     g_aw_target = PPC_LOAD_U32(g_fence_dev + 10908);   // as walk_site_note reads it: every segment below is in the ring
+    { uint64_t z = 0; g_aw_handoff_t.compare_exchange_strong(z, gp_now()); }
     {
         std::lock_guard<std::mutex> lk(g_aw_mtx);
         g_aw_pending = true;
@@ -6575,6 +6605,17 @@ extern "C" void lsw_walk_sites_report(const char* state) {
            "kick hand-offs %llu | fence waits released mid-walk %llu\n", state, (ib[0] - l_ib[0]) / 1e6, (ib[1] - l_ib[1]) / 1e6, (ib[2] - l_ib[2]) / 1e6, (off - l_off) / 1e6,
            (rejoin - l_rejoin) / 1e6, (unsigned long long)(g_aw_kick_handoffs - l_kh), (unsigned long long)(g_seg_read_hits - l_srh));
     l_kh = g_aw_kick_handoffs; l_srh = g_seg_read_hits;
+    {
+        static uint64_t a[9];
+        const uint64_t v[9] = {g_fw_n, g_fw_since_mark_ns, g_fw_since_kick_ns, g_fw_kicks_after, g_fw_newest, g_fw_nomark, g_fw_walk_age_ns, g_aw_start_lat_ns, g_aw_starts};
+        uint64_t d[9];
+        for (int i = 0; i < 9; ++i) { d[i] = v[i] - a[i]; a[i] = v[i]; }
+        const double n = d[0] ? double(d[0]) : 1.0;
+        printf("[FENCEWAIT] state %s: fence waits that waited for the walker %llu: since the kick that submitted the segment %.2f ms, since the last kick %.2f ms, "
+               "kicks after that one %.2f, it was the newest %llu, no mark %llu, the walker's walk had been going %.2f ms | walker start after a hand-off %.3f ms over %llu\n",
+               state, (unsigned long long)d[0], d[1] / 1e6 / n, d[2] / 1e6 / n, d[3] / n, (unsigned long long)d[4], (unsigned long long)d[5], d[6] / 1e6 / n,
+               d[8] ? d[7] / 1e6 / double(d[8]) : 0.0, (unsigned long long)d[8]);
+    }
     for (int i = 0; i < 3; ++i) l_ib[i] = ib[i];
     l_off = off; l_rejoin = rejoin;
     for (int i = 0; i <= WALK_SITES; ++i) { l_awj[i] = g_aw_joins[i]; l_awjn[i] = g_aw_join_ns[i]; }

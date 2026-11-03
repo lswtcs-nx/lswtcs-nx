@@ -904,6 +904,59 @@ GLuint program_epilogue(const LswGlShader* vs, const LswGlShader* ps, const LswG
     if (!p) { g_frame_wait.resize(waits); g_prog_pending_draws = pending; return prog; }   // still compiling: draw as before
     return p;
 }
+// A/B state p (log59): a depth pre-pass for alpha-tested draws whose pixel shader reads two or more textures. Run 58, handheld: the
+// specialised world shader (one texture) still took 2.7 ms over 36 draws, as only many layers explain: nouveau runs the depth test after
+// the shader when the shader can discard, so every hidden pixel is shaded in full. Pass 1 draws with colour writes off and a shader whose
+// colour outputs are zero, so the compiler keeps only what the alpha test needs; it writes depth where the alpha test passes. Pass 2 runs
+// the full shader with the depth test before it, EQUAL and no depth write, and with the alpha test folded to always (pass 1 decided it):
+// only the visible pixels are shaded in full. Only for draws that test and write depth with LEQUAL, no stencil and no alpha to coverage;
+// LEQUAL then passes exactly where EQUAL passes after pass 1. The vertex shaders' position path is `precise`, so both passes place
+// every pixel at the same depth.
+bool g_prepass_ab = false, g_bench_prepass = false;
+uint64_t g_prepass_eligible = 0, g_prepass_used = 0;
+const LswGlShader* prepass_ps(const LswGlShader* epi) {
+    static std::unordered_map<const LswGlShader*, std::unique_ptr<LswGlShader>> variants;
+    auto it = variants.find(epi);
+    if (it != variants.end()) return it->second.get();
+    std::unique_ptr<LswGlShader> v;
+    std::string g = epi->glsl;
+    size_t changed = 0;
+    for (int i = 0; i < 4; ++i) {
+        const std::string from = "xe_out_fragment_data_" + std::to_string(i) + " = xe_var_fragment_data_" + std::to_string(i) + ";";
+        const size_t at = g.find(from);
+        if (at == std::string::npos) continue;
+        g.replace(at, from.size(), "xe_out_fragment_data_" + std::to_string(i) + " = vec4(0.0);");
+        ++changed;
+    }
+    if (changed) {
+        v = std::make_unique<LswGlShader>(*epi);
+        v->gl = 0;
+        v->key = epi->key ^ 0x9E1A55ull;
+        v->glsl = std::move(g);
+    }
+    return (variants[epi] = std::move(v)).get();
+}
+const LswGlShader* mainpass_ps(const LswGlShader* epi_always) {
+    static std::unordered_map<const LswGlShader*, std::unique_ptr<LswGlShader>> variants;
+    auto it = variants.find(epi_always);
+    if (it != variants.end()) return it->second.get();
+    std::unique_ptr<LswGlShader> v;
+    const size_t at = epi_always->glsl.find("\nlayout(");
+    if (at != std::string::npos) {
+        v = std::make_unique<LswGlShader>(*epi_always);
+        v->gl = 0;
+        v->key = epi_always->key ^ 0x3A1B9A55ull;
+        v->glsl.insert(at + 1, "layout(early_fragment_tests) in;\n");
+    }
+    return (variants[epi_always] = std::move(v)).get();
+}
+GLuint program_ready(const LswGlShader* vs, const LswGlShader* ps, const LswGlShader* gs) {   // 0 while it compiles
+    const size_t waits = g_frame_wait.size();
+    const uint32_t pending = g_prog_pending_draws;
+    const GLuint p = program(vs, ps, gs);
+    if (!p) { g_frame_wait.resize(waits); g_prog_pending_draws = pending; }
+    return p;
+}
 GLuint program_early(const LswGlShader* vs, const LswGlShader* ps, const LswGlShader* gs, GLuint prog) {
     const LswGlShader* e = early_ps(ps);
     if (!e) return prog;
@@ -2464,6 +2517,10 @@ void ab_cycle_tick() {
             printf("[EPILOGUE] state %s: draws that could use a specialised epilogue %llu, drawn with it %llu\n", g_ab_state.c_str(),
                    (unsigned long long)(g_epi_drawn - l_ed), (unsigned long long)(g_epi_used - l_eu2));
             l_ed = g_epi_drawn; l_eu2 = g_epi_used;
+            static uint64_t l_pe = 0, l_pu = 0;
+            printf("[PREPASS] state %s: draws that could take a depth pre-pass %llu, drawn with it %llu\n", g_ab_state.c_str(),
+                   (unsigned long long)(g_prepass_eligible - l_pe), (unsigned long long)(g_prepass_used - l_pu));
+            l_pe = g_prepass_eligible; l_pu = g_prepass_used;
         }
         {
             char hb[400]; int hk = snprintf(hb, sizeof hb, "[EARLYZ] draws with the alpha-test code so far, by alpha function 0-7 (7 always), without / with alpha to coverage:");
@@ -2508,6 +2565,7 @@ void ab_cycle_tick() {
     g_early_force_ab = false;   // z is out after run 55: the tester saw transparency broken nearly everywhere (alpha references are about 0.5)
     g_epi_ab = has('e');   // e: pixel shader epilogues specialised for the draw (epilogue_ps); exact
     g_epi_ext = has('g');   // g: with e, also depth-writing shaders and an exponent bias of 1 (g_epi_ext)
+    g_prepass_ab = has('p');   // p: depth pre-pass for alpha-tested draws with two or more textures (prepass_ps)
     lsw_async_walk_set(has('I'));   // I: the frame's ring walk on its own thread (kernel_stubs.cpp)
     lsw_kick_walk_set(has('k'));    // k (lower case; every capital is taken): with I, the walker starts at each kick (async_walk_kick)
     lsw_hsio_nowait_set(has('h'));  // h: flushes do not wait for the GPU, as on a console whose CPU-GPU link trained (lsw_hsio_nowait_set)
@@ -2930,7 +2988,7 @@ PresentSrc replay() {
         const auto* ps = static_cast<const LswGlShader*>(r.ps_dxbc);
         const auto* gs = static_cast<const LswGlShader*>(r.gs_dxbc);
         if (r.gs_type && !gs) { ++no_gs; continue; }
-        GLuint prog = 0;
+        GLuint prog = 0, prog_pre = 0, prog_main = 0;
         if (vs) {
             RpScope rp(RP_PROGRAM);
             prog = program(vs, ps, gs);
@@ -2961,6 +3019,24 @@ PresentSrc replay() {
                 ++g_epi_drawn;
                 if (p != prog) ++g_epi_used;
                 prog = p;
+            }
+            if (prog && ps && !r.ps_writes_depth && (g_prepass_ab || g_bench_prepass) && !g_bench_trivial && ps->units.size() >= 2 &&
+                (r.depthcontrol & 7) == 6 && ((r.depthcontrol >> 4) & 7) == 3 && early_ps(ps)) {   // state p (prepass_ps)
+                const uint32_t* sys = reinterpret_cast<const uint32_t*>(f.arena.data() + r.cb_sys_off);
+                if (sys[44] == 0) {
+                    ++g_prepass_eligible;
+                    uint32_t bias_one = 0;
+                    if (g_epi_ext) for (int i = 0; i < 4; ++i) bias_one |= uint32_t(sys[48 + i] == 0x3F800000u) << i;
+                    const LswGlShader* epi = epilogue_ps(ps, sys[0], 0, bias_one);
+                    const LswGlShader* epi7 = epilogue_ps(ps, sys[0] | (7u << 11), 0, bias_one);
+                    const LswGlShader* pre = epi ? prepass_ps(epi) : nullptr;
+                    const LswGlShader* full = epi7 ? mainpass_ps(epi7) : nullptr;
+                    if (pre && full) {
+                        prog_pre = program_ready(vs, pre, gs);
+                        prog_main = program_ready(vs, full, gs);
+                        if (prog_pre && prog_main) ++g_prepass_used; else prog_pre = prog_main = 0;
+                    }
+                }
             }
         }
         if (!prog) { ++no_prog; continue; }
@@ -3097,11 +3173,27 @@ PresentSrc replay() {
             if (g_gpuprof_frame) g_gpuprof_verts += uint64_t(count);
             if (g_gpuprof_novtx) count = std::min<GLsizei>(count, 6);   // DIAG
             gpu_pixels_begin();
-            if (r.ib_count)
-                glDrawElements(mode, count, r.ib_32bit ? GL_UNSIGNED_INT : GL_UNSIGNED_SHORT,
-                               reinterpret_cast<const void*>(uintptr_t(r.ib_off)));
-            else
-                glDrawArrays(mode, 0, count);
+            auto issue = [&] {
+                if (r.ib_count)
+                    glDrawElements(mode, count, r.ib_32bit ? GL_UNSIGNED_INT : GL_UNSIGNED_SHORT,
+                                   reinterpret_cast<const void*>(uintptr_t(r.ib_off)));
+                else
+                    glDrawArrays(mode, 0, count);
+            };
+            if (prog_pre && prog_main) {   // state p: depth pre-pass, then the visible pixels only
+                g_sc.use_program(prog_pre);
+                for (GLuint i = 0; i < 4; ++i) glColorMaski(i, GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+                issue();
+                apply_state(r, dt);   // colour masks back
+                glDepthFunc(GL_EQUAL);
+                glDepthMask(GL_FALSE);
+                if (g_gpuprof_nopix) glScissor(0, 0, 1, 1);
+                g_sc.use_program(prog_main);
+                issue();
+                g_sc.key_valid = false;   // depth state no longer matches the cached key
+            } else {
+                issue();
+            }
             draw_pixels = gpu_pixels_end();
         }
         if (g_capture_frame) capture_probe(draw_i - 1, dt);
@@ -3379,6 +3471,7 @@ PresentSrc gpu_bench(const PresentSrc& shown) {
         {"plain", 0, false, false, false},
         {"resolves off", 0, false, false, true},
         {g_epi_ab ? "epilogues not specialised" : "epilogues specialised", 0, false, false, false},
+        {g_prepass_ab ? "depth pre-pass off" : "depth pre-pass on", 0, false, false, false},
         {"trivial pixel shaders", 0, false, false, false},
         {"textures unbound", 0, false, false, false},
         {"resolve copies off", 0, false, false, false},
@@ -3407,6 +3500,8 @@ PresentSrc gpu_bench(const PresentSrc& shown) {
         g_bench_trivial = !strcmp(v.label, "trivial pixel shaders");
         g_epi_ab = g_ab_state.find('e') != std::string::npos && strcmp(v.label, "epilogues not specialised") != 0;
         g_bench_epi = !strcmp(v.label, "epilogues specialised");
+        g_prepass_ab = g_ab_state.find('p') != std::string::npos && strcmp(v.label, "depth pre-pass off") != 0;
+        g_bench_prepass = !strcmp(v.label, "depth pre-pass on");
         g_bench_texnone = !strcmp(v.label, "textures unbound");
         g_bench_noaniso = !strcmp(v.label, "anisotropic filtering off");
         const uint64_t trivial0 = g_bench_trivial_used;
@@ -3420,6 +3515,7 @@ PresentSrc gpu_bench(const PresentSrc& shown) {
     }
     g_bench_kind = -1; g_bench_label = nullptr; g_bench_noresolve = false; g_bench_nocopy = false; g_bench_nocopy_size = 0; g_bench_copy_quarter = false; g_bench_nocopy_cleared = false; g_bench_trivial = false; g_bench_texnone = false; g_bench_noaniso = false;
     g_bench_epi = false; g_epi_ab = g_ab_state.find('e') != std::string::npos;
+    g_bench_prepass = false; g_prepass_ab = g_ab_state.find('p') != std::string::npos;
     g_early_z = early0;
     lsw_glthread_call(bench_dedupe_job, reinterpret_cast<void*>(uintptr_t(dedupe0)));
     g_replay_same = false;

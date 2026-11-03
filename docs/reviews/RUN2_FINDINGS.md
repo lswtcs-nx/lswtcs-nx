@@ -1979,3 +1979,31 @@ So about three quarters of the shaders' time is arithmetic and a quarter is text
 - **State g:** with e, also the shaders that write depth, and each output exponent bias component that is exactly 1 (one multiply per output in every shader).
 - **States:** `MAPXSHNLUBIkhwre,MAPXSHNLUBIkhwreg`.
 - **Dropped from the bench:** anisotropic filtering, and the split by copy size.
+
+## Run 58: `0.0.64-log58` handheld, 3 November 2026: g is small; hidden pixels are the cost left
+
+Handheld, two passes through the heavy area. No fault.
+
+**State g:**
+- **FPS:** +2.0 % (90 %: -5.0 to +8.9); 24.0 against 23.4 FPS at 1300+ draws.
+- **Bench:** turning e off cost 6.5 ms in g against 6.1 ms in e, so g adds about 0.4 ms.
+- It is exact, so it joins the base.
+
+**Bench (16 benches, plain frame median 38.7 ms):**
+- Trivial pixel shaders: -19.6 ms.
+- Textures unbound: -5.2 ms.
+- Resolve copies off: -4.5 ms.
+
+**The specialised world shader still costs a lot for its size.** With g, the one-texture world variant `C6238EE5535ACF1E` took 2.7 ms over 36 draws per heavy frame. Its few operations only add up to that if each screen pixel is shaded several times. Every world draw has the alpha test (references about 0.5), and nouveau then tests depth after the shader. So every hidden layer is shaded in full, and the forced early test (-20 %) showed the size of that.
+
+## Log 59 (handheld)
+
+- **g joins the base.**
+- **State p, a depth pre-pass, exact by construction, for alpha-tested draws whose pixel shader reads two or more textures:**
+  - **Pass 1:** colour writes off, with a variant whose colour outputs are zero, so only the alpha test's inputs are computed. It writes depth where the alpha test passes.
+  - **Pass 2:** the full shader with the depth test before it, EQUAL with no depth write, and the alpha test folded to always.
+  - **Conditions:** only draws that test and write depth with LEQUAL, with no stencil and no alpha to coverage. For those, EQUAL after pass 1 passes exactly where LEQUAL would have.
+  - **Why the depths match:** the vertex shaders compute position as `precise`, so both passes place each pixel at the same depth.
+- **Counters and bench:** `[PREPASS]` counts eligible and used draws. The bench toggles it ("depth pre-pass on" or "off").
+- **One-texture shaders are left out:** their alpha path is nearly the whole shader, so a pre-pass would cost what it saves.
+- **States:** `MAPXSHNLUBIkhwreg,MAPXSHNLUBIkhwregp`.

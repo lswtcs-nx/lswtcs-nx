@@ -142,7 +142,10 @@ extern "C" bool lsw_offcore_active(Handle h) {
     for (auto& s : g_offcore_now) if (s.load() == h) return true;
     return false;
 }
-extern "C" void lsw_offcore_begin_on(int target_core, int new_prio) {
+extern "C" void lsw_offcore_begin_mask(int ideal_core, unsigned target_mask, int new_prio);
+extern "C" void lsw_offcore_begin_on(int target_core, int new_prio) { lsw_offcore_begin_mask(target_core, 1u << target_core, new_prio); }
+// Any core of target_mask (the walk with A/B state f, kernel_stubs.cpp: cores 1 and 2), the kernel choosing among them.
+extern "C" void lsw_offcore_begin_mask(int ideal_core, unsigned target_mask, int new_prio) {
     s32 core = 0; u64 mask = 0;
     if (R_FAILED(svcGetThreadCoreMask(&core, &mask, CUR_THREAD_HANDLE))) { g_offcore_prev_core = -1; return; }
     if (core < 0) core = 0;   // "saved" is now only a flag that a return is due; the mask names the cores
@@ -151,7 +154,7 @@ extern "C" void lsw_offcore_begin_on(int target_core, int new_prio) {
     g_offcore_prev_core = core; g_offcore_prev_mask = mask;
     offcore_mark(CUR_THREAD_HANDLE, true);
     svcSetThreadPriority(CUR_THREAD_HANDLE, new_prio);
-    svcSetThreadCoreMask(CUR_THREAD_HANDLE, target_core, 1u << target_core);
+    svcSetThreadCoreMask(CUR_THREAD_HANDLE, ideal_core, target_mask);
 }
 extern "C" void lsw_offcore_begin_prio(int new_prio) { lsw_offcore_begin_on(2, new_prio); }
 extern "C" void lsw_offcore_end() {

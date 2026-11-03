@@ -452,6 +452,7 @@ static bool walk_fence_note(uint32_t fence, uint32_t put, uint32_t get);
 static void walk_fence_after(uint32_t fence, uint32_t put, uint32_t get);
 static bool async_walk_try(uint32_t fence, uint32_t put);
 static bool async_walk_running();
+static bool ring_window_wait(uint32_t dev, uint32_t start, uint32_t len);
 static uint64_t g_aw_phase_skips = 0;
 // [ASYNCWALK] IB work by thread (top-level IBs, wall time): 0 the main thread, 1 the walker, 2 any other. Run 46: by the walk counters
 // the walker did the walk in state I, yet the main thread's sampled share of walk code (record path, page hashes) barely fell.
@@ -530,6 +531,7 @@ extern "C" void lswtcs_ad778_get(uint8_t* base, uint32_t dev, uint32_t start, vo
     static int on = -1;
     if (on < 0) { const char* e = getenv("LSWTCS_GETPHASE"); on = (!e || e[0] != '0') ? 1 : 0; }
     if (!on) return;
+    if (ctxp && ring_window_wait(dev, start, static_cast<PPCContext*>(ctxp)->r5.u32)) return;   // state r: the reader is past the window
     pm4_walk_site(ctxp, WALK_RING);   // ring-space wait: consume the ring so the window really is free
     uint32_t mirror = PPC_LOAD_U32(dev + 10896);
     if (mirror >= 0x80000000u)   // GPU physical space (0xA0xxxxxx) — no upper bound
@@ -1266,6 +1268,12 @@ extern "C" void lsw_walk_core_set(int core) { g_walk_core_ab.store(core, std::me
 // on core 1, where the walker (13 ms per frame) preempted it.
 static std::atomic<int> g_walk_prio_ab{0};
 extern "C" void lsw_walk_prio_set(int prio) { g_walk_prio_ab.store(prio, std::memory_order_relaxed); }
+// A/B state f (log53): the off-turn walk may run on core 1 or core 2, whichever has time, instead of core 1 only. Run 52, heavy frames
+// with k, h and w: core 1 carried the render thread (11 ms) and the walker (13-15 ms) in a 31 ms frame, and the main thread waited for
+// the walker about 3 ms per frame.
+static std::atomic<int> g_walk_float_ab{0};
+extern "C" void lsw_walk_float_set(int on) { g_walk_float_ab.store(on, std::memory_order_relaxed); }
+extern "C" __attribute__((weak)) void lsw_offcore_begin_mask(int, unsigned, int) {}   // Switch: platform_switch.cpp
 static thread_local bool t_walk_off = false;      // this thread is walking off the rotation right now
 static thread_local bool t_async_walker = false;  // state I: this is the ring walker thread (async_walker_body)
 static std::atomic<int> g_walk_off_sid{-1};       // scheduler id of the thread off the rotation in a walk, -1 = none
@@ -1297,7 +1305,8 @@ static void walk_off_enter() {
     // Core 2 by default. Run 7's trial there shared it with shader compiles and Mesa's worker; LSWTCS_WALKOFF_CORE=1 puts it beside the render thread.
     static const int core_env = [] { const char* e = getenv("LSWTCS_WALKOFF_CORE"); return e ? atoi(e) : 2; }();
     const int core_ab = g_walk_core_ab.load(std::memory_order_relaxed), prio_ab = g_walk_prio_ab.load(std::memory_order_relaxed);
-    lsw_offcore_begin_on(core_ab > 0 ? core_ab : core_env, prio_ab > 0 ? prio_ab : prio);
+    if (g_walk_float_ab.load(std::memory_order_relaxed)) lsw_offcore_begin_mask(1, 6u, prio_ab > 0 ? prio_ab : prio);
+    else lsw_offcore_begin_on(core_ab > 0 ? core_ab : core_env, prio_ab > 0 ? prio_ab : prio);
     t_walk_off = true;
 }
 static void walk_off_leave() {
@@ -6494,6 +6503,37 @@ static bool seg_read(uint32_t fence) {
     const int64_t read = int64_t(g_kick_written) - int64_t((g_kick_wptr + rbd - rpos) % rbd);   // the unread part is less than one ring
     return read >= int64_t(m->written);
 }
+// A/B state r (log53): the ring-space wait (sub_822AD778) polls the ring's read pointer (the write-back at [dev+10896]+60, by the boot code
+// at 0x822AF670) until it leaves the window the game is about to overwrite: it waits while GET is in (start, end], or, when the window
+// wraps, outside (end, start]. Until now the hook waited for the walker to finish everything handed to it, which with k is every kick
+// so far: 2-3 ms per heavy frame in run 52. With r it waits only until the reader's position (g_walk_pos, after each ring packet, so
+// after the IB that packet points to) has left the window, then stores that position as the read pointer, as the 360's CP would.
+static std::atomic<int> g_ring_early_on{0};
+extern "C" void lsw_ring_early_set(int on) { g_ring_early_on.store(on, std::memory_order_relaxed); }
+static uint64_t g_ring_early_hits = 0, g_ring_early_fallbacks = 0;
+static bool ring_window_wait(uint32_t dev, uint32_t start, uint32_t len) {
+    if (!g_ring_early_on.load(std::memory_order_relaxed) || t_async_walker || !async_walk_running() || !g_rb_size ||
+        !g_walk_pos_set.load(std::memory_order_relaxed))
+        return false;
+    uint8_t* base = g_base;
+    const uint32_t rbd = g_rb_size >> 2, mask = PPC_LOAD_U32(dev + 14884), mirror = PPC_LOAD_U32(dev + 10896);
+    if (mask + 1 != rbd || mirror < 0x80000000u) return false;   // not the ring this runtime reads: the old path
+    const uint32_t end = (start + len) & mask;
+    auto inside = [&](uint32_t g) { return start < end ? (g > start && g <= end) : (g > start || g <= end); };
+    const uint64_t t0 = gp_now();
+    ++g_aw_joins[WALK_RING];
+    uint32_t pos = g_walk_pos.load(std::memory_order_relaxed) % rbd;
+    while (async_walk_running() && inside(pos)) {
+        if (gil_on() && g_sched_id >= 0) sched_yield_turn();   // the walker may be waiting for the turn
+        std::this_thread::sleep_for(std::chrono::microseconds(20));
+        pos = g_walk_pos.load(std::memory_order_relaxed) % rbd;
+    }
+    g_aw_join_ns[WALK_RING] += gp_now() - t0;
+    if (inside(pos)) { ++g_ring_early_fallbacks; return false; }   // the walker stopped first: walk or wait as before
+    PPC_STORE_U32(mirror + 60, pos);
+    ++g_ring_early_hits;
+    return true;
+}
 static void async_walk_join(int site) {
     if (t_async_walker || (!g_aw_busy.load() && !g_aw_pending.load())) return;
     const uint64_t t0 = gp_now();
@@ -6605,11 +6645,12 @@ extern "C" void lsw_walk_sites_report(const char* state) {
     l_awk = g_aw_kicks; l_aww = g_aw_walks; l_awns = g_aw_walk_ns;
     static uint64_t l_ib[3], l_off = 0, l_rejoin = 0;
     const uint64_t ib[3] = {g_ib_ns[0].load(), g_ib_ns[1].load(), g_ib_ns[2].load()}, off = g_wo_off_ns.load(), rejoin = g_wo_rejoin_ns.load();
-    static uint64_t l_kh = 0, l_srh = 0;
+    static uint64_t l_kh = 0, l_srh = 0, l_reh = 0, l_ref = 0;
     printf("[ASYNCWALK] state %s: IB work by thread, main %.1f ms, walker %.1f ms, other %.1f ms | off the turn in big IBs %.1f ms, then waiting for the turn back %.1f ms | "
-           "kick hand-offs %llu | fence waits released mid-walk %llu\n", state, (ib[0] - l_ib[0]) / 1e6, (ib[1] - l_ib[1]) / 1e6, (ib[2] - l_ib[2]) / 1e6, (off - l_off) / 1e6,
-           (rejoin - l_rejoin) / 1e6, (unsigned long long)(g_aw_kick_handoffs - l_kh), (unsigned long long)(g_seg_read_hits - l_srh));
-    l_kh = g_aw_kick_handoffs; l_srh = g_seg_read_hits;
+           "kick hand-offs %llu | fence waits released mid-walk %llu | ring waits released past the window %llu, fell back %llu\n", state, (ib[0] - l_ib[0]) / 1e6,
+           (ib[1] - l_ib[1]) / 1e6, (ib[2] - l_ib[2]) / 1e6, (off - l_off) / 1e6, (rejoin - l_rejoin) / 1e6, (unsigned long long)(g_aw_kick_handoffs - l_kh),
+           (unsigned long long)(g_seg_read_hits - l_srh), (unsigned long long)(g_ring_early_hits - l_reh), (unsigned long long)(g_ring_early_fallbacks - l_ref));
+    l_kh = g_aw_kick_handoffs; l_srh = g_seg_read_hits; l_reh = g_ring_early_hits; l_ref = g_ring_early_fallbacks;
     {
         static uint64_t a[9];
         const uint64_t v[9] = {g_fw_n, g_fw_since_mark_ns, g_fw_since_kick_ns, g_fw_kicks_after, g_fw_newest, g_fw_nomark, g_fw_walk_age_ns, g_aw_start_lat_ns, g_aw_starts};

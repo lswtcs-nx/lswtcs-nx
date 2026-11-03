@@ -1735,3 +1735,40 @@ h was -8.4 % load-matched (90 %: -17.6 to -0.1).
 
 - **State w:** the off-turn walk runs below the render thread's priority (0x3D), so it fills core 1's gaps instead of preempting the render thread.
 - **States:** `MAPXSHNLUBI,MAPXSHNLUBIkh,MAPXSHNLUBIkhw`.
+
+## Run 52: `0.0.58-log52` docked, 3 November 2026: w shortens the render replay; the main thread is the wall again
+
+Docked. No fault and no hang. The heavy part was short: 12 visits at 1300+ draws, 52 s.
+
+**FPS at 1300+ draws:**
+
+| State | FPS |
+| --- | --- |
+| I | 26.0 |
+| I with k and h | 29.3 |
+| I with k, h and w | 31.9 |
+
+**Load-matched, 1300+ draws:**
+- Ikh against I: +13.0 % (90 %: +4.1 to +27.1). In run 51 it was -2.8 % (-7.9 to +2.8). Pooled over both runs: +4.7 % (-1.4 to +12.4).
+- Ikhw against I: +11.6 % (-1.5 to +24.6).
+- Ikhw against Ikh: -1.2 % (-15.0 to +10.9).
+
+Neither k with h nor w has an interval clear of 0 over both runs. The mechanism is clear:
+- **w shortens the render replay:** median 16.3 ms in Ikh against 13.6 ms in Ikhw, for about 11 ms of render CPU in both.
+- **CPU per heavy frame in Ikhw:** main 23, walker 15, render 11, Mesa's worker 10, the XAudio guest thread 7, XMA 2. Most of the XAudio thread's work already runs on core 2 (U and the native reverb), so all three cores are about 70-80 % busy.
+
+**Where the main thread's time goes, Ikhw, heavy frames (state-tagged profile):**
+- It holds the turn 92 % of the time. Guest code is 83 % of its turn samples and runtime code 4 %.
+- About 8 % is the ring-space wait (`sub_822AD778`) and the phase wait sleeping in `async_walk_join`, holding the turn.
+- About 4 % is present waiting for the render thread, and 2 % is `walk_wait_other`.
+- So it waits for the walker about 3 ms per heavy frame.
+
+**The ring-space wait waits for too much.** The boot code (0x822AF670) points the read-pointer write-back at `[dev+10896]+60`, which is the word `sub_822AD778` polls. So that wait is for the ring's read pointer to leave the window about to be overwritten. The hook instead waited for the walker to finish everything handed to it, and with k that is every kick so far.
+
+**A check on preemption:** comparing wall-time samples with thread CPU suggested the main thread lost about 4 ms per frame to preemption. Render and XMA show the same 20-40 % excess, so this is a bias of the sampling and not evidence.
+
+## Log 53
+
+- **State r:** the ring-space wait ends once the walker's position (published after each ring packet, so after its IB) has left the window. The hook then stores that position as the read pointer, as the CP would. It falls back to the old path if the walker stops first or the ring size does not match. `[ASYNCWALK]` counts the releases and the fallbacks.
+- **State f:** the off-turn walk may run on core 1 or core 2 (mask 6, `lsw_offcore_begin_mask`), so the kernel puts it where there is time.
+- **States:** `MAPXSHNLUBI,MAPXSHNLUBIkhw,MAPXSHNLUBIkhwr,MAPXSHNLUBIkhwrf`. I stays as the control.

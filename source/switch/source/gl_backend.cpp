@@ -63,6 +63,8 @@ extern "C" void lsw_async_walk_set(int on);   // kernel_stubs.cpp
 extern "C" void lsw_kick_walk_set(int on);    // kernel_stubs.cpp
 extern "C" void lsw_hsio_nowait_set(int on);  // kernel_stubs.cpp
 extern "C" void lsw_walk_prio_set(int prio);  // kernel_stubs.cpp
+extern "C" void lsw_walk_float_set(int on);   // kernel_stubs.cpp
+extern "C" void lsw_ring_early_set(int on);   // kernel_stubs.cpp
 extern "C" volatile int lsw_nvc0_cb_dedupe;   // mesa_cbdedupe_edits.py
 // The A/B state's tag in hwprof.txt (hw_profiler.cpp): 0 none, 1-7 the index in LSWTCS_ABSTATES plus one, 9-15 in LSWTCS_ABSTATES2. Printed on each [ABCYCLE] line.
 extern "C" { volatile uint32_t lsw_ab_tag = 0; }
@@ -2381,6 +2383,8 @@ void ab_cycle_tick() {
     lsw_kick_walk_set(has('k'));    // k (lower case; every capital is taken): with I, the walker starts at each kick (async_walk_kick)
     lsw_hsio_nowait_set(has('h'));  // h: flushes do not wait for the GPU, as on a console whose CPU-GPU link trained (lsw_hsio_nowait_set)
     lsw_walk_prio_set(has('w') ? 0x3D : 0);   // w: the off-turn walk below the render thread's priority (kernel_stubs.cpp)
+    lsw_ring_early_set(has('r'));   // r: the ring-space wait ends once the reader is past the window (ring_window_wait)
+    lsw_walk_float_set(has('f'));   // f: the off-turn walk on core 1 or 2, whichever has time
     lsw_nvc0_cb_dedupe = has('B');   // B: nouveau skips constant buffer binds that change nothing (mesa_cbdedupe_edits.py)
     lsw_shm_age_set(has('E'));
     lsw_quantum_div_set(has('Q') ? 4 : 0);

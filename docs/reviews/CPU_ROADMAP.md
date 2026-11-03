@@ -71,6 +71,20 @@ The command thread is 38 % of the turn and almost all native. So compiler work o
 5. **XAudio off the turn** (U): about 12 % of the turn at most. Run 33 tests it.
 6. **Compiler work:** late, as above. bo2-360-nx measured a full Direct3D-level renderer at about +2 % at best, so replacing PM4 with D3D hooks is not a route on its own.
 
+## Where this stands after run 34 (stock clocks only, the tester's decision)
+
+**CPU.** One tile and U took the big steps. What is left is flat, and heavy frames are now also GPU-limited, so CPU gains show only in part of the level:
+- guest code: the top function is 3 % of the turn and the top 20 about 25 %, so native rewrites at bo2-360-nx's 1.4-2x would give perhaps 5-8 % for a lot of work;
+- record path and hashes: about 17-27 % of the turn, with no single large item. E, the cheap idea, was rejected;
+- LTO, direct calls and PGO: now reach about 60 % of the turn, so perhaps 5-10 % together, with a large build cost. Unmeasured;
+- fourth core: frees core 2, which Mesa's worker (40 % busy) shares with XMA and U. Needs a forwarder: owner decision.
+
+**Mesa is not the CPU limit:** at 1300+ draws (run 34) the render thread is 27 % busy and Mesa's worker 40 %. So Deko's clear win elsewhere, CPU submission (USF4: render thread 18.6 to 2.8 ms), would not raise FPS here by itself. What could is GPU time, where USF4 went from 9.3 to 8.4 ms and TCS has no measurement. GPU `draws..present` in run 34: median 26.5 ms, 34.5 at the 75th percentile, 42-45 at the top.
+
+**Deko.** The harness's gate (`TCS360_DEKO_IMPLEMENTATION_PLAN.md`) asks for a dominant graphics cost after the easy fixes, a bounded benefit and cost, and a thin comparison on existing captures at equal semantics; then an explicit decision. The first part is starting to hold. The rest is not done. Next: list GPU cost by pass on Mesa, try the cheap Mesa items (resolves, then colour compression, `PORT_RESEARCH.md`), and take the same-frame comparison to the owner.
+
+## Route 1: guest threads on several cores
+
 The only route that could roughly double heavy scenes; also the riskiest. **Run 24 measured that there is parallelism to gain**
 (`[PARALLEL]`, frames of 1300+ draws):
 - the turn is held 88-100 % of the time, and at least one more guest thread is ready and waiting in 62-76 % of it;

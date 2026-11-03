@@ -448,6 +448,7 @@ static void pm4_walk_now(void* ctxp);
 // [WALKWHY]: which guest wait made the main thread walk the ring. The walk is lazy, run at these waits, so this shows what a walker on its own thread could free.
 enum { WALK_FENCE, WALK_RING, WALK_PHASE, WALK_SWAP, WALK_SITES };
 static void pm4_walk_site(void* ctxp, int site);
+static void walk_fence_note(uint32_t fence, uint32_t put, uint32_t get);
 static int g_imlog_left_fwd();
 // sub_822AE698 is D3D's BlockOnFence(dev=r3, fence=r4): returns once (put-fence) >= (put-get), where
 // put = [dev+10908] (next segment fence) and get = *[dev+10896] (last fence the GPU completed).
@@ -455,6 +456,8 @@ static int g_imlog_left_fwd();
 // D3D re-patches shader slots in place that the deferred walk has not read yet -> wrong vfetch strides
 // in the shadow pass); 1 (default) = get = max(get, fence): only the awaited fence is completed.
 extern "C" void ppc_ringbuf_advance_get(uint8_t* base, uint32_t gpu_obj_addr, void* ctxp) {
+    if (ctxp && PPC_LOAD_U32(gpu_obj_addr + 10896) >= 0x80000000u)
+        walk_fence_note(static_cast<PPCContext*>(ctxp)->r4.u32, PPC_LOAD_U32(gpu_obj_addr + 10908), PPC_LOAD_U32(PPC_LOAD_U32(gpu_obj_addr + 10896)));
     pm4_walk_site(ctxp, WALK_FENCE);   // consume what was submitted before claiming the GPU caught up
     static int mode = -1; if (mode < 0) { const char* e = getenv("LSWTCS_GETMODE"); mode = e ? atoi(e) : 1; }
     uint32_t get_mirror_addr = PPC_LOAD_U32(gpu_obj_addr + 10896);
@@ -6308,12 +6311,33 @@ static void pm4_walk_now(void* ctxp) {
 struct WalkSite { uint64_t calls, empty, ns, dwords; };
 static WalkSite g_walk_sites[WALK_SITES];
 static uint64_t g_walk_last_end = 0, g_walk_gap_ns = 0, g_walk_gap_max = 0;
+// When the ring's write pointer moved first since the last walk: from there to the walk, a walker on its own thread could already have worked.
+static uint64_t g_kicks = 0, g_kick_first = 0, g_kick_wait_ns = 0, g_kick_waits = 0;
+// Fence waits that found work in the ring: the fence was done already (the wait did not need this walk), it was the newest one, or an older one not yet done.
+static uint64_t g_fence_done = 0, g_fence_newest = 0, g_fence_older = 0;
+extern "C" PPC_FUNC(__imp__sub_822AE048);
+// Strong definition: the kick, which stores the write pointer. Replaces the recompiled weak alias, only to note the time.
+PPC_FUNC(sub_822AE048) {
+    __imp__sub_822AE048(ctx, base);
+    ++g_kicks;
+    if (!g_kick_first) g_kick_first = gp_now();
+}
+static void walk_fence_note(uint32_t fence, uint32_t put, uint32_t get) {
+    if (!g_rb_size) return;
+    const uint32_t rbd = g_rb_size >> 2;
+    uint8_t* base = g_base;
+    if (PPC_LOAD_U32(0x7FC80714u) % rbd == g_rb_rptr_dwords % rbd) return;
+    if (!fence || uint32_t(put - fence) > uint32_t(put - get)) ++g_fence_done;
+    else if (fence == put) ++g_fence_newest;
+    else ++g_fence_older;
+}
 static void walk_site_note(int site, uint64_t t0, uint32_t rptr0) {
     const uint64_t t1 = gp_now();
     const uint32_t rbd = g_rb_size ? g_rb_size >> 2 : 1, d = (g_rb_rptr_dwords + rbd - rptr0 % rbd) % rbd;
     WalkSite& w = g_walk_sites[site];
     ++w.calls; w.ns += t1 - t0; w.dwords += d;
     if (!d) { ++w.empty; return; }
+    if (g_kick_first) { g_kick_wait_ns += t0 > g_kick_first ? t0 - g_kick_first : 0; ++g_kick_waits; g_kick_first = 0; }
     if (g_walk_last_end) { const uint64_t gap = t0 - g_walk_last_end; g_walk_gap_ns += gap; if (gap > g_walk_gap_max) g_walk_gap_max = gap; }
     g_walk_last_end = t1;
 }
@@ -6327,7 +6351,7 @@ extern "C" void lsw_walk_sites_report(const char* state) {
     static WalkSite last[WALK_SITES];
     static uint64_t last_gap = 0;
     static const char* const kName[WALK_SITES] = {"fence", "ring", "phase", "swap"};
-    char b[400]; int k = snprintf(b, sizeof b, "[WALKWHY] state %s:", state);
+    char b[640]; int k = snprintf(b, sizeof b, "[WALKWHY] state %s:", state);
     uint64_t walks = 0;
     for (int i = 0; i < WALK_SITES; ++i) {
         const WalkSite& w = g_walk_sites[i]; WalkSite& l = last[i];
@@ -6336,8 +6360,12 @@ extern "C" void lsw_walk_sites_report(const char* state) {
         walks += (w.calls - w.empty) - (l.calls - l.empty);
         l = w;
     }
-    snprintf(b + k, sizeof b - k, " between walks %.1f ms in %llu, longest %.1f ms", (g_walk_gap_ns - last_gap) / 1e6, (unsigned long long)walks, g_walk_gap_max / 1e6);
+    static uint64_t l_kicks = 0, l_kw = 0, l_kwn = 0, l_fd = 0, l_fn = 0, l_fo = 0;
+    snprintf(b + k, sizeof b - k, " between walks %.1f ms in %llu, longest %.1f ms | kicks %llu, first kick to walk %.1f ms over %llu | fence waits with work: done already %llu, newest %llu, older %llu",
+             (g_walk_gap_ns - last_gap) / 1e6, (unsigned long long)walks, g_walk_gap_max / 1e6, (unsigned long long)(g_kicks - l_kicks), (g_kick_wait_ns - l_kw) / 1e6, (unsigned long long)(g_kick_waits - l_kwn),
+             (unsigned long long)(g_fence_done - l_fd), (unsigned long long)(g_fence_newest - l_fn), (unsigned long long)(g_fence_older - l_fo));
     last_gap = g_walk_gap_ns; g_walk_gap_max = 0;
+    l_kicks = g_kicks; l_kw = g_kick_wait_ns; l_kwn = g_kick_waits; l_fd = g_fence_done; l_fn = g_fence_newest; l_fo = g_fence_older;
     puts(b);
 }
 static void pm4_process_ring_flat_impl(bool allow_drain) {

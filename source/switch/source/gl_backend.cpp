@@ -1525,6 +1525,7 @@ struct StateKey {   // every input of apply_state
 };
 // DIAG: GL state changes actually issued per replay ([GLPROF] "changes"): program, framebuffer, UBO
 // range, texture, swizzle, sampler, fixed-function state block, state-cache resets.
+uint64_t g_ubo_slot[8];   // binding changes per uniform block ([GLUBO]): which blocks change between draws
 enum { SC_PROG, SC_FBO, SC_UBO, SC_TEX, SC_SWZ, SC_SMP, SC_STATE, SC_RESET, SC_N };
 uint64_t g_sc_changes[SC_N];
 struct GlStateCache {
@@ -1559,6 +1560,7 @@ struct GlStateCache {
         glBindBufferRange(GL_UNIFORM_BUFFER, i, b, off, size);
         u = {b, off, size};
         ++g_sc_changes[SC_UBO];
+        if (i < 8) ++g_ubo_slot[i];
     }
     void bind_unit(GLuint unit, GLenum target, GLuint t, GLuint sampler, bool set_swz, uint32_t s) {
         const int ti = target == GL_TEXTURE_CUBE_MAP ? 1 : target == GL_TEXTURE_3D ? 2 : 0;
@@ -2281,6 +2283,10 @@ void ab_cycle_tick() {
         static unsigned long long l_sets = 0, l_same = 0, l_bar = 0, l_ser = 0, l_rep = 0;
         printf("[NVC0CB] state %s: %llu replays, blocks set %llu, skipped as unchanged %llu, constant cache barriers %llu, serializes %llu\n", g_ab_state.c_str(), (unsigned long long)g_replays - l_rep,
                lsw_nvc0_cb_sets - l_sets, lsw_nvc0_cb_same - l_same, lsw_nvc0_cb_barriers - l_bar, lsw_nvc0_cb_serializes - l_ser);
+        static uint64_t l_slot[8];
+        char ub[160]; int uk = snprintf(ub, sizeof ub, "[GLUBO] state %s, binding changes by block:", g_ab_state.c_str());
+        for (int i = 0; i < 8; ++i) { uk += snprintf(ub + uk, sizeof ub - uk, " %llu", (unsigned long long)(g_ubo_slot[i] - l_slot[i])); l_slot[i] = g_ubo_slot[i]; }
+        puts(ub);
         l_sets = lsw_nvc0_cb_sets; l_same = lsw_nvc0_cb_same; l_bar = lsw_nvc0_cb_barriers; l_ser = lsw_nvc0_cb_serializes; l_rep = g_replays;
     }
     g_ab_state = states[order[index++ % states.size()]];

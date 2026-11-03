@@ -1385,3 +1385,19 @@ Docked again, to compare with run 36. Not yet run on hardware.
 - `LSWTCS_GLGPUPROF=150`, `LSWTCS_GLGPUPIX=0`, for more GPU samples per state.
 
 **The first log37 build did not start (three tries, same day).** The section ordering file put guest functions ahead of `.crt0`, so `_start` moved from address 0 to `0x3825E4` and the NRO header overwrote guest code at the start of the image. The ordering file now keeps `.crt0` first, and `validate_tcs360_switch.py` fails when `_start` is not at 0. Fixed build: `_start` and `__nx_mod0` at the same addresses as log35. Not yet run on hardware.
+
+## Run 37: `0.0.42-log37` docked, 2 November 2026: B cuts the GPU, the order shows nothing, one walk a frame
+
+Docked, states `MAPXSHNLU` and `MAPXSHNLUB`. The tester reports no visual fault.
+
+- **B works.** Heavy frames (1000+ draws, 29 and 30 samples): GPU 27.4 to 22.8 ms; per 1000 draws -21 % (90 %: -31 to +4); plain draws 12.8 to 9.1 ms, -40 %. Rects, quads and resolves unchanged. About 60 % of block sets are skipped. FPS docked +3.2 % load-matched (90 %: -4 to +11), as expected where the CPU limits.
+- **Barriers and serializes are not the cost:** about 3 barriers a replay, no serialize.
+- **Function order: no visible effect.** Median frame against run 36 by draws: 19.5 to 16.8 ms under 500 (scenes differ), then 21.9 to 21.4, 26.6 to 26.4, 31.3 to 30.7, 40.1 to 39.9. FPS without B at 1300-2500 is 26.4 against 23.9, with 66.2 ms p95 and half the play time at that load, so the means do not compare. Under 2 % at best. It stays: it costs nothing.
+- **The ring has one real walk per frame.** `[WALKWHY]`: one fence wait and one ring wait per frame find work, about 3 ring dwords each, so one indirect buffer holds the frame. Phase waits find nothing, VdSwap nothing. Walk 3-5 ms per frame averaged over a 6 s state; `[GPUPAGES]` 6-15 ms in heavy stretches.
+
+## Log 38: `0.0.43-log38`, the same states handheld
+
+Not yet run on hardware. Handheld, where the GPU limits, so B's gain can show in FPS.
+
+- `[WALKWHY]` adds kicks (`sub_822AE048`, strong definition, only notes the time), time from the first kick to the walk, and whether a fence wait with work asked for a fence already done, the newest, or an older one. If the fence is already done, the walk can wait; if it is the newest, the game needs it there and a walker thread must have finished first.
+- `[GLUBO]`: binding changes by uniform block per state, to see which blocks still change between draws.

@@ -206,3 +206,15 @@ What the main thread does at heavy load, by samples: guest code 56 %, and PM4 wa
 - Handheld GPU clock. 307 MHz is the default. Docked's gains show what more clock buys.
 - Fewer far draws (level of detail). One shader spends 7.5 ms on 1021 draws of about 50 samples each, and every draw also costs the main thread. Needs finding the engine's setting.
 - MSAA or resolution in the main pass.
+
+## Update after run 38
+
+Changes to the table above:
+- **B:** harmless and small handheld, not the gain run 37 suggested.
+- **Function order:** no visible effect.
+- **Walker thread:** down. The frame's walk follows the kick at once, so it can only help if the fence wait can return before the walk. One more log, the distance from fence to put and the caller, settles it.
+
+Next, in order:
+1. **Memory traffic on the GPU.** Handheld GPU is about half memory (estimate). Find out what compression this Mesa path really gets, then try colour and depth compression. It may need changes in `libdrm_nouveau`, whose source is not in this tree. If Mesa cannot do it, this is the one concrete reason left to reopen a thin Deko comparison, since Deko exposes `DkImageFlags_HwCompression`.
+2. **Resolves:** 6 ms in 30 per frame handheld, with 2.4 ms docked left with pixels off.
+3. **Main thread:** hashes and record path, then LTO on hot units. A few percent each, and they show docked first.

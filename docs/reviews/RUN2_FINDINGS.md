@@ -1401,3 +1401,17 @@ Not yet run on hardware. Handheld, where the GPU limits, so B's gain can show in
 
 - `[WALKWHY]` adds kicks (`sub_822AE048`, strong definition, only notes the time), time from the first kick to the walk, and whether a fence wait with work asked for a fence already done, the newest, or an older one. If the fence is already done, the walk can wait; if it is the newest, the game needs it there and a walker thread must have finished first.
 - `[GLUBO]`: binding changes by uniform block per state, to see which blocks still change between draws.
+
+## Run 38: `0.0.43-log38` handheld, 2 November 2026: B does not repeat, half the GPU's time looks like memory
+
+Handheld, GPU 307.2 MHz, memory 1331.2 MHz, states `MAPXSHNLU` and `MAPXSHNLUB`, about 5700 frames in the level. No fault reported.
+
+- **B is small.** Heavy frames (1000+ draws): GPU 41.7 against 42.0 ms; per 1000 draws -4.4 % (90 %: -10.8 to -1.0), -1.0 % at 1500+ draws (-9.2 to +1.7). FPS load-matched at 1300+ draws +0.3 % (-8.0 to +7.6), all frames +1.7 % (-4.2 to +8.5). Run 37's -21 % docked had an interval that crossed 0 and does not repeat here. B stays as harmless, with no claim of a gain.
+- **Most binds are two or three blocks.** `[GLUBO]` over the run: vertex floats about 2.1 M changes, fetch 1.1 M, derived 0.9 M, pixel floats 0.28 M, system 0.19 M, bool 0.04 M.
+- **No window before the walk.** Each frame's walk starts almost at once after the kick: 584 walks in a 6 s state took 1.2 ms in total from kick to walk; the run's mean is 0.37 ms, raised by a few stretches. A walker started at the kick has no head start.
+- **The fence is not settled.** All 10 040 fence waits with work read as "older than put", none as done already. This classifier is weak: `get` moves only in the stub itself, and put is the next segment's fence. The code's note on `LSWTCS_GETMODE=0` records wrong vfetch strides when the wait returned early, so the wait is at least sometimes real. The walker thread is now unlikely to pay.
+- **Against run 35** (handheld): at 1667+ draws 20.3 to 22.5 FPS, median frame 42.2 to 42.4 ms, p95 77 to 66 ms. Medians match; run 35 had captures and pixel queries on, so the mean's rise is not a gain from these builds.
+
+**GPU time splits about evenly between clock and memory (estimate).** From 41 ms at 307 and 1331 MHz, and 25.5 ms at 768 and 1600 MHz, with time = core / clock + memory / memory clock: about 20 ms core and 21 ms memory handheld. It assumes both parts scale cleanly, and the two samples differ in pixel queries.
+
+So less memory traffic is the most promising same-quality GPU target. Colour targets are single-sample, kind `0xfe`, uncompressed (`nvc0_mt_choose_storage_type`). Whether depth really gets compression tags on this path is unverified (`PORT_RESEARCH.md`).

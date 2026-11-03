@@ -6356,9 +6356,12 @@ static uint64_t g_fence_walked_before = 0, g_fence_not_walked = 0;
 // Main-thread time a walker thread could overlap: from the frame's fence walk to VdSwap, and from VdSwap to the next kick.
 static uint64_t g_fence_walk_end = 0, g_fence_to_swap_ns = 0, g_fence_to_swap_n = 0, g_swap_t = 0, g_swap_to_kick_ns = 0, g_swap_to_kick_n = 0;
 extern "C" PPC_FUNC(__imp__sub_822AE048);
-// Strong definition: the kick, which stores the write pointer. Replaces the recompiled weak alias, only to note the time.
+static void async_walk_kick();
+// Strong definition: the kick, which stores the write pointer. Replaces the recompiled weak alias, to note the time and, in state k,
+// to start the walker on what was just submitted.
 PPC_FUNC(sub_822AE048) {
     __imp__sub_822AE048(ctx, base);
+    async_walk_kick();
     ++g_kicks;
     if (!g_kick_first) g_kick_first = gp_now();
     if (g_swap_t) { g_swap_to_kick_ns += gp_now() - g_swap_t; ++g_swap_to_kick_n; g_swap_t = 0; }
@@ -6467,6 +6470,30 @@ static bool async_walk_try(uint32_t fence, uint32_t put) {
     ++g_aw_kicks;
     return true;
 }
+// State k (with I): hand the ring to the walker at every kick, as the 360's GPU starts on a segment once it is submitted. Run 47, docked,
+// heaviest Gungan frames: the fence hand-off moved about 5 ms of walking per frame, but about 9 ms more was walked on the main thread
+// at the GPU-phase wait (sub_822AD6A0), about 15 ms after the segment had been kicked. Started at the kick, the walker has usually
+// read it by then: the phase wait finds nothing left, or waits for the remainder instead of walking all of it.
+static std::atomic<int> g_kick_walk_on{0};
+extern "C" void lsw_kick_walk_set(int on) { g_kick_walk_on.store(on, std::memory_order_relaxed); }
+static uint64_t g_aw_kick_handoffs = 0;
+static void async_walk_kick() {
+    if (!g_kick_walk_on.load(std::memory_order_relaxed) || !g_async_walk_on.load(std::memory_order_relaxed) || t_async_walker ||
+        !gil_on() || g_sched_id < 0 || !g_fence_dev || !g_rb_base || !g_rb_size)
+        return;
+    if (g_aw_sid < 0) {
+        g_aw_sid = g_sched_next_id++;
+        std::thread(async_walker_body, g_aw_sid).detach();
+    }
+    uint8_t* base = g_base;
+    g_aw_target = PPC_LOAD_U32(g_fence_dev + 10908);   // as walk_site_note reads it: every segment below is in the ring
+    {
+        std::lock_guard<std::mutex> lk(g_aw_mtx);
+        g_aw_pending = true;
+    }
+    g_aw_cv.notify_one();
+    ++g_aw_kick_handoffs;
+}
 static void pm4_walk_site(void* ctxp, int site) {
     async_walk_join(site);
     const uint64_t t0 = gp_now();
@@ -6500,8 +6527,11 @@ extern "C" void lsw_walk_sites_report(const char* state) {
     l_awk = g_aw_kicks; l_aww = g_aw_walks; l_awns = g_aw_walk_ns;
     static uint64_t l_ib[3], l_off = 0, l_rejoin = 0;
     const uint64_t ib[3] = {g_ib_ns[0].load(), g_ib_ns[1].load(), g_ib_ns[2].load()}, off = g_wo_off_ns.load(), rejoin = g_wo_rejoin_ns.load();
-    printf("[ASYNCWALK] state %s: IB work by thread, main %.1f ms, walker %.1f ms, other %.1f ms | off the turn in big IBs %.1f ms, then waiting for the turn back %.1f ms\n", state,
-           (ib[0] - l_ib[0]) / 1e6, (ib[1] - l_ib[1]) / 1e6, (ib[2] - l_ib[2]) / 1e6, (off - l_off) / 1e6, (rejoin - l_rejoin) / 1e6);
+    static uint64_t l_kh = 0;
+    printf("[ASYNCWALK] state %s: IB work by thread, main %.1f ms, walker %.1f ms, other %.1f ms | off the turn in big IBs %.1f ms, then waiting for the turn back %.1f ms | "
+           "kick hand-offs %llu\n", state, (ib[0] - l_ib[0]) / 1e6, (ib[1] - l_ib[1]) / 1e6, (ib[2] - l_ib[2]) / 1e6, (off - l_off) / 1e6, (rejoin - l_rejoin) / 1e6,
+           (unsigned long long)(g_aw_kick_handoffs - l_kh));
+    l_kh = g_aw_kick_handoffs;
     for (int i = 0; i < 3; ++i) l_ib[i] = ib[i];
     l_off = off; l_rejoin = rejoin;
     for (int i = 0; i <= WALK_SITES; ++i) { l_awj[i] = g_aw_joins[i]; l_awjn[i] = g_aw_join_ns[i]; }

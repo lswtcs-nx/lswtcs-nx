@@ -1605,3 +1605,37 @@ log46 was not run; log47 replaces it and keeps its changes.
 - `[ASYNCWALK]`: top-level IB time on the main thread, the walker and other threads, and the walker's time off the turn and waiting for it.
 - State K: the walker's big IBs on core 2 instead of core 1.
 - States `MAPXSHNLUBI,MAPXSHNLUBIK,MAPXSHNLUB`, with hwprof samples tagged by state (log46).
+
+## Run 47: `0.0.53-log47` docked, 3 November 2026: the rest of the walk is at the phase wait
+
+Docked. No fault, and no dropped interrupt.
+
+**Heaviest Gungan frames (140-166 replays per 6 s state), CPU per frame from `[THREADCPU]`:**
+- **Main thread:** 40.3 ms without I, and 31.5-33.9 ms with I. Without I, frames take about 42 ms, so the main thread is busy 94 % of the time.
+- **Walker:** 3.5-4.4 ms.
+- **Other threads:** render 11-12 ms, Mesa's worker 10-11 ms, the XAudio guest thread 12-15 ms.
+
+**Where the walk runs, from IB time:**
+- Without I, the main thread spends 14.5 ms per frame in IBs.
+- With I, it still spends 8.5-9.3 ms, and the walker 3.6-4.2 ms. In light scenes, everything moves to the walker.
+- The main thread's part is the GPU-phase wait. Its walks there take 8.8-9.6 ms per frame, about two per frame, each ending in one ring-level IB. The fence wait had 5 ms, and that is the only part I moves.
+- Run 41 measured about 15 ms between a kick and the walk that reads it. So most of this walking could start well before the wait.
+- The state-tagged profile (`--state MAPXSHNLUBI`) agrees: XXH3, register copies and IB parsing are still the top items of the main thread in I.
+
+**FPS at 1300+ draws:**
+
+| State | FPS |
+| --- | --- |
+| Without I | 25.0 |
+| I | 27.5 |
+| I with K | 25.0 |
+
+K was 12 % slower load-matched (90 %: -18.5 to -5.6), with the walker's IB wall time at 15-31 ms per frame on core 2. K is out.
+
+So run 46's "missing 10 ms" is not contention: the main thread's own work outside the walk is about 23-26 ms per frame in both states.
+
+## Log 48
+
+- **State k (lower case, since every capital letter is taken):** with I, each kick hands the ring to the walker. A phase or fence wait then waits only for what the walker has not yet read, instead of walking all of it on the main thread.
+- **Expected result:** heavy docked frames from about 36 ms towards 27-30 ms, where the GPU (21 ms) and the main thread's own work (23-26 ms) meet.
+- **States:** `MAPXSHNLUBI,MAPXSHNLUBIk`. `[ASYNCWALK]` reports the kick hand-offs.

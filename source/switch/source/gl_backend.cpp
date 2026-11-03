@@ -60,6 +60,7 @@ extern "C" void lsw_spin_real_set(int on);                     // kernel_stubs.c
 extern "C" void lsw_walk_sites_report(const char* state);   // kernel_stubs.cpp
 extern "C" void lsw_thread_cpu_report(const char* state, unsigned long long replays);   // hw_profiler.cpp: [THREADCPU]
 extern "C" void lsw_async_walk_set(int on);   // kernel_stubs.cpp
+extern "C" void lsw_kick_walk_set(int on);    // kernel_stubs.cpp
 extern "C" volatile int lsw_nvc0_cb_dedupe;   // mesa_cbdedupe_edits.py
 // The A/B state's tag in hwprof.txt (hw_profiler.cpp): 0 none, 1-7 the index in LSWTCS_ABSTATES plus one, 9-15 in LSWTCS_ABSTATES2. Printed on each [ABCYCLE] line.
 extern "C" { volatile uint32_t lsw_ab_tag = 0; }
@@ -2375,6 +2376,7 @@ void ab_cycle_tick() {
     g_rt_pool = has('J') ? 3 : has('Z') ? 1 : 0;   // Z, J: compressed render targets (gl_rt.inc)
     g_early_z = has('F');   // F: early depth tests where the alpha test cannot discard, or depth and stencil are not written (program_early)
     lsw_async_walk_set(has('I'));   // I: the frame's ring walk on its own thread (kernel_stubs.cpp)
+    lsw_kick_walk_set(has('k'));    // k (lower case; every capital is taken): with I, the walker starts at each kick (async_walk_kick)
     lsw_nvc0_cb_dedupe = has('B');   // B: nouveau skips constant buffer binds that change nothing (mesa_cbdedupe_edits.py)
     lsw_shm_age_set(has('E'));
     lsw_quantum_div_set(has('Q') ? 4 : 0);

@@ -445,6 +445,9 @@ extern "C" void ppc_advance_kprcb_tick(uint8_t* base, uint32_t pcr) {
 // Switch note: this function is pure guest-memory r/w and needs no changes for
 // other platforms; only the rendering backend (gpu_d3d12.cpp) is platform-specific.
 static void pm4_walk_now(void* ctxp);
+// [WALKWHY]: which guest wait made the main thread walk the ring. The walk is lazy, run at these waits, so this shows what a walker on its own thread could free.
+enum { WALK_FENCE, WALK_RING, WALK_PHASE, WALK_SWAP, WALK_SITES };
+static void pm4_walk_site(void* ctxp, int site);
 static int g_imlog_left_fwd();
 // sub_822AE698 is D3D's BlockOnFence(dev=r3, fence=r4): returns once (put-fence) >= (put-get), where
 // put = [dev+10908] (next segment fence) and get = *[dev+10896] (last fence the GPU completed).
@@ -452,7 +455,7 @@ static int g_imlog_left_fwd();
 // D3D re-patches shader slots in place that the deferred walk has not read yet -> wrong vfetch strides
 // in the shadow pass); 1 (default) = get = max(get, fence): only the awaited fence is completed.
 extern "C" void ppc_ringbuf_advance_get(uint8_t* base, uint32_t gpu_obj_addr, void* ctxp) {
-    pm4_walk_now(ctxp);   // consume what was submitted before claiming the GPU caught up
+    pm4_walk_site(ctxp, WALK_FENCE);   // consume what was submitted before claiming the GPU caught up
     static int mode = -1; if (mode < 0) { const char* e = getenv("LSWTCS_GETMODE"); mode = e ? atoi(e) : 1; }
     uint32_t get_mirror_addr = PPC_LOAD_U32(gpu_obj_addr + 10896);
     uint32_t put_val         = PPC_LOAD_U32(gpu_obj_addr + 10908);
@@ -490,7 +493,7 @@ extern "C" void lswtcs_ad778_get(uint8_t* base, uint32_t dev, uint32_t start, vo
     static int on = -1;
     if (on < 0) { const char* e = getenv("LSWTCS_GETPHASE"); on = (!e || e[0] != '0') ? 1 : 0; }
     if (!on) return;
-    pm4_walk_now(ctxp);   // ring-space wait: consume the ring so the window really is free
+    pm4_walk_site(ctxp, WALK_RING);   // ring-space wait: consume the ring so the window really is free
     uint32_t mirror = PPC_LOAD_U32(dev + 10896);
     if (mirror >= 0x80000000u)   // GPU physical space (0xA0xxxxxx) — no upper bound
         PPC_STORE_U32(mirror + 60, start);
@@ -500,7 +503,7 @@ extern "C" void lswtcs_ad6a0_phase(uint8_t* base, uint32_t dev, uint32_t phase, 
     static int on = -1;
     if (on < 0) { const char* e = getenv("LSWTCS_GETPHASE"); on = (!e || e[0] != '0') ? 1 : 0; }
     if (!on) return;
-    pm4_walk_now(ctxp);   // GPU-phase wait: execute what was submitted before reporting the phase reached
+    pm4_walk_site(ctxp, WALK_PHASE);   // GPU-phase wait: execute what was submitted before reporting the phase reached
     uint32_t mirror = PPC_LOAD_U32(dev + 10896);
     // The mirror block lives in GPU physical memory (0xA0xxxxxx, e.g. 0xA0214000)
     // — same validity rule as ppc_ringbuf_advance_get: any high-half guest address.
@@ -6302,6 +6305,41 @@ static void pm4_walk_now(void* ctxp) {
     pm4_process_ring_flat_impl(false);
     g_interrupt_ctx = saved;
 }
+struct WalkSite { uint64_t calls, empty, ns, dwords; };
+static WalkSite g_walk_sites[WALK_SITES];
+static uint64_t g_walk_last_end = 0, g_walk_gap_ns = 0, g_walk_gap_max = 0;
+static void walk_site_note(int site, uint64_t t0, uint32_t rptr0) {
+    const uint64_t t1 = gp_now();
+    const uint32_t rbd = g_rb_size ? g_rb_size >> 2 : 1, d = (g_rb_rptr_dwords + rbd - rptr0 % rbd) % rbd;
+    WalkSite& w = g_walk_sites[site];
+    ++w.calls; w.ns += t1 - t0; w.dwords += d;
+    if (!d) { ++w.empty; return; }
+    if (g_walk_last_end) { const uint64_t gap = t0 - g_walk_last_end; g_walk_gap_ns += gap; if (gap > g_walk_gap_max) g_walk_gap_max = gap; }
+    g_walk_last_end = t1;
+}
+static void pm4_walk_site(void* ctxp, int site) {
+    const uint64_t t0 = gp_now();
+    const uint32_t r0 = g_rb_rptr_dwords;
+    pm4_walk_now(ctxp);
+    walk_site_note(site, t0, r0);
+}
+extern "C" void lsw_walk_sites_report(const char* state) {
+    static WalkSite last[WALK_SITES];
+    static uint64_t last_gap = 0;
+    static const char* const kName[WALK_SITES] = {"fence", "ring", "phase", "swap"};
+    char b[400]; int k = snprintf(b, sizeof b, "[WALKWHY] state %s:", state);
+    uint64_t walks = 0;
+    for (int i = 0; i < WALK_SITES; ++i) {
+        const WalkSite& w = g_walk_sites[i]; WalkSite& l = last[i];
+        k += snprintf(b + k, sizeof b - k, " %s %llu (%llu empty) %.1f ms %llu dw |", kName[i], (unsigned long long)(w.calls - l.calls), (unsigned long long)(w.empty - l.empty),
+                      (w.ns - l.ns) / 1e6, (unsigned long long)(w.dwords - l.dwords));
+        walks += (w.calls - w.empty) - (l.calls - l.empty);
+        l = w;
+    }
+    snprintf(b + k, sizeof b - k, " between walks %.1f ms in %llu, longest %.1f ms", (g_walk_gap_ns - last_gap) / 1e6, (unsigned long long)walks, g_walk_gap_max / 1e6);
+    last_gap = g_walk_gap_ns; g_walk_gap_max = 0;
+    puts(b);
+}
 static void pm4_process_ring_flat_impl(bool allow_drain) {
     if (!g_rb_base || !g_rb_size) return;
     walk_wait_other();
@@ -6856,7 +6894,10 @@ PPC_FUNC(__imp__VdSwap) {
                 const bool nodrain = wo && g_swap_nodrain.load(std::memory_order_relaxed);
                 if (nodrain) ++g_wo_swap_nodrain;
                 g_interrupt_ctx = &ctx;
+                const uint64_t walk_t0 = gp_now();
+                const uint32_t walk_r0 = g_rb_rptr_dwords;
                 pm4_process_ring_flat_impl(!nodrain);   // self-paces off the ring NOP frontier; fills g_geom_verts
+                walk_site_note(WALK_SWAP, walk_t0, walk_r0);
                 g_interrupt_ctx = nullptr;
             }
         }

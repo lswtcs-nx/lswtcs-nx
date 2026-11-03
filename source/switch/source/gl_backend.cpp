@@ -57,6 +57,9 @@ extern "C" void lsw_tile_relaxed_set(int on);                  // kernel_stubs.c
 extern "C" void lsw_native_mix_set(int on);                    // native_mixer.cpp: N
 extern "C" void lsw_audio_offturn_set(int on);                 // audio_offturn.cpp: U (the second audio mixer off the guest turn)
 extern "C" void lsw_spin_real_set(int on);                     // kernel_stubs.cpp: L (guest spinlocks really taken)
+extern "C" void lsw_walk_sites_report(const char* state);   // kernel_stubs.cpp
+extern "C" volatile int lsw_nvc0_cb_dedupe;   // mesa_cbdedupe_edits.py
+extern "C" unsigned long long lsw_nvc0_cb_sets, lsw_nvc0_cb_same, lsw_nvc0_cb_barriers, lsw_nvc0_cb_serializes;
 extern "C" void lsw_ab_stat_report(const char* state, unsigned long long replay);   // kernel_stubs.cpp: [ABSTAT]
 extern "C" void lsw_shm_age_set(int on);                       // kernel_stubs.cpp: E (settled pages hashed one frame in 4)
 extern "C" void lsw_quantum_div_set(int n);                    // kernel_stubs.cpp: Q (a guest thread switch every 4th quantum)
@@ -2272,7 +2275,14 @@ void ab_cycle_tick() {
             std::swap(order[i - 1], order[size_t(seed % i)]);
         }
     }
-    if (!g_ab_state.empty()) lsw_ab_stat_report(g_ab_state.c_str(), (unsigned long long)g_replays);
+    if (!g_ab_state.empty()) {
+        lsw_ab_stat_report(g_ab_state.c_str(), (unsigned long long)g_replays);
+        lsw_walk_sites_report(g_ab_state.c_str());
+        static unsigned long long l_sets = 0, l_same = 0, l_bar = 0, l_ser = 0, l_rep = 0;
+        printf("[NVC0CB] state %s: %llu replays, blocks set %llu, skipped as unchanged %llu, constant cache barriers %llu, serializes %llu\n", g_ab_state.c_str(), (unsigned long long)g_replays - l_rep,
+               lsw_nvc0_cb_sets - l_sets, lsw_nvc0_cb_same - l_same, lsw_nvc0_cb_barriers - l_bar, lsw_nvc0_cb_serializes - l_ser);
+        l_sets = lsw_nvc0_cb_sets; l_same = lsw_nvc0_cb_same; l_bar = lsw_nvc0_cb_barriers; l_ser = lsw_nvc0_cb_serializes; l_rep = g_replays;
+    }
     g_ab_state = states[order[index++ % states.size()]];
     const auto has =[](char c) { return g_ab_state.find(c) != std::string::npos; };
     g_ut_off_ab = !has('M');
@@ -2291,6 +2301,7 @@ void ab_cycle_tick() {
     lsw_native_mix_set(has('N'));
     lsw_audio_offturn_set(has('U'));
     lsw_spin_real_set(has('L'));
+    lsw_nvc0_cb_dedupe = has('B');   // B: nouveau skips constant buffer binds that change nothing (mesa_cbdedupe_edits.py)
     lsw_shm_age_set(has('E'));
     lsw_quantum_div_set(has('Q') ? 4 : 0);
     g_polyofs_on = has('O');

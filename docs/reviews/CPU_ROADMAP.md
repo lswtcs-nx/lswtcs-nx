@@ -172,3 +172,37 @@ most of its 13 ms.
   and the `[GLPROF]`, `[GPUPAGES]`, `[THREADS]`, `[PLACEMENT]`, `[PARALLEL]`, `[WALKOFF]` lines in `stdout.log`.
 - Staging: `profiles/hardware-ab.env` to `private/sdcard/lswtcs/env.txt`, the build's NRO to `private/sdcard/switch/lswtcs/`,
   the ELF to `private/lswtcs-logN.elf`, and the logs to `private/runs/runN-logN` after analysis.
+
+## Where to go after run 36
+
+Stock clocks. Frames of 1667+ draws, `Gungan` level.
+
+| | Handheld | Docked |
+| --- | --- | --- |
+| FPS | 20.3 | 24.9 |
+| Median frame | 42 ms | 40 ms |
+| GPU, sampled | about 41 ms | 25.5 ms |
+| Limit | GPU, with the main thread close behind | main guest thread, about 95 % busy on core 0 |
+
+**There are two walls.** Handheld gains need the GPU to drop first and the CPU soon after. Docked gains need the CPU alone. No single change moves both, so the plan works both sides.
+
+What the main thread does at heavy load, by samples: guest code 56 %, and PM4 walk, recording and hashes on its stacks about 37 % (stacks are scans, so this is approximate). It walks the ring itself: the walk is lazy, run at guest waits (`pm4_walk_now`, VdSwap).
+
+| Order | Route | Reach | Cost and risk | Status |
+| --- | --- | --- | --- | --- |
+| 1 | **Skip constant buffer binds that change nothing (B).** One changed block made Mesa rebind every block of every stage. | Part of the 7-13 ms the omission split gave docked. Handheld more. | Done. Runtime switch. | Run 37 |
+| 2 | **Hot functions together (`hot_order.ld`).** 2042 sampled functions now span 3.7 MB, not 73 MB. Only placement changes. | Unknown, likely a few percent of guest code. | Done. Relink only. | Run 37 |
+| 3 | **Ring walker on its own thread.** Up to about 37 % of the main thread. Docked heaviest from 40 ms towards 28 ms. Handheld only as far as the GPU allows. | The largest CPU item left. | High: races, as W showed. Waits for `[WALKWHY]`: if the guest waits right after each kick, little can run in parallel. | Decide after run 37 |
+| 4 | **Native record path.** XXH3 about 7 % of the main thread, register copy 5 %, IB parse 5 %. Copy is already NEON. | Maybe 3-6 %. | Medium. Exact behaviour is checkable. | After 3 |
+| 5 | **Generated code.** Stack pointer in locals: -2.2 % instructions on one unit (`stack_local.py`). The view table is 6 % of instructions, plus a shift, and has no flat replacement while physical aliases exist. `-O3` is larger; `-fipa-pta` and plain memory change little. | Perhaps 3-5 % with LTO still unmeasured. | Full rebuild for each test. | Late |
+
+**Dropped:**
+- W: the main thread is the walker, so going off the turn frees only others. Others hold 5 % of the turn.
+- Guest threads on several cores: main is 95 % of the turn, and with none else waiting in 55 % of heavy ticks, there is little to run beside it.
+- Quads without a geometry shader, Deko for FPS (`RUN2_FINDINGS.md`, run 36).
+- Fourth core: Mesa's worker is not limiting.
+
+**Owner or tester decisions, the largest levers and not to be applied silently:**
+- Handheld GPU clock. 307 MHz is the default. Docked's gains show what more clock buys.
+- Fewer far draws (level of detail). One shader spends 7.5 ms on 1021 draws of about 50 samples each, and every draw also costs the main thread. Needs finding the engine's setting.
+- MSAA or resolution in the main pass.

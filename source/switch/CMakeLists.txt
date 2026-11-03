@@ -217,6 +217,7 @@ target_link_options(lswtcs PRIVATE
     -Wl,--wrap=__cxa_throw                 # log libstdc++ throws (no EH in the runtime)
     -Wl,--wrap=__malloc_lock               # DIAG: malloc lock contention (platform_switch.cpp)
     -Wl,--wrap=thrd_create                 # newlib thrd_success = 4, Mesa expects 0 (platform_switch.cpp)
+    -Wl,--section-ordering-file=${CMAKE_CURRENT_SOURCE_DIR}/hot_order.ld   # sampled guest functions together, hottest first (tools/make_hot_order.py)
     -Wl,-Map=lswtcs.map)
 # rpmalloc as the process allocator (third_party/rpmalloc/rpmalloc_switch.c): per-thread caches instead
 # of newlib's single malloc lock, which serialised parallel shader builds. -DLSW_RPMALLOC=OFF = newlib.
@@ -238,7 +239,7 @@ endif()
 if(LSW_DEKO_BACKEND)
     nx_generate_nacp(lswtcs.nacp NAME "TCS Deko Live" AUTHOR "LSWTCS port" VERSION "0.0.7")
 else()
-    nx_generate_nacp(lswtcs.nacp NAME "LSWTCS" AUTHOR "LSWTCS port" VERSION "0.0.41-log35")
+    nx_generate_nacp(lswtcs.nacp NAME "LSWTCS" AUTHOR "LSWTCS port" VERSION "0.0.42-log37")
 endif()
 nx_create_nro(lswtcs NACP lswtcs.nacp)
 

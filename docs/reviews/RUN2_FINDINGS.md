@@ -1374,3 +1374,12 @@ Same build, one state, one pass. Docked: GPU 768 MHz, memory 1600 MHz, no clock 
 - **The constant cost is not the old barrier.** `mesa_cbflush_edits.py` already flushes only after a write, and heavy frames make 5 shared memory copies, so few barriers remain. Heavy frames change about 3200 bindings. What remains is the bind or the constant cache reload after it, not separated. If it is the reload, Deko pays it too with bound buffers.
 
 **Decision:** recommend not building Deko now. The owner decides. All shaders compile (run 35), so the option stays open, but the ceiling is about +23 % in the heaviest scenes and needs a GPU saving Deko has not shown. The profile is back to `GLGPUSPLIT=0`, `GLGPUPROF=300`, `GLGPUPIX=1`.
+
+## Log 37: `0.0.42-log37`, three measurements in one pass
+
+Docked again, to compare with run 36. Not yet run on hardware.
+
+- **State B** (`mesa_cbdedupe_edits.py`): `nvc0_set_constant_buffer` returns early when a block's buffer, offset and size are the same. `st_bind_ubos` sets every block of every stage on any change, and Mesa marked each dirty without comparing. `[NVC0CB]` counts blocks set and skipped, barriers and serializes per state. States: `MAPXSHNLU`, `MAPXSHNLUB`.
+- **Function order** (`hot_order.ld`, `tools/make_hot_order.py`): 2042 sampled guest functions placed hottest first, 3.7 MB apart at most against 73 MB. Compare the state without B against run 36.
+- **`[WALKWHY]`**: per state, walks by the guest wait that caused them (fence, ring space, phase, VdSwap), time, ring dwords, and the time between walks. It decides whether a walker thread can run in parallel.
+- `LSWTCS_GLGPUPROF=150`, `LSWTCS_GLGPUPIX=0`, for more GPU samples per state.

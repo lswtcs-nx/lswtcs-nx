@@ -1341,3 +1341,36 @@ One state (`MAPXSHNLU`), handheld, GPU 307.2 MHz, memory 1331.2 MHz. No record o
 **Shaders:** all 509 distinct sources (110 vertex, 389 pixel, 10 geometry) compile with deko3d's `uam` once samplers are numbered per stage, 2.65 MB in total. This is offline: it says nothing about speed.
 
 **Decision:** Deko stays undecided. Pixel and vertex work is the same shaders from a related compiler, so only draw and state cost, compression and Zcull could differ, and those are not separated yet. Next is run 36, profile only and docked: the omission split shows what each part costs, and the docked clocks show how much FPS the GPU holds back.
+
+## Run 36: `0.0.41-log35` docked, 2 November 2026: the GPU's limit has a price, and it caps Deko
+
+Same build, one state, one pass. Docked: GPU 768 MHz, memory 1600 MHz, no clock override. Handheld is run 35: 307.2 and 1331.2. Sampled frames ran twice as often here and leave things out, so docked FPS is slightly low.
+
+| Draws | Handheld FPS | Docked FPS | Gain | Handheld p95 ms | Docked p95 ms |
+| --- | --- | --- | --- | --- | --- |
+| 0-499 | 44.4 | 50.6 | +14 % | 34.9 | 25.2 |
+| 500-999 | 29.1 | 42.4 | +46 % | 44.4 | 29.1 |
+| 1000-1299 | 26.3 | 36.6 | +39 % | 72.9 | 39.5 |
+| 1300-1666 | 22.7 | 30.1 | +33 % | 74.3 | 39.3 |
+| 1667+ | 20.3 | 24.9 | +23 % | 77.2 | 44.4 |
+
+- **At the heaviest load the CPU limits again.** Docked, the sampled GPU total is 25.5 ms and the median frame 40.1 ms, with no GPU wait at the swap. The guest main thread is 77 % busy over the heavy band, and 95 % of the turn is that thread: guest code 57 %, PM4, recording and hashing 29 %.
+- **This caps a renderer change.** Removing the GPU's limit in handheld could give about these gains, and a 2.5x clock only reaches them. Heaviest scenes: about +23 %.
+- The GPU is not 2.5x faster in practice: 41 ms handheld against 25.5 ms docked, about 1.6x, with memory only 1.2x faster and pixel queries off here. Stamped runs differ, so this is approximate.
+
+**What the GPU spends** (docked, 1000+ draws, about 10 frames per variant, different frames each; the 1500+ cut in brackets):
+
+| Left out, cumulative | Total ms | Plain | Rects | Quads | Resolves |
+| --- | --- | --- | --- | --- | --- |
+| Nothing | 25.5 (25.5) | 11.2 | 3.8 | 4.7 | 3.5 |
+| Pixels | 12.9 (17.7) | 3.8 | 0.9 | 1.4 | 2.4 |
+| Vertices too | 14.0 (20.7) | 7.7 | 0.7 | 1.4 | 2.6 |
+| Constant buffer binds too | 7.3 (8.1) | 1.1 | 0.7 | 1.3 | 2.4 |
+| Texture binds too | 6.6 (7.1) | 0.6 | 0.7 | 1.1 | 2.7 |
+| State too | 6.9 (6.9) | 0.6 | 0.7 | 1.1 | 2.3 |
+
+- **Pixels and constant buffer binds are the two large parts**, roughly 8-13 and 7-13 ms. Vertices do not separate from noise. Texture binds and state are about 1 ms.
+- **Quads without a geometry shader is dropped:** with pixels off quads cost 1.4 of 4.7 ms, so that change could save little.
+- **The constant cost is not the old barrier.** `mesa_cbflush_edits.py` already flushes only after a write, and heavy frames make 5 shared memory copies, so few barriers remain. Heavy frames change about 3200 bindings. What remains is the bind or the constant cache reload after it, not separated. If it is the reload, Deko pays it too with bound buffers.
+
+**Decision:** recommend not building Deko now. The owner decides. All shaders compile (run 35), so the option stays open, but the ceiling is about +23 % in the heaviest scenes and needs a GPU saving Deko has not shown. The profile is back to `GLGPUSPLIT=0`, `GLGPUPROF=300`, `GLGPUPIX=1`.

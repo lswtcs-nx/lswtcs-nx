@@ -2215,3 +2215,14 @@ Handheld, stock clocks, states `MAPXSHNLUBIkhwregd` and `MAPXSHNLUBIkhwregdq`, a
 - `switch/lswtcs/lswtcs.nro` is log64.
 - `switch/lswtcs-log63/lswtcs-log63.nro` is log63, the reference.
 - One `env.txt` serves both.
+
+**One session is enough.** Main-thread CPU per guest call is steady across builds and modes. The guest-call counter runs in every prologue, inlined or not, so it counts the guest's work, not the build. Median over heavy `[THREADCPU]` windows (100 k calls or more):
+
+| Run | ns per call (90 %) |
+| --- | --- |
+| 54, docked | 161 (160 to 164) |
+| 54, handheld | 156 (154 to 208) |
+| 62 | 158 (156 to 160) |
+| 63 | 156 (155 to 157) |
+
+One log64 session compares against these. The log63 NRO is kept aside in case a reference session is wanted.

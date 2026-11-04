@@ -25,6 +25,7 @@
 // LSWTCS_LZ2KCHECK=1 (diagnostic): decode every block both ways, compare output and final state byte for byte,
 // log mismatches as [LZ2K] MISMATCH, return the guest's result. [LZ2K] lines also report timings.
 #include "../../Convert 360/LSWTCS/output/ppc_context.h"
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -398,6 +399,7 @@ void report() {
 }  // namespace
 
 extern "C" void lswtcs_gil_blocking(void (*fn)(void*), void* arg);   // kernel_stubs.cpp
+extern "C" void lsw_text_patch(uint8_t* buf, size_t n, const char* where, uint64_t file_off);   // kernel_stubs.cpp (log65)
 extern "C" __attribute__((weak)) void lsw_offcore_begin_on(int, int) {}   // Switch: platform_switch.cpp
 extern "C" __attribute__((weak)) void lsw_offcore_end() {}
 // A/B state X: larger blocks decode without the guest scheduler's turn, on core 1 below the render thread (run 8: 3 % of the turn in
@@ -456,6 +458,7 @@ PPC_FUNC(sub_82504740) {
                 s = decode(d, src, in, dst, out, ring, compsize, origsize, i0);
             }
             write_state(base, s);
+            lsw_text_patch(out, std::min<uint32_t>(s.total, origsize), "lz2k", 0);   // kernel_stubs.cpp: the console's name in the text
             ctx.r3.u64 = s.total;
             g_ns += now_ns() - t0;
             g_bytes += s.total;

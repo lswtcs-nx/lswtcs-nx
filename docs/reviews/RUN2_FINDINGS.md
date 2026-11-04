@@ -2251,3 +2251,66 @@ Handheld, stock clocks, one session, state `MAPXSHNLUBIkhwregdq`, 54 visits. The
 | Flush-to-zero left fixed instead of switched | At most about 2 % | Changes denormal results of either scalar or vector math: not exact |
 | PGO | 0-9 % in the other ports | Instrumented build, a training session on the console, then a rebuild |
 | Plain guest memory instead of volatile | bo2 measured +5.8 % with three other changes | A loop polling memory that another thread writes could hang; needs an audit and compiler barriers |
+
+## Log 65: `0.0.71-log65`, any mode: loading with the guest turn free during card reads
+
+The tester asked whether loading can be made faster. Built after run 64; not run yet.
+
+**What run 64 shows:**
+- **Load lengths** (frames under 100 draws until 30 frames in a row with 100 or more):
+  - hub to Gungan: 6.6 and 8.2 s;
+  - Gungan to hub: 21.2 and 21.4 s;
+  - boot to the hub: 39.7 s, menus included.
+- **The guest turn is the bottleneck while loading.** In the light band of the profile (frames under 300 draws: loads and menus), the guest threads together hold the turn about 100 % of the time.
+  - Loader `sub_82506D60` holds it 22 % of the time and is blocked in a system call for 98 % of that (95 % in `fsFileRead`).
+  - Loader `sub_82508C48` holds it 21 % of the time, blocked for 54 % of that (37 % `fsFileRead`, 6 % attribute queries, 2 % opens).
+  - So for about 30 % of the light band, the turn sits with a thread that waits on the card. No other guest thread runs meanwhile, so reading and processing never overlap. On the 360 they ran on separate hardware threads.
+- **Small reads.** The read-ahead cache refills 64 KB at a time, about 26 MB/s.
+
+**What log65 changes** (`kernel_stubs.cpp`), in modes cycled over loads by `LSWTCS_LOADMODES`:
+- **`-`:** as before.
+- **`o`:** the thread leaves the turn during host file calls (read-ahead refills, opens, attribute queries), so other guest threads run while the card works. It comes back with the urgent rejoin the native reverb uses, so it does not wait out the holder's quantum and a round of the others after each read.
+- **`b`:** refills of 512 KB instead of 64 KB.
+- **Order:** the profile sets `-,ob,ob,-`.
+  - The mode moves on only after a load of 4 MB or more from the card, followed by 10 s without file calls. So one load keeps one mode, and the small reads during play (music) do not move it.
+  - Two loads close together (a short stay in the hub) share a mode. The four-entry order keeps a fixed pattern of loads from always meeting the same mode.
+- **In every mode,** the refill reads into a per-thread buffer outside the cache lock. So no host lock is held while the turn is away.
+
+**Telemetry:** `[LOADEP]` reports each episode of file calls. An episode ends after 2 s without one. It gives:
+- the mode, and its VdSwap numbers (frames.log's serial column);
+- the span of file calls;
+- the game bytes read;
+- card megabytes, refills, their time and throughput;
+- opens and attribute queries, with their time;
+- the level before and after.
+
+**Measure:** `private/session-tools/load_episodes.py <run dir>` finds the loads in frames.log, as above. It gives each load its episodes and mode (a load with two modes is marked mixed and left out), then the median load length per destination and mode. The test is several round trips between the hub and Gungan, about 8 loads or more.
+
+**Risk:** guest threads now run during file calls, which they never did before.
+- A race the turn used to hide, in the game or the runtime, would show as a crash or a hang during a load in mode `ob`.
+- Load length also depends on what the tester does (skipping, menus), so only medians over several loads per mode count.
+
+**Also in log65, at the tester's request:**
+
+- **Save dates** (`win32_switch.cpp`).
+  - The Load Game screen shows a save's last write time (`GetFileTime`, through `NtQueryInformationFile`). Horizon's save data file system keeps no file times, so it read 1970.
+  - Now the first write through a handle into the native save records the console's time (UTC) beside the file in `<name>.lswtime`, and beside each folder up to the root, in the same save transaction.
+  - These files are hidden from enumeration, deleted with their file or folder, and read back as the file times. The guest converts them with the console's time zone (`ExGetXConfigSetting`, already in place).
+  - A save written before log65 keeps the old date until it is saved again.
+- **Face buttons** (`LSWTCS_PADLAYOUT`, profile `auto`).
+  - `position`: as before.
+  - `label`: Switch A is the 360's A, so A confirms as on the Switch, and the game's button letters match.
+  - `auto`: `label` while the frames are light (under 150 records for 30 frames: title, menus, load and save screens), `position` in play. The in-level pause menu draws the level, so it stays by position.
+  - The layout changes only while no face button is held. Hold L + R and press Minus for the next layout (`[PADLAYOUT]`).
+  - The button icons are textures in the game's data; they are unchanged.
+- **The console's name in the text** (`LSWTCS_TEXTPATCH`, on by default).
+  - The game's platform text is a UTF-16LE CSV in GAME.DAT, uncompressed: 14 mentions in six languages ("360_GAMELOADING", "360_AUTOSAVE_WARNING"). The executable image has the English lines in ASCII.
+  - Read-ahead refills and native LZ2K output that look like text are scanned, and so is the image once after it loads (only the phrases naming the console).
+  - Each phrase is replaced by one no longer than it: "Xbox 360 console" by "Nintendo Switch", "Xbox 360" by "Switch", and so on. The rest of the string moves left and is padded at its end, so no other string moves.
+  - `[TEXTPATCH]` prints each replacement.
+  - Tested on the PC against the local GAME.DAT and image.bin: all 14 and both image lines are replaced, with the refill starting at an even or an odd offset. A phrase that straddles two refills is missed.
+- **Studs over the legs** (runs 17-20, still open; the tester still sees it).
+  - The stud draws' vertex shader (`8B12FE19F8B3BA1D`) multiplies by c0-c3 after its world rows c6-c8. So c0-c3 is the view-projection, shared by the draws of one camera.
+  - Each full capture now gives every draw's `c03=` hash, and prints each distinct block once (`[GLCAPVP]`). Studs drawn with another camera (stale constants) would show there.
+  - A toggle combo: hold L + R and click the left stick to step through `LSWTCS_ABTOGGLE` (`[ABTOGGLE]`; frames.log records each state). The toggled state holds until the next press. The profile steps through the base parts that reuse or skip data between frames: P, H and S together, then H alone, P alone, S alone.
+  - The fault predates the GPU letters, and run 17 showed tile merging is not the cause.

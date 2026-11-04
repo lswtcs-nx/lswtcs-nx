@@ -47,6 +47,8 @@ extern "C" void lsw_bo_check_progress(uint64_t swaps);
 void host_audio_hold(bool on);   // audio_switch.cpp: pause the device feed while programs build
 extern std::atomic<uint32_t> g_frame_marks;   // win32_switch.cpp: tester marks (ZL+ZR+left stick)
 extern std::atomic<uint32_t> g_capture_request;   // win32_switch.cpp: capture combos, 1 light, 2 full
+extern std::atomic<uint32_t> g_ab_toggle_request;   // win32_switch.cpp: A/B toggle combo (L + R + left stick)
+extern std::atomic<bool> g_frame_light;   // win32_switch.cpp: pad layout "auto" reads it
 extern "C" void lsw_ft_ring_dump();   // kernel_stubs.cpp: game frame times of the last 120 swaps ([FTRING])
 extern "C" void lsw_sched_ab_set(int audioprio, int walkoff);   // kernel_stubs.cpp: LSWTCS_ABCYCLE
 extern "C" void lsw_shm_frame_hash_set(int on);                 // kernel_stubs.cpp: H
@@ -2564,9 +2566,13 @@ uint32_t g_frame_groups = 0, g_frame_copies = 0;
 // "# ab STATE"; tools/analyze_run.py compares the states. Off by default: without it nothing changes during play.
 std::string g_ab_state;
 uint32_t g_ab_changes = 0;
+// LSWTCS_ABTOGGLE (log65): states the A/B toggle combo (hold L + R, click the left stick) steps through, then back to the cycle
+// above. A toggled state holds until the next press ([ABTOGGLE]; frames.log writes it as "# ab STATE" like any state). For a
+// fault that shows in one place: the tester stands there and steps through the suspects.
 void ab_cycle_tick() {
     static const uint64_t period_ns = [] { const char* e = getenv("LSWTCS_ABCYCLE"); return uint64_t(e ? atoi(e) : 0) * 1000000000ull; }();
-    if (!period_ns) return;
+    static const bool toggles_set = [] { const char* e = getenv("LSWTCS_ABTOGGLE"); return e && *e; }();
+    if (!period_ns && !toggles_set) return;
     auto parse = [](const char* e, const char* dflt) {
         std::vector<std::string> v;
         std::string list = e ? e : dflt;
@@ -2594,12 +2600,21 @@ void ab_cycle_tick() {
     }
     const std::vector<std::string>& states = phase == 2 ? states2 : states1;
     const uint64_t now = gp_now();
-    if (states.empty() || now < next_ns) return;
+    static const std::vector<std::string> toggles = parse(getenv("LSWTCS_ABTOGGLE"), "");
+    static uint32_t toggle_seen = 0;
+    static size_t toggle_at = 0;   // 0: the cycle above; k: toggles[k - 1]
+    bool toggled = false;
+    if (!toggles.empty()) {
+        const uint32_t req = g_ab_toggle_request.load(std::memory_order_relaxed);
+        if (req != toggle_seen) { toggle_seen = req; toggle_at = (toggle_at + 1) % (toggles.size() + 1); toggled = true; }
+    }
+    if (!toggled && (toggle_at || !period_ns)) return;   // a toggled state holds until the next press
+    if (!toggle_at && (states.empty() || (!toggled && now < next_ns))) return;
     next_ns = now + period_ns;
     // A new order each round: in run 7's fixed order each state always followed the same one, so a level's rising or
     // falling load read as an effect of the state. Seeded from the clock, so runs differ.
     static std::vector<size_t> order;
-    if (index % states.size() == 0) {
+    if (!toggle_at && index % states.size() == 0) {
         static uint64_t seed = now | 1;
         order.resize(states.size());
         for (size_t i = 0; i < order.size(); ++i) order[i] = i;
@@ -2659,9 +2674,19 @@ void ab_cycle_tick() {
         puts(ub);
         l_sets = lsw_nvc0_cb_sets; l_same = lsw_nvc0_cb_same; l_bar = lsw_nvc0_cb_barriers; l_ser = lsw_nvc0_cb_serializes; l_rep = g_replays;
     }
-    const size_t state_index = order[index++ % states.size()];
-    g_ab_state = states[state_index];
-    lsw_ab_tag = state_index < 7 ? uint32_t(state_index + 1 + (phase == 2 ? 8 : 0)) : 0;
+    if (toggle_at) {
+        g_ab_state = toggles[toggle_at - 1];
+        lsw_ab_tag = 0;
+    } else {
+        const size_t state_index = order[index++ % states.size()];
+        g_ab_state = states[state_index];
+        lsw_ab_tag = state_index < 7 ? uint32_t(state_index + 1 + (phase == 2 ? 8 : 0)) : 0;
+    }
+    if (toggled) {
+        printf("[ABTOGGLE] press %u: %s %s from replay %llu\n", toggle_seen, toggle_at ? "toggle state" : "back to the profile's state",
+               g_ab_state.c_str(), (unsigned long long)g_replays);
+        fflush(stdout);
+    }
     const auto has =[](char c) { return g_ab_state.find(c) != std::string::npos; };
     g_ut_off_ab = !has('M');
     lsw_sched_ab_set(has('A'), has('W'));
@@ -2847,6 +2872,12 @@ PresentSrc replay() {
         if (file_trigger && g_replays >= next_check) {
             next_check = g_replays + 30;
             if (FILE* t = fopen("shot_now", "rb")) { fclose(t); remove("shot_now"); g_capture_frame = true; }
+        }
+        {   // Pad layout "auto" (win32_switch.cpp): 30 light replays in a row (title, menus, loading) or 30 heavy ones flip it.
+            static uint32_t light_run = 0, heavy_run = 0;
+            if (f.draws.size() < 150) { ++light_run; heavy_run = 0; } else { ++heavy_run; light_run = 0; }
+            if (light_run == 30) g_frame_light.store(true, std::memory_order_relaxed);
+            if (heavy_run == 30) g_frame_light.store(false, std::memory_order_relaxed);
         }
         // Capture combo: this replay, not the next file check (log6 session: shots came 10-29 replays after the press).
         if (const uint32_t req = g_replay_same ? 0u : g_capture_request.exchange(0, std::memory_order_relaxed)) {
@@ -3278,15 +3309,33 @@ PresentSrc replay() {
             }
         }
         if (g_capture_frame) {
+            // c03 (log65): hash of the vertex constants c0-c3, the view-projection rows in the world shaders (the studs' vertex shader
+            // 8B12FE19F8B3BA1D multiplies by c0-c3 after its world rows c6-c8). Draws of one camera share it; a draw with another
+            // value (a stale or different camera) is the suspect for the studs drawn over the legs (RUN2_FINDINGS.md, runs 17-20).
+            // [GLCAPVP] prints each distinct block once per capture.
+            uint64_t c03 = 0;
+            if (r.cb_vsf_size >= 64 && size_t(r.cb_vsf_off) + 64 <= f.arena.size()) {
+                const float* c = reinterpret_cast<const float*>(f.arena.data() + r.cb_vsf_off);
+                c03 = XXH3_64bits(c, 64);
+                static uint64_t shown_replay = ~0ull;
+                static std::vector<uint64_t> shown;
+                if (shown_replay != g_replays) { shown_replay = g_replays; shown.clear(); }
+                if (shown.size() < 96 && std::find(shown.begin(), shown.end(), c03) == shown.end()) {
+                    shown.push_back(c03);
+                    char vb[400]; int vk = snprintf(vb, sizeof vb, "[GLCAPVP] c0-c3 %016llX first at #%u:", (unsigned long long)c03, draw_i - 1);
+                    for (int k = 0; k < 16 && vk < int(sizeof vb) - 16; ++k) vk += snprintf(vb + vk, sizeof vb - vk, " %.6g", c[k]);
+                    puts(vb);
+                }
+            }
             printf("[GLDRAWCAP] #%u prim %u gs %u n=%u ib=%u mode=%u pitch=%u msaa=%u col=%u/%u dep=%u nrt=%u blend=%08X cmask=%X "
-                   "zctl=%08X cull=%u vp=%.0f,%.0f,%.0fx%.0f sc=%u,%u..%u,%u ps=%s vs=%016llX ps=%016llX gs=%016llX prog=%u scm=%08X po=%g/%g z=%.4f..%.4f |%s\n", draw_i - 1,
+                   "zctl=%08X cull=%u vp=%.0f,%.0f,%.0fx%.0f sc=%u,%u..%u,%u ps=%s vs=%016llX ps=%016llX gs=%016llX prog=%u scm=%08X po=%g/%g z=%.4f..%.4f c03=%016llX |%s\n", draw_i - 1,
                    r.topology, r.gs_type, r.vertex_count,
                    r.ib_count, r.edram_mode, r.surf_info & 0x3FFF, (r.surf_info >> 16) & 3, r.color_info & 0xFFF,
                    (r.color_info >> 16) & 0xF, r.depth_info & 0xFFF, dt.nrt, r.blendcontrol, r.color_mask, r.depthcontrol,
                    r.sc_mode_cntl & 7, r.viewport[0], r.viewport[1], r.viewport[2], r.viewport[3],
                    r.scissor[0], r.scissor[1], r.scissor[2], r.scissor[3], ps ? "y" : "n",
                    (unsigned long long)vs->key, (unsigned long long)(ps ? ps->key : 0), (unsigned long long)(gs ? gs->key : 0), prog,
-                   r.sc_mode_cntl, r.poly_scale, r.poly_offset, r.viewport[4], r.viewport[5], g_unit_log.c_str());
+                   r.sc_mode_cntl, r.poly_scale, r.poly_offset, r.viewport[4], r.viewport[5], (unsigned long long)c03, g_unit_log.c_str());
             dump_capture_glsl(vs);
             dump_capture_glsl(ps);
             dump_capture_glsl(gs);

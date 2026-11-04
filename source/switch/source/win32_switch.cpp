@@ -19,9 +19,12 @@
 #include <sys/stat.h>
 #include <sys/time.h>
 #include <unistd.h>
+#include <vector>
 #include "lsw_save_platform.h"
 std::atomic<uint32_t> g_frame_marks{0};   // tester marks, written to frames.log by gl_backend.cpp
 std::atomic<uint32_t> g_capture_request{0};   // capture combos: 1 light, 2 full; taken by gl_backend.cpp
+std::atomic<uint32_t> g_ab_toggle_request{0};   // A/B toggle combo (L + R + left stick), taken by gl_backend.cpp (LSWTCS_ABTOGGLE)
+std::atomic<bool> g_frame_light{false};   // set by gl_backend.cpp: the frames are light (title, menus, loading); pad layout "auto"
 
 namespace {
 
@@ -38,6 +41,7 @@ struct FileObj : Obj {
     std::string path;
     int access;
     bool native_save;
+    bool time_marked = false;   // save timestamp written for this handle (save_time_mark)
     off_t position = 0;
     std::mutex mutex;
     FileObj(int f, std::string p, int a) : Obj(Kind::File), fd(f), path(std::move(p)), access(a),
@@ -178,6 +182,45 @@ void civil_from_days(int64_t z, int64_t* y, unsigned* m, unsigned* d) {
     *y = int64_t(yoe) + era * 400 + (*m <= 2);
 }
 
+// Save timestamps (log65). Horizon's save data file system keeps no file times (stat and fstat give 0), so the Load Game screen,
+// which shows a save's last write time (GetFileTime), read 1970. On the first write through a handle into the native save, the
+// console's time (UTC) is kept beside the file in "<name>.lswtime" (8 bytes, a Win32 FILETIME) and beside each folder up to the
+// root, in the same save transaction. Those files are hidden from enumeration, deleted with their file or folder, and read back
+// as the file times. A save written before log65 has none and still reads its old time until it is saved again.
+constexpr const char* kSaveTimeExt = ".lswtime";
+bool save_path(const std::string& p) { return p.compare(0, strlen(lsw_save::root), lsw_save::root) == 0; }
+bool save_time_name(const char* name) {
+    const size_t n = strlen(name), e = strlen(kSaveTimeExt);
+    return n >= e && strcasecmp(name + n - e, kSaveTimeExt) == 0;
+}
+std::string save_trim(std::string p) {
+    const size_t root = strlen(lsw_save::root);
+    while (p.size() > root && p.back() == '/') p.pop_back();
+    return p;
+}
+FILETIME file_time(const std::string& path, time_t mtime) {
+    if (save_path(path)) {
+        if (FILE* f = fopen((save_trim(path) + kSaveTimeExt).c_str(), "rb")) {
+            uint64_t v = 0;
+            const bool ok = fread(&v, sizeof v, 1, f) == 1;
+            fclose(f);
+            if (ok && v) return to_ft(v);
+        }
+    }
+    return unix_to_ft(mtime);
+}
+void save_time_mark(const std::string& path) {
+    FILETIME now; GetSystemTimeAsFileTime(&now);
+    const uint64_t v = from_ft(&now);
+    const size_t root = strlen(lsw_save::root);
+    std::string p = save_trim(path);
+    while (p.size() > root) {
+        if (FILE* f = fopen((p + kSaveTimeExt).c_str(), "wb")) { fwrite(&v, sizeof v, 1, f); fclose(f); }
+        const size_t sl = p.find_last_of('/');
+        if (sl == std::string::npos || sl < root) break;
+        p.resize(sl);
+    }
+}
 bool wild_match(const char* p, const char* s) {   // '*' and '?', case-insensitive
     if (!*p) return !*s;
     if (*p == '*') { for (; ; ++s) { if (wild_match(p + 1, s)) return true; if (!*s) return false; } }
@@ -188,6 +231,7 @@ bool wild_match(const char* p, const char* s) {   // '*' and '?', case-insensiti
 bool find_fill(FindObj* f, WIN32_FIND_DATAA* fd) {
     while (dirent* e = readdir(f->d)) {
         if (!wild_match(f->pat.c_str(), e->d_name)) continue;
+        if (save_time_name(e->d_name) && save_path(f->dir)) continue;   // save timestamps stay hidden
         memset(fd, 0, sizeof *fd);
         snprintf(fd->cFileName, sizeof fd->cFileName, "%s", e->d_name);
         struct stat st;
@@ -195,7 +239,7 @@ bool find_fill(FindObj* f, WIN32_FIND_DATAA* fd) {
         if (::stat(full.c_str(), &st) == 0) {
             fd->dwFileAttributes = S_ISDIR(st.st_mode) ? FILE_ATTRIBUTE_DIRECTORY : FILE_ATTRIBUTE_NORMAL;
             fd->nFileSizeHigh = DWORD(uint64_t(st.st_size) >> 32); fd->nFileSizeLow = DWORD(st.st_size);
-            fd->ftLastWriteTime = fd->ftCreationTime = fd->ftLastAccessTime = unix_to_ft(st.st_mtime);
+            fd->ftLastWriteTime = fd->ftCreationTime = fd->ftLastAccessTime = file_time(full, st.st_mtime);
         } else fd->dwFileAttributes = FILE_ATTRIBUTE_NORMAL;
         return true;
     }
@@ -230,7 +274,9 @@ HANDLE CreateFileA(LPCSTR p, DWORD access, DWORD, void*, DWORD disp, DWORD flags
     int fd = ::open(path.c_str(), of, 0666);
     if (fd < 0) { set_err_from_errno(path); return INVALID_HANDLE_VALUE; }
     t_last_error = (exists && (disp == CREATE_ALWAYS || disp == OPEN_ALWAYS)) ? ERROR_ALREADY_EXISTS : 0;
-    return new FileObj(fd, path, of & O_ACCMODE);
+    auto* obj = new FileObj(fd, path, of & O_ACCMODE);
+    if (obj->native_save && ((of & O_TRUNC) || (!exists && (of & O_CREAT)))) { save_time_mark(path); obj->time_marked = true; }
+    return obj;
 }
 BOOL ReadFile(HANDLE h, void* buf, DWORD n, DWORD* got, void*) {
     FileAccess access(file(h)); FileObj* f = access.get();
@@ -258,6 +304,7 @@ BOOL WriteFile(HANDLE h, const void* buf, DWORD n, DWORD* wrote, void*) {
         total += DWORD(r);
     }
     if (f->native_save && ::fsync(f->fd) != 0) { t_last_error = ERROR_ACCESS_DENIED; if (wrote) *wrote = total; return FALSE; }
+    if (f->native_save && !f->time_marked) { save_time_mark(f->path); f->time_marked = true; }
     if (wrote) *wrote = total;
     return TRUE;
 }
@@ -293,13 +340,14 @@ BOOL FlushFileBuffers(HANDLE h) { FileAccess access(file(h)); FileObj* f = acces
 BOOL GetFileTime(HANDLE h, FILETIME* c, FILETIME* a, FILETIME* w) {
     Obj* o = obj(h); struct stat st;
     int rc = -1;
+    std::string path;
     if (o && o->kind == Kind::File) {
         FileAccess access(static_cast<FileObj*>(o));
-        if (FileObj* f = access.get()) rc = ::fstat(f->fd, &st);
+        if (FileObj* f = access.get()) { rc = ::fstat(f->fd, &st); path = f->path; }
     }
-    else if (o && o->kind == Kind::Dir) rc = ::stat(static_cast<DirObj*>(o)->path.c_str(), &st);
+    else if (o && o->kind == Kind::Dir) { path = static_cast<DirObj*>(o)->path; rc = ::stat(path.c_str(), &st); }
     if (rc != 0) { t_last_error = ERROR_INVALID_HANDLE; return FALSE; }
-    FILETIME t = unix_to_ft(st.st_mtime);
+    FILETIME t = file_time(path, st.st_mtime);
     if (c) *c = t; if (a) *a = t; if (w) *w = t;
     return TRUE;
 }
@@ -313,18 +361,43 @@ BOOL GetFileAttributesExA(LPCSTR p, GET_FILEEX_INFO_LEVELS, void* out) {
     if (::stat(path.c_str(), &st) != 0) { set_err_from_errno(path); return FALSE; }
     auto* fa = static_cast<WIN32_FILE_ATTRIBUTE_DATA*>(out);
     fa->dwFileAttributes = S_ISDIR(st.st_mode) ? FILE_ATTRIBUTE_DIRECTORY : FILE_ATTRIBUTE_NORMAL;
-    fa->ftCreationTime = fa->ftLastAccessTime = fa->ftLastWriteTime = unix_to_ft(st.st_mtime);
+    fa->ftCreationTime = fa->ftLastAccessTime = fa->ftLastWriteTime = file_time(path, st.st_mtime);
     fa->nFileSizeHigh = DWORD(uint64_t(st.st_size) >> 32); fa->nFileSizeLow = DWORD(st.st_size);
     return TRUE;
 }
-BOOL DeleteFileA(LPCSTR p) { std::string path = norm(p); if (::unlink(path.c_str()) == 0) return TRUE; set_err_from_errno(path); return FALSE; }
+BOOL DeleteFileA(LPCSTR p) {
+    std::string path = norm(p);
+    if (::unlink(path.c_str()) == 0) {
+        if (save_path(path)) ::unlink((save_trim(path) + kSaveTimeExt).c_str());
+        return TRUE;
+    }
+    set_err_from_errno(path);
+    return FALSE;
+}
 BOOL CreateDirectoryA(LPCSTR p, void*) {
     std::string path = norm(p);
     if (::mkdir(path.c_str(), 0777) == 0) return TRUE;
     if (errno == EEXIST) t_last_error = ERROR_ALREADY_EXISTS; else set_err_from_errno(path);
     return FALSE;
 }
-BOOL RemoveDirectoryA(LPCSTR p) { std::string path = norm(p); if (::rmdir(path.c_str()) == 0) return TRUE; set_err_from_errno(path); return FALSE; }
+BOOL RemoveDirectoryA(LPCSTR p) {
+    std::string path = norm(p);
+    if (save_path(path)) {   // the hidden timestamps inside would keep the folder from being empty
+        const std::string dir = save_trim(path) + "/";
+        if (DIR* d = ::opendir(dir.c_str())) {
+            std::vector<std::string> names;
+            while (dirent* e = readdir(d)) if (save_time_name(e->d_name)) names.push_back(dir + e->d_name);
+            closedir(d);
+            for (const std::string& n : names) ::unlink(n.c_str());
+        }
+    }
+    if (::rmdir(path.c_str()) == 0) {
+        if (save_path(path)) ::unlink((save_trim(path) + kSaveTimeExt).c_str());
+        return TRUE;
+    }
+    set_err_from_errno(path);
+    return FALSE;
+}
 HANDLE FindFirstFileA(LPCSTR pattern, WIN32_FIND_DATAA* fd) {
     std::string s = norm(pattern);
     size_t sl = s.find_last_of('/');
@@ -538,12 +611,51 @@ DWORD WINAPI nx_xinput_get_state(DWORD slot, void* out) {
         {HidNpadButton_Up, 0x0001}, {HidNpadButton_Down, 0x0002}, {HidNpadButton_Left, 0x0004},
         {HidNpadButton_Right, 0x0008}, {HidNpadButton_Plus, 0x0010}, {HidNpadButton_Minus, 0x0020},
         {HidNpadButton_StickL, 0x0040}, {HidNpadButton_StickR, 0x0080}, {HidNpadButton_L, 0x0100},
-        {HidNpadButton_R, 0x0200},
-        // Face buttons by position (user's choice 2026-10-11): Switch A/B/X/Y act as the 360 pad's B/A/Y/X, i.e. the
-        // bottom button (Switch B) is the 360's A. (Was by label: Switch A = 360 A.)
-        {HidNpadButton_A, 0x2000}, {HidNpadButton_B, 0x1000}, {HidNpadButton_X, 0x8000},
-        {HidNpadButton_Y, 0x4000}};
+        {HidNpadButton_R, 0x0200}};
     for (auto& m : kMap) if (b & m.nx) st.buttons |= m.xi;
+    // Face buttons, LSWTCS_PADLAYOUT (log65):
+    //   position  Switch A/B/X/Y act as the 360 pad's B/A/Y/X: the bottom button (Switch B) is the 360's A, as in the 360's
+    //             layout (user's choice 2026-10-11; the default).
+    //   label     Switch A is the 360's A: confirm on A as on the Switch, and the game's button letters match the Switch's.
+    //   auto      label while the frames are light (under 150 draws for 30 frames: title, menus, load and save screens, loading),
+    //             position in play. The in-level pause menu draws the level behind it, so it stays by position.
+    // The layout changes only while no face button is held, so a held button never turns into another. Hold L + R and press Minus
+    // for the next layout ([PADLAYOUT]).
+    {
+        static int layout = [] {
+            const char* e = getenv("LSWTCS_PADLAYOUT");
+            return e && !strcasecmp(e, "label") ? 1 : e && !strcasecmp(e, "auto") ? 2 : 0;
+        }();
+        static const char* const kLayoutName[3] = {"position", "label", "auto"};
+        static u64 last_switch_ns = 0;
+        static bool by_label = layout == 1;
+        static uint32_t lines = 0;
+        const u64 now_ns = armTicksToNs(armGetSystemTick());
+        const u64 lr = HidNpadButton_L | HidNpadButton_R;
+        if ((b & lr) == lr && (b & HidNpadButton_Minus) && now_ns - last_switch_ns > 1000000000ull) {
+            last_switch_ns = now_ns;
+            layout = (layout + 1) % 3;
+            printf("[PADLAYOUT] layout %s (L + R + Minus)\n", kLayoutName[layout]);
+            fflush(stdout);
+        }
+        const u64 face = HidNpadButton_A | HidNpadButton_B | HidNpadButton_X | HidNpadButton_Y;
+        const bool want = layout == 1 || (layout == 2 && g_frame_light.load(std::memory_order_relaxed));
+        if (want != by_label && !(b & face)) {
+            by_label = want;
+            if (lines++ < 400) { printf("[PADLAYOUT] face buttons by %s (layout %s)\n", by_label ? "label" : "position", kLayoutName[layout]); fflush(stdout); }
+        }
+        if (by_label) {
+            if (b & HidNpadButton_A) st.buttons |= 0x1000;
+            if (b & HidNpadButton_B) st.buttons |= 0x2000;
+            if (b & HidNpadButton_X) st.buttons |= 0x4000;
+            if (b & HidNpadButton_Y) st.buttons |= 0x8000;
+        } else {
+            if (b & HidNpadButton_A) st.buttons |= 0x2000;
+            if (b & HidNpadButton_B) st.buttons |= 0x1000;
+            if (b & HidNpadButton_X) st.buttons |= 0x8000;
+            if (b & HidNpadButton_Y) st.buttons |= 0x4000;
+        }
+    }
     // Capture combos (LSWTCS_CAPCOMBO, default on), right stick clicked last, at most once per 3 s:
     // ZL + ZR: full capture, screenshot, per-draw [GLDRAWCAP] log, the frame's GLSL, the frame history (LSWTCS_GLHISTORY)
     // and every resolve/render target as PNG. L + R: the same without the targets. The files reach the SD card in the
@@ -562,6 +674,17 @@ DWORD WINAPI nx_xinput_get_state(DWORD slot, void* out) {
                 last_ns = now_ns;
                 g_capture_request.store(full ? 2 : 1, std::memory_order_relaxed);
             }
+        }
+    }
+    // A/B toggle combo (log65): hold L + R and click the left stick -> the next state of LSWTCS_ABTOGGLE, then back to the
+    // profile's states (gl_backend.cpp, [ABTOGGLE]). For a fault that shows in one place, such as the studs over the legs.
+    {
+        static u64 last_toggle_ns = 0;
+        const u64 want = HidNpadButton_L | HidNpadButton_R | HidNpadButton_StickL;
+        const u64 now_ns = armTicksToNs(armGetSystemTick());
+        if ((b & want) == want && now_ns - last_toggle_ns > 1000000000ull) {
+            last_toggle_ns = now_ns;
+            g_ab_toggle_request.fetch_add(1, std::memory_order_relaxed);
         }
     }
     // Mark combo: hold ZL + ZR and click the left stick -> "# mark N" in frames.log and [MARK] in stdout.log, so a

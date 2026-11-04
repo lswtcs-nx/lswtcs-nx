@@ -761,6 +761,7 @@ static void signal_handler(int sig) {
 // Resolve the logged RVA against LSWTCSRuntime.map to name the guest function.
 extern "C" void dbg_ram(const char* fmt, ...);   // RAM trace (kernel_stubs.cpp)
 static volatile uint32_t g_watch_addr = 0x82F211A0u;
+extern "C" void lsw_text_patch_image(uint8_t* buf, size_t n);   // kernel_stubs.cpp (log65)
 static bool g_pristine_data = false;   // LSWTCS_PRISTINE overlaid .data successfully   // guest addr being watched
 static volatile bool     g_watch_registered = false;
 // Reuse-robust mode: when the watched word becomes this value, log the writer and DISARM
@@ -1305,6 +1306,7 @@ int main() {
     size_t nread = fread(g_base + PPC_IMAGE_BASE, 1, PPC_IMAGE_SIZE, f);
     fclose(f);
     printf("[INIT] Loaded image.bin: 0x%zX bytes\n", nread);
+    lsw_text_patch_image(g_base + PPC_IMAGE_BASE, nread);   // log65: the console's name in the save messages (kernel_stubs.cpp)
 
     // image.bin is a RAM dump of a RUNNING Xenia instance. Diffed against the pristine
     // image decrypted from Default.xex (XenonUtils Image::ParseImage -> pristine.bin):

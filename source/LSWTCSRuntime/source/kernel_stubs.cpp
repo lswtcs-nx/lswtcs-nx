@@ -602,6 +602,251 @@ static void kobj_close(uint32_t id) {
     if (h) CloseHandle(h);
 }
 
+// ── Load episodes and load modes (log65) ─────────────────────────────────────────
+// Run 64's profile: the game's I/O thread (sub_824FD9A8) and its loaders (sub_82506D60, sub_82508C48) spent 45-95 % of their
+// turn blocked in fsFileRead, opens and attribute queries, holding the guest turn: no other guest thread ran while the SD card
+// worked, so reading and processing never overlapped (on the 360 they ran on separate hardware threads). Refills were 64 KB,
+// about 26 MB/s. LSWTCS_LOADMODES lists the modes cycled over loads, comma-separated letter sets ("-" = none):
+//   o  the guest turn is released during the host file calls below (refills, opens, attribute queries);
+//   b  read-ahead refills of 512 KB instead of 64 KB.
+// An episode starts with the first file call after LSWTCS_LOADGAP_MS (default 2000) without one and ends after such a gap;
+// [LOADEP] reports it, with VdSwap numbers (frames.log's serial column) to find its frames. The mode moves to the next entry
+// only after a big episode (LSWTCS_LOADBIG_MB card megabytes, default 4) and then LSWTCS_LOADQUIET_MS (default 10000) without
+// file calls, so one load keeps one mode even when it pauses for a few seconds, and small reads during play (music) do not
+// move it. Two loads close together (a short stay in the hub) share a mode; an order like "-,ob,ob,-" keeps a fixed pattern
+// of loads from always meeting the same mode. Unset: mode 0, as before.
+enum : uint32_t { kLoadTurnFree = 1, kLoadBigReads = 2 };
+enum { kLoadRead, kLoadOpen, kLoadAttr, kLoadKinds };
+static std::atomic<uint32_t> g_load_mode{0};
+static std::atomic<uint32_t> g_load_swap{0};   // VdSwap count, for the reports
+extern "C" void lsw_level_name(char* out, size_t capacity);   // native_crt.cpp
+extern std::atomic<uint64_t> g_file_bytes_read;   // below: bytes the game read, per call
+namespace {
+struct LoadEp {
+    bool open = false;
+    uint32_t mode = 0, swap0 = 0;
+    uint64_t start_ns = 0, last_ns = 0, game0 = 0, card_bytes = 0, n[kLoadKinds] = {}, ns[kLoadKinds] = {};
+    char level0[96] = {};
+};
+std::mutex g_load_mtx;   // never held across a turn release
+LoadEp g_load_ep;
+uint64_t g_load_episodes = 0;
+uint64_t g_load_mode_idx = 0;
+bool g_load_advance = false;   // a big episode ended: next entry once the quiet time has passed
+uint64_t load_now_ns() { return uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count()); }
+const std::vector<uint32_t>& load_modes() {
+    static const std::vector<uint32_t> modes = [] {
+        std::vector<uint32_t> m;
+        const char* e = getenv("LSWTCS_LOADMODES");
+        for (const char* p = e; p && *p;) {
+            uint32_t bits = 0;
+            for (; *p && *p != ','; ++p) bits |= *p == 'o' ? kLoadTurnFree : *p == 'b' ? kLoadBigReads : 0u;
+            m.push_back(bits);
+            if (*p == ',') ++p;
+        }
+        return m;
+    }();
+    return modes;
+}
+uint64_t load_env(const char* name, uint64_t def) { const char* e = getenv(name); return e && *e ? uint64_t(atoll(e)) : def; }
+uint64_t load_gap_ns() { static const uint64_t v = load_env("LSWTCS_LOADGAP_MS", 2000) * 1000000ull; return v; }
+uint64_t load_quiet_ns() { static const uint64_t v = load_env("LSWTCS_LOADQUIET_MS", 10000) * 1000000ull; return v; }
+uint64_t load_big_bytes() { static const uint64_t v = load_env("LSWTCS_LOADBIG_MB", 4) << 20; return v; }
+std::string load_mode_name(uint32_t m) {
+    std::string s;
+    if (m & kLoadTurnFree) s += 'o';
+    if (m & kLoadBigReads) s += 'b';
+    return s.empty() ? "-" : s;
+}
+void load_ep_report_locked() {   // g_load_mtx held
+    LoadEp& e = g_load_ep;
+    if (!e.open) return;
+    e.open = false;
+    if (e.card_bytes >= load_big_bytes()) g_load_advance = true;
+    char level1[96]; lsw_level_name(level1, sizeof level1);
+    const double span = (e.last_ns - e.start_ns) / 1e6, rd = e.ns[kLoadRead] / 1e6;
+    printf("[LOADEP] #%llu mode %s | swaps %u-%u | file calls over %.0f ms | game read %.1f MB, card %.1f MB in %llu refills, %.0f ms (%.1f MB/s) | "
+           "opens %llu (%.0f ms), attribute queries %llu (%.0f ms) | level %s -> %s\n",
+           (unsigned long long)g_load_episodes, load_mode_name(e.mode).c_str(), e.swap0, g_load_swap.load(), span, (g_file_bytes_read.load() - e.game0) / 1048576.0,
+           e.card_bytes / 1048576.0, (unsigned long long)e.n[kLoadRead], rd, rd > 0 ? e.card_bytes / 1048576.0 / (rd / 1000.0) : 0.0,
+           (unsigned long long)e.n[kLoadOpen], e.ns[kLoadOpen] / 1e6, (unsigned long long)e.n[kLoadAttr], e.ns[kLoadAttr] / 1e6,
+           e.level0[0] ? e.level0 : "?", level1[0] ? level1 : "?");
+    fflush(stdout);
+}
+// A file call starts: opens an episode after a gap (and picks its mode).
+void load_note_start(uint64_t now) {
+    std::lock_guard<std::mutex> lk(g_load_mtx);
+    LoadEp& e = g_load_ep;
+    if (e.open && now - e.last_ns > load_gap_ns()) load_ep_report_locked();
+    if (!e.open) {
+        const auto& modes = load_modes();
+        if (g_load_advance && now - e.last_ns >= load_quiet_ns()) { ++g_load_mode_idx; g_load_advance = false; }
+        e = LoadEp{};
+        e.open = true;
+        e.mode = modes.empty() ? 0u : modes[g_load_mode_idx % modes.size()];
+        ++g_load_episodes;
+        e.start_ns = now;
+        e.swap0 = g_load_swap.load();
+        e.game0 = g_file_bytes_read.load();
+        lsw_level_name(e.level0, sizeof e.level0);
+        g_load_mode.store(e.mode);
+    }
+    e.last_ns = now;
+}
+void load_note_end(int kind, uint64_t t0, uint64_t card_bytes) {
+    const uint64_t now = load_now_ns();
+    std::lock_guard<std::mutex> lk(g_load_mtx);
+    LoadEp& e = g_load_ep;
+    ++e.n[kind]; e.ns[kind] += now - t0; e.card_bytes += card_bytes;
+    if (now > e.last_ns) e.last_ns = now;
+}
+}  // namespace
+// From VdSwap: closes an episode once the gap has passed.
+static void load_ep_poll(uint32_t swap) {
+    g_load_swap.store(swap);
+    const uint64_t now = load_now_ns();
+    std::lock_guard<std::mutex> lk(g_load_mtx);
+    if (g_load_ep.open && now - g_load_ep.last_ns > load_gap_ns()) load_ep_report_locked();
+}
+static void gil_release_run(void (*fn)(void*), void* arg);   // after GilYield below
+// A host file-system call during a load: counted for [LOADEP], and run off the guest turn in mode o.
+template <class F> static auto host_fs_call(int kind, F&& f) -> decltype(f()) {
+    const uint64_t t0 = load_now_ns();
+    load_note_start(t0);
+    decltype(f()) r{};
+    if (g_load_mode.load() & kLoadTurnFree) {
+        auto run = [&] { r = f(); };
+        gil_release_run([](void* p) { (*static_cast<decltype(run)*>(p))(); }, &run);
+    } else {
+        r = f();
+    }
+    load_note_end(kind, t0, 0);
+    return r;
+}
+
+// ── The console's name in the game's text (log65, LSWTCS_TEXTPATCH, default on) ──────────────
+// The game's text names the "Xbox 360". Text-like data that the game reads (read-ahead refills) or that the native LZ2K decoder
+// writes (native_lz2k.cpp) is scanned for it, in ASCII and in UTF-16 of either byte order (at even file offsets), and the phrase is
+// replaced in place by one no longer than it. Its text table is a UTF-16LE CSV in GAME.DAT, uncompressed ("360_GAMELOADING",
+// "360_AUTOSAVE_WARNING": English, French, Italian, German, Spanish, Danish); the same English lines are in the executable image
+// (ASCII), patched once after it loads (lsw_text_patch_image, main.cpp), only where the phrase names the console. The rest of the string moves left and its end is padded (NULs
+// before a NUL, spaces before a quote or a line end), so no other string moves. A string that runs past the end of the buffer is
+// replaced without moving anything, padded with spaces. "Text-like": one of four 256-byte windows is 90 % printable, tab, line
+// end or NUL bytes, with at least a quarter printable. [TEXTPATCH] prints each replacement with what follows it.
+namespace {
+struct TextRep { const char* from; const char* to; };
+const TextRep kTextRep[] = {   // longest first where one starts another
+    {"Xbox 360 Controller", "Controller"}, {"Xbox 360 controller", "controller"},
+    {"Xbox 360 Hard Drive", "System Memory"}, {"Xbox 360 hard drive", "system memory"},
+    {"Xbox 360 console", "Nintendo Switch"}, {"Xbox 360 Console", "Nintendo Switch"},
+    {"XBOX 360", "SWITCH"}, {"Xbox 360", "Switch"},
+};
+std::atomic<uint32_t> g_text_patched{0};
+bool text_window(const uint8_t* p, size_t n) {
+    size_t ok = 0, print = 0;
+    for (size_t i = 0; i < n; ++i) {
+        const uint8_t c = p[i];
+        const bool pr = c >= 0x20 && c < 0x7F;
+        print += pr;
+        ok += pr || c == 0 || c == 9 || c == 10 || c == 13;
+    }
+    return ok * 10 >= n * 9 && print * 4 >= n;
+}
+bool text_like(const uint8_t* p, size_t n) {
+    if (n < 16) return false;
+    const size_t w = std::min<size_t>(256, n);
+    for (int k = 0; k < 4; ++k) {
+        const size_t at = (n - w) * k / 4;
+        if (text_window(p + at, w)) return true;
+    }
+    return false;
+}
+// Unit u: 1 ASCII, 2 UTF-16 little-endian, 3 UTF-16 big-endian.
+inline uint32_t text_unit(const uint8_t* p, int u) { return u == 1 ? p[0] : u == 2 ? uint32_t(p[0] | (p[1] << 8)) : uint32_t((p[0] << 8) | p[1]); }
+inline void text_put(uint8_t* p, int u, uint32_t c) {
+    if (u == 1) p[0] = uint8_t(c);
+    else if (u == 2) { p[0] = uint8_t(c); p[1] = uint8_t(c >> 8); }
+    else { p[0] = uint8_t(c >> 8); p[1] = uint8_t(c); }
+}
+uint8_t* find_bytes(uint8_t* h, size_t hn, const uint8_t* nd, size_t nn) {   // memmem is not on every target
+    if (!nn || hn < nn) return nullptr;
+    uint8_t* const last = h + (hn - nn);
+    for (uint8_t* p = h; p <= last; ++p) {
+        p = static_cast<uint8_t*>(memchr(p, nd[0], size_t(last - p) + 1));
+        if (!p) return nullptr;
+        if (memcmp(p, nd, nn) == 0) return p;
+    }
+    return nullptr;
+}
+bool text_match(const uint8_t* p, const uint8_t* end, int u, const char* s) {
+    const size_t w = u == 1 ? 1 : 2;
+    for (; *s; ++s, p += w) if (p + w > end || text_unit(p, u) != uint8_t(*s)) return false;
+    return true;
+}
+}  // namespace
+static bool text_patch_on() { static const bool on = [] { const char* e = getenv("LSWTCS_TEXTPATCH"); return !(e && e[0] == '0'); }(); return on; }
+// file_off: the buffer's offset in its file (UTF-16 characters start at even file offsets). console_only: only the phrases that name
+// the console itself, for the executable image (its other mentions are tool names nobody sees).
+static void text_patch(uint8_t* buf, size_t n, const char* where, uint64_t file_off, int max_unit, bool console_only) {
+    uint8_t* const end = buf + n;
+    static const char* const kEnc[4] = {"", "ASCII", "UTF-16LE", "UTF-16BE"};
+    for (int u = 1; u <= max_unit; ++u) {
+        const size_t w = u == 1 ? 1 : 2;
+        uint8_t needle[16]; size_t nl = 0;
+        for (const char* c = "box 360"; *c; ++c) { text_put(needle + nl, u, uint8_t(*c)); nl += w; }   // "Xbox"/"XBOX" checked below
+        uint8_t needle2[16]; size_t nl2 = 0;
+        for (const char* c = "BOX 360"; *c; ++c) { text_put(needle2 + nl2, u, uint8_t(*c)); nl2 += w; }
+        for (int pass = 0; pass < 2; ++pass) {
+            const uint8_t* nd = pass ? needle2 : needle; const size_t ndl = pass ? nl2 : nl;
+            uint8_t* from = buf + w;
+            while (from < end) {
+                uint8_t* hit = find_bytes(from, size_t(end - from), nd, ndl);
+                if (!hit) break;
+                from = hit + 1;
+                uint8_t* p = hit - w;   // the 'X'
+                if (w == 2 && ((file_off + uint64_t(p - buf)) & 1)) continue;
+                const TextRep* rep = nullptr;
+                for (const TextRep& t : kTextRep) if (text_match(p, end, u, t.from)) { rep = &t; break; }
+                if (!rep || (console_only && !strstr(rep->from, "onsole"))) continue;
+                const size_t lf = strlen(rep->from), lt = strlen(rep->to);
+                uint8_t* after = p + lf * w;
+                uint8_t* q = after;   // the string's end: NUL, quote or line end within 1024 units
+                uint32_t term = ~0u;
+                for (size_t k = 0; k < 1024 && q + w <= end; ++k, q += w) {
+                    const uint32_t c = text_unit(q, u);
+                    if (c == 0 || c == '"' || c == '\n' || c == '\r') { term = c; break; }
+                }
+                for (size_t k = 0; k < lt; ++k) text_put(p + k * w, u, uint8_t(rep->to[k]));
+                if (term == ~0u) {
+                    for (size_t k = lt; k < lf; ++k) text_put(p + k * w, u, ' ');
+                } else {
+                    memmove(p + lt * w, after, size_t(q - after));
+                    for (uint8_t* z = q - (lf - lt) * w; z < q; z += w) text_put(z, u, term == 0 ? 0u : uint32_t(' '));
+                }
+                const uint32_t k = g_text_patched.fetch_add(1, std::memory_order_relaxed);
+                if (k < 120) {
+                    char ctxs[72]; size_t m = 0;
+                    for (const uint8_t* c = p; c + w <= end && m < 64; c += w) {
+                        const uint32_t ch = text_unit(c, u);
+                        if (ch == 0) break;
+                        ctxs[m++] = ch >= 0x20 && ch < 0x7F ? char(ch) : '.';
+                    }
+                    ctxs[m] = 0;
+                    printf("[TEXTPATCH] #%u %s %s at +%zu of %zu: \"%s\" -> \"%s\"%s | now: %s\n", k + 1, where, kEnc[u], size_t(p - buf), n,
+                           rep->from, rep->to, term == ~0u ? " (padded in place)" : "", ctxs);
+                    fflush(stdout);
+                }
+            }
+        }
+    }
+}
+extern "C" void lsw_text_patch(uint8_t* buf, size_t n, const char* where, uint64_t file_off) {
+    if (text_patch_on() && buf && text_like(buf, n)) text_patch(buf, n, where, file_off, 3, false);
+}
+extern "C" void lsw_text_patch_image(uint8_t* buf, size_t n) {
+    if (text_patch_on() && buf) text_patch(buf, n, "image", 0, 1, true);
+}
+
 // ── Per-handle read-ahead cache ─────────────────────────────────────────────────
 // The game reads archive files (GAME.DAT/game1.DAT) one byte per NtReadFile call
 // (fgetc-style). Without buffering that's a SetFilePointer+ReadFile syscall pair
@@ -619,6 +864,7 @@ struct FileRAH {
 static std::mutex                            g_rah_mutex;
 static std::unordered_map<uint32_t, FileRAH> g_rah;          // keyed by kobj fd
 static const uint32_t                        kRahSize = 65536;
+static const uint32_t                        kRahSizeBig = 512 * 1024;   // load mode b
 
 // Read `len` bytes for kobj `fd` into host `dst`. Position is `off` if has_off,
 // else the tracked current position. Advances current. Returns bytes read.
@@ -626,22 +872,39 @@ static uint32_t host_file_read(uint32_t fd, uint8_t* dst, uint32_t len,
                                uint64_t off, bool has_off) {
     HANDLE h = kobj_get(fd);
     if (!h || h == INVALID_HANDLE_VALUE) return 0;
-    std::lock_guard<std::mutex> lk(g_rah_mutex);
-    FileRAH& r = g_rah[fd];
+    std::unique_lock<std::mutex> lk(g_rah_mutex);   // released for the card read (log65): never held across a turn release
+    FileRAH& r = g_rah[fd];   // unordered_map nodes stay put when other handles are added
     if (r.data.empty()) r.data.resize(kRahSize);
     uint64_t rp = has_off ? off : r.cur;
     uint32_t total = 0;
     while (total < len) {
         if (!(rp >= r.cache_start && rp < r.cache_start + r.cache_len)) {
             const auto t0 = std::chrono::steady_clock::now();   // DIAG: [GSPIKE] io_ms / reads
-            LARGE_INTEGER li; li.QuadPart = (LONGLONG)rp;
-            if (!SetFilePointerEx(h, li, nullptr, FILE_BEGIN)) break;
+            const uint64_t l0 = load_now_ns();
+            load_note_start(l0);
+            // Into this thread's buffer, outside the cache lock: in load mode o other guest threads run meanwhile, and one of
+            // them may read another handle. The same handle read by two threads at once would be the game's own race.
+            const uint32_t want = (g_load_mode.load() & kLoadBigReads) ? kRahSizeBig : kRahSize;
+            static thread_local std::vector<uint8_t> tbuf;
+            if (tbuf.size() < want) tbuf.resize(want);
             DWORD got = 0;
-            const bool ok = ReadFile(h, r.data.data(), kRahSize, &got, nullptr) && got != 0;
+            bool ok = false;
+            lk.unlock();
+            auto refill = [&] {
+                LARGE_INTEGER li; li.QuadPart = (LONGLONG)rp;
+                ok = SetFilePointerEx(h, li, nullptr, FILE_BEGIN) && ReadFile(h, tbuf.data(), want, &got, nullptr) && got != 0;
+            };
+            if (g_load_mode.load() & kLoadTurnFree) gil_release_run([](void* p) { (*static_cast<decltype(refill)*>(p))(); }, &refill);
+            else refill();
+            lk.lock();
+            load_note_end(kLoadRead, l0, ok ? got : 0);
             extern std::atomic<uint64_t> g_file_read_ns, g_file_reads;
             g_file_read_ns += uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t0).count());
             ++g_file_reads;
             if (!ok) break;
+            lsw_text_patch(tbuf.data(), got, "read", rp);
+            if (r.data.size() < got) r.data.resize(got);
+            memcpy(r.data.data(), tbuf.data(), got);
             r.cache_start = rp; r.cache_len = got;
         }
         uint32_t avail = (uint32_t)(r.cache_start + r.cache_len - rp);
@@ -1204,6 +1467,21 @@ static void sched_rejoin_urgent(int id) {
             for (auto& x : cnt) x = 0;
         }
     }
+}
+// Load mode o (host_fs_call, host_file_read): the file call runs off the rotation, and the thread comes back with an urgent
+// rejoin, so a loader does not wait out the holder's quantum and a round of the others after each card read. Only the turn
+// holder leaves (a nested or off-turn caller just runs fn), as in GilYield.
+static void gil_release_run(void (*fn)(void*), void* arg) {
+    const int id = g_sched_id;
+    bool holder = false;
+    if (gil_on() && id >= 0 && !g_guest_off_turn) {
+        std::lock_guard<std::mutex> lk(g_sched_mtx);
+        holder = g_sched_alive[id] && g_sched_runnable[id] && g_sched_turn == id;
+    }
+    if (!holder) { fn(arg); return; }
+    sched_leave_turn(id);
+    fn(arg);
+    sched_rejoin_urgent(id);
 }
 
 // ── Walk off the rotation (LSWTCS_WALKOFF) ────────────────────────────────────────────────────────────────────
@@ -2218,7 +2496,7 @@ static std::string fileio_translate(const std::string& xbox) {
     // hand-copied files (game.DAT, SMBPATH.TXT, perm*.dds). If the file isn't there but exists
     // in the real game directory, use that — e.g. MOVIES/NTSC/DEMOINTRO.WMV, which the game
     // opens right after the titles load. LSWTCS_GAMEROOT overrides the directory.
-    if (!path.empty() && GetFileAttributesA(path.c_str()) == INVALID_FILE_ATTRIBUTES) {
+    if (!path.empty() && host_fs_call(kLoadAttr, [&] { return GetFileAttributesA(path.c_str()); }) == INVALID_FILE_ATTRIBUTES) {
         static std::string root = [] {
             const char* e = getenv("LSWTCS_GAMEROOT");
             std::string r = e ? e : LSW_DATA_DIR "/";
@@ -2226,7 +2504,7 @@ static std::string fileio_translate(const std::string& xbox) {
             return r;
         }();
         std::string alt = root + path;
-        if (GetFileAttributesA(alt.c_str()) != INVALID_FILE_ATTRIBUTES) return alt;
+        if (host_fs_call(kLoadAttr, [&] { return GetFileAttributesA(alt.c_str()); }) != INVALID_FILE_ATTRIBUTES) return alt;
         // Audio streams (Audio\_Music\*.xma, cutscene audio) are loose files in the game directory,
         // not in GAME.DAT. Resolve them there even when LSWTCS_GAMEROOT points elsewhere (the
         // usual run config disables the root to keep the attract movie away).
@@ -2239,7 +2517,7 @@ static std::string fileio_translate(const std::string& xbox) {
                 return r;
             }();
             std::string a2 = aroot + path;
-            if (GetFileAttributesA(a2.c_str()) != INVALID_FILE_ATTRIBUTES) return a2;
+            if (host_fs_call(kLoadAttr, [&] { return GetFileAttributesA(a2.c_str()); }) != INVALID_FILE_ATTRIBUTES) return a2;
         }
     }
     return path;
@@ -2253,20 +2531,20 @@ static uint32_t fileio_open(const char* host, bool allow_create) {
     // (2026-10-08; Eden and Windows do not lock). Then read-write, then read-only as before.
     HANDLE h = INVALID_HANDLE_VALUE;
     if (!allow_create)
-        h = CreateFileA(host, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
-                        nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        h = host_fs_call(kLoadOpen, [&] { return CreateFileA(host, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                        nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr); });
     if (h == INVALID_HANDLE_VALUE)
-        h = CreateFileA(host, GENERIC_READ | GENERIC_WRITE,
+        h = host_fs_call(kLoadOpen, [&] { return CreateFileA(host, GENERIC_READ | GENERIC_WRITE,
                         FILE_SHARE_READ | FILE_SHARE_WRITE,
-                        nullptr, disp, FILE_ATTRIBUTE_NORMAL, nullptr);
+                        nullptr, disp, FILE_ATTRIBUTE_NORMAL, nullptr); });
     if (h == INVALID_HANDLE_VALUE)
-        h = CreateFileA(host, GENERIC_READ, FILE_SHARE_READ,
-                        nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        h = host_fs_call(kLoadOpen, [&] { return CreateFileA(host, GENERIC_READ, FILE_SHARE_READ,
+                        nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr); });
     // If that still fails, try as a directory (for disc/drive presence checks like D:)
     if (h == INVALID_HANDLE_VALUE)
-        h = CreateFileA(host, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+        h = host_fs_call(kLoadOpen, [&] { return CreateFileA(host, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                         nullptr, OPEN_EXISTING,
-                        FILE_ATTRIBUTE_NORMAL | FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+                        FILE_ATTRIBUTE_NORMAL | FILE_FLAG_BACKUP_SEMANTICS, nullptr); });
     if (h == INVALID_HANDLE_VALUE) return 0;
     return kobj_new(h);
 }
@@ -2566,14 +2844,14 @@ PPC_FUNC(__imp__NtQueryFullAttributesFile) {
     }
     ctx.r3.u32 = 0xC000000Fu;
     if (host.empty()) return;
-    DWORD attr = GetFileAttributesA(host.c_str());
+    DWORD attr = host_fs_call(kLoadAttr, [&] { return GetFileAttributesA(host.c_str()); });
     if (attr == INVALID_FILE_ATTRIBUTES) return;
     // FILE_NETWORK_OPEN_INFORMATION: 4 timestamps, AllocationSize (+32), EndOfFile (+40), FileAttributes (+48)
     if (ctx.r4.u32) {
         uint32_t p = ctx.r4.u32;
         lsw_guest::fill(lsw_host(p), 0, 56);
         WIN32_FILE_ATTRIBUTE_DATA fa{};
-        if (GetFileAttributesExA(host.c_str(), GetFileExInfoStandard, &fa)) {
+        if (host_fs_call(kLoadAttr, [&] { return GetFileAttributesExA(host.c_str(), GetFileExInfoStandard, &fa); })) {
             const FILETIME t4[4] = {fa.ftCreationTime, fa.ftLastAccessTime, fa.ftLastWriteTime, fa.ftLastWriteTime};
             for (int i = 0; i < 4; ++i) PPC_STORE_U64(p + i * 8, (uint64_t(t4[i].dwHighDateTime) << 32) | t4[i].dwLowDateTime);
             uint64_t sz = (uint64_t(fa.nFileSizeHigh) << 32) | fa.nFileSizeLow;
@@ -7253,6 +7531,7 @@ PPC_FUNC(__imp__VdSwap) {
         dbg_ram("[GEOMFRAME] verts=%u quads=%u (flat=%u textured=%u skipped=%u)\n",
                 g_geom_vert_ready, g_geom_vert_ready/6, g_geom_flat, g_geom_tex, g_geom_skip);
       g_geom_flat=g_geom_tex=g_geom_skip=0; }
+    load_ep_poll(uint32_t(count));   // [LOADEP]
     // Asset-load probe: bytes read from disk per ~2s window. Non-zero in steady state ⇒
     // still streaming assets; ~0 ⇒ load done/idle (gate is elsewhere, not disk).
     { static int _rf=0; static uint64_t _last=0;

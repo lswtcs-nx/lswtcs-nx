@@ -2540,3 +2540,40 @@ The tester, for one session (the first boot of log70, so no program order yet: `
   - The stick is turned a quarter by default: left Joy-Con (x, y) -> (-y, x), right Joy-Con -> (y, -x). `LSWTCS_JOYROT=0` passes the stick as the system reports it.
   - Its face buttons follow the layout. By label, the right button is the 360's A (confirm), bottom is B, top is X, left is Y.
   - The layout switch also waits for the D-pad to be released.
+
+## Run 71 (docked)
+
+The tester went to the hub twice and started with two detached Joy-Cons, one in each hand.
+
+**Joy-Cons:**
+- `[PADS]` at boot: player 1 was the right Joy-Con sideways, player 2 the left one. The system kept the single assignment from run 70's controller screen.
+- The game took a tester holding both Joy-Cons for two players.
+
+**Hub audio:**
+- The first arrival had 0.35 s of empty audio in all (run 70: about 2.4 s).
+- `[AUDIOOFF]` held 750 calls a second, except one window at 572.
+- Empty audio in play over the session: 0.98 s (runs 69-70: 3.1 s).
+- The render thread built 6 programs on request at the arrival (run 70: 18).
+- The order held only 128 keys (log70's milestones). The reader on core 2 took 60 s for 955 files, waiting on worker 0 at the same priority.
+
+**Loading-screen audio:**
+- Audio empty per second of light frames, after the first minute:
+
+  | Runs | Refills | Empty audio per second |
+  |---|---|---|
+  | 63-66 | 64 KB, or mixed | 5-14 ms |
+  | 67-69, 71 | 512 KB (`b`) | 47-66 ms |
+
+- Run 70 had 14 ms, over a session with mostly menus.
+- In run 71 one 256 KB read took 377 ms (`[GSPIKE]` swap 13059), while the music ran dry for 0.8 s.
+- `b` never shortened a load.
+
+**Frame rate** (docked, 768 MHz GPU):
+- 1300+ draws: 30.0 FPS over 60 s.
+- 300-1300 draws: 52.3 FPS.
+- Run 54 docked had 29.3-30.7 FPS in its best states: still the CPU wall.
+
+## Log 72: `0.0.78-log72`
+
+- **Joy-Cons at start:** No1 and No2 go to dual assignment. Two single Joy-Cons (one left, one right) are merged into one controller (`hidMergeSingleJoyAsDualJoy`, `[PADS] ... joined as one controller`). Two players with a Joy-Con each come only from the controller screen, then player 2's Start.
+- **`LSWTCS_LOADMODES=-`:** back to 64 KB refills.

@@ -610,6 +610,7 @@ struct XiState { DWORD packet; WORD buttons; BYTE lt, rt; SHORT lx, ly, rx, ry; 
 std::atomic<bool> g_applet_busy{false};
 bool g_by_label = false;   // face buttons by label (LSWTCS_PADLAYOUT), decided on player 1's polls
 
+bool single_joycon(u32 style);
 void pads_init() {
     const char* e = getenv("LSWTCS_PLAYERS");
     g_players = e && atoi(e) == 1 ? 1 : 2;
@@ -623,6 +624,21 @@ void pads_init() {
     padInitialize(&g_src[0], HidNpadIdType_Handheld);
     padInitialize(&g_src[1], HidNpadIdType_No1);
     padInitialize(&g_src[2], HidNpadIdType_No2);
+    // Detached Joy-Cons start as one controller in two hands (log72). The system keeps the single assignment the controller screen
+    // gave them in an earlier session: run 71 booted with the right Joy-Con as player 1 and the left one as player 2, for a tester
+    // holding both, and the game started for two. Two players with a Joy-Con each come only from the controller screen
+    // (L + R + Plus), then player 2's Start in the game.
+    hidSetNpadJoyAssignmentModeDual(HidNpadIdType_No1);
+    hidSetNpadJoyAssignmentModeDual(HidNpadIdType_No2);
+    padUpdate(&g_src[1]);
+    padUpdate(&g_src[2]);
+    const u32 s1 = padGetStyleSet(&g_src[1]), s2 = padGetStyleSet(&g_src[2]);
+    const u32 lr = HidNpadStyleTag_NpadJoyLeft | HidNpadStyleTag_NpadJoyRight;
+    if (padIsConnected(&g_src[1]) && padIsConnected(&g_src[2]) && single_joycon(s1) && single_joycon(s2) && ((s1 | s2) & lr) == lr) {
+        const Result mrc = hidMergeSingleJoyAsDualJoy(HidNpadIdType_No1, HidNpadIdType_No2);
+        printf("[PADS] two single Joy-Cons at start (styles 0x%X, 0x%X) joined as one controller (rc 0x%X)\n", s1, s2, mrc);
+        fflush(stdout);
+    }
     printf("[PADS] two players: the connected ones of handheld, controller 1, controller 2, in that order; single Joy-Cons sideways "
            "(rc 0x%X); L + R + Plus, or SL + SR + Plus/Minus on a single Joy-Con, opens the controller screen\n", rc);
     fflush(stdout);

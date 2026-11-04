@@ -2792,3 +2792,21 @@ One session of about 870 s: the hub, `PalaceRescue` (`Rescue_A` to `e`), the hub
   - Requests over 2 MB still get their own buffer object inside `nouveau_mm_allocate`.
   - The edit script is idempotent by its tag and runs last in `tools/build_mesa.sh`.
 - **Pre-pass flush:** the texture pre-pass calls `glFlush` every 16 MB of new textures, so fences pass and staging ranges return to the suballocator. It keeps every slab it ever made, so the flush bounds that.
+
+## Log 77: `0.0.83-log77` (A) and `0.0.83-log77nv` (B), guest memory without volatile
+
+Route 2 item 3 (CPU_ROADMAP.md), the technique from the mk9-nx study (masseffect-nx measured +15-20 % fps; GPL-3.0, technique only). Both builds include log76 (texture staging), which has not been tested yet.
+
+- **A** (`build-mesa`, `private/lswtcs-log77a.nro`): the current code. It prints `[NX] guest code: volatile loads and stores (log77 A)`.
+- **B** (`build-nv`, NACP version `0.0.83-log77nv`): GameCode from `Convert 360/LSWTCS/output_nv`, made by `switch/tools/make_nonvolatile_output.py`. The generated output itself is unchanged. B differs in:
+  - **`ppc_context.h`:** the eight scalar `PPC_LOAD_*` / `PPC_STORE_*` macros use `LSW_GV`, which is empty only under `LSW_GUEST_NONVOLATILE` (CMake option, GameCode target only).
+    - The runtime includes the same header and keeps `volatile` for its own loops over guest memory.
+    - The four `PPC_MM_STORE_*` (17 MMIO sites) keep `volatile` in both builds.
+  - **A compiler barrier (`LSW_GUEST_BARRIER`, an empty asm with a memory clobber) after each of the 70 `sync` / `lwsync` / `eieio` / `isync`.** The generator emits these only as comments, so until now `volatile` alone kept the order of stores around them.
+  - **The same barrier after each of the 33,616 labels that a later `goto` in the same function targets:** every loop header, including loops built from switch cases. Without it GCC may keep a value read from guest memory in a register for the whole loop. A loop waiting on another thread, the GPU or the walker would then never end.
+  - **Unchanged:** `lwarx` / `stwcx.` (`LSW_GUEST_CAS`, an atomic) and vector loads and stores (never volatile).
+  - **Log line:** `[NX] guest code: loads and stores without volatile, barriers at loop headers and fences (log77 B)`.
+- **The two build caches differ only in `LSW_GUEST_NONVOLATILE`.**
+- **SD:** `switch/lswtcs.nro` = A (227095b3...), `switch/lswtcs-nv.nro` = B (9aaad4f7..., 1 MB smaller NRO). Both validated.
+- **Test:** docked, where the guest CPU is the limit. The same route on A then B (hub, then `Gungan_B`'s heavy part), one session each. Compare FPS by place, the heavy part, and CPU per guest call (`private/session-tools/guest_call_cost.py`).
+- **Risk:** a hang in a loop whose wait the barrier does not cover. B is then dropped.

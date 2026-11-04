@@ -14,7 +14,7 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 get_filename_component(LSW_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/.." ABSOLUTE)
-set(RECOMP_OUTPUT "${LSW_ROOT}/Convert 360/LSWTCS/output")
+set(RECOMP_OUTPUT "${LSW_ROOT}/Convert 360/LSWTCS/output" CACHE PATH "Generated guest code (output, or a copy from tools/make_nonvolatile_output.py)")
 
 set(LSW_ARCH_FLAGS -march=armv8-a+crc+crypto -mtune=cortex-a57)
 # SHELL: keeps each "-include <file>" pair together (CMake de-duplicates repeated options).
@@ -111,6 +111,18 @@ if(LSW_GAME_INLINE AND EXISTS "${GAME_UNITS_FILE}")
     # Under -fPIC GCC treats every global function as replaceable and inlines none of them; nothing replaces symbols in the
     # static NRO. Small guest functions (accessors, wrappers) get the -O3 size limit for automatic inlining.
     target_compile_options(GameCode PRIVATE -fno-semantic-interposition --param=max-inline-insns-auto=30)
+endif()
+# log77 A/B: guest loads and stores without volatile, with a compiler barrier at every loop header and guest fence
+# (tools/make_nonvolatile_output.py makes the copy RECOMP_OUTPUT must point at). Game code only: the runtime includes the same
+# ppc_context.h and keeps volatile for its host loops over guest memory. Technique from mk9-nx / masseffect-nx (no code).
+option(LSW_GUEST_NONVOLATILE "Guest loads/stores without volatile (RECOMP_OUTPUT from tools/make_nonvolatile_output.py)" OFF)
+if(LSW_GUEST_NONVOLATILE)
+    file(READ "${RECOMP_OUTPUT}/ppc_context.h" _ctx)
+    string(FIND "${_ctx}" "LSW_GUEST_BARRIER" _has_barrier)
+    if(_has_barrier EQUAL -1)
+        message(FATAL_ERROR "LSW_GUEST_NONVOLATILE needs RECOMP_OUTPUT made by tools/make_nonvolatile_output.py")
+    endif()
+    target_compile_definitions(GameCode PRIVATE LSW_GUEST_NONVOLATILE=1)
 endif()
 
 # ---- XMA audio decoding: FFmpeg subset (aarch64 files instead of x86) + Xenia XmaContextNew ----
@@ -250,6 +262,9 @@ if(LSW_DEKO_BACKEND)
     target_link_libraries(lswtcs PRIVATE GameCode lsw_spirv lsw_xma lsw_avcodec lsw_avutil deko3dd)
 else()
     target_link_libraries(lswtcs PRIVATE GameCode lsw_spirv lsw_xma lsw_avcodec lsw_avutil glad ${LSW_MESA_LIBS} drm_nouveau)
+    if(LSW_GUEST_NONVOLATILE)
+        target_compile_definitions(lswtcs PRIVATE LSW_BUILD_GUEST_NV=1)   # the log line only; the runtime stays volatile
+    endif()
     target_link_options(lswtcs PRIVATE -Wl,--wrap=nouveau_bo_new -Wl,--wrap=nouveau_bo_name_ref
         -Wl,--wrap=nouveau_bo_ref -Wl,--wrap=nouveau_bo_map -Wl,--wrap=nouveau_bo_wait)
 endif()
@@ -283,7 +298,12 @@ endif()
 if(LSW_DEKO_BACKEND)
     nx_generate_nacp(lswtcs.nacp NAME "TCS Deko Live" AUTHOR "LSWTCS port" VERSION "0.0.7")
 else()
-    nx_generate_nacp(lswtcs.nacp NAME "LSWTCS" AUTHOR "LSWTCS port" VERSION "0.0.82-log76")
+    if(LSW_GUEST_NONVOLATILE)
+        set(LSW_NACP_VERSION "0.0.83-log77nv")
+    else()
+        set(LSW_NACP_VERSION "0.0.83-log77")
+    endif()
+    nx_generate_nacp(lswtcs.nacp NAME "LSWTCS" AUTHOR "LSWTCS port" VERSION "${LSW_NACP_VERSION}")
 endif()
 nx_create_nro(lswtcs NACP lswtcs.nacp)
 

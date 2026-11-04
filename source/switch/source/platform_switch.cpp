@@ -555,6 +555,11 @@ extern "C" bool lsw_switch_init() {
     printf("[NX] TotalMemory %llu MB, UsedMemory %llu MB at start\n",
            (unsigned long long)(info_u64(InfoType_TotalMemorySize) >> 20),
            (unsigned long long)(info_u64(InfoType_UsedMemorySize) >> 20));
+#ifdef LSW_BUILD_GUEST_NV
+    printf("[NX] guest code: loads and stores without volatile, barriers at loop headers and fences (log77 B)\n");
+#else
+    printf("[NX] guest code: volatile loads and stores (log77 A)\n");
+#endif
     {
         std::set_new_handler(lsw_new_failed);
         uint64_t size, used, inside, top;

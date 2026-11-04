@@ -2639,3 +2639,45 @@ One session: the hub, then Episode I `PalaceRescue` (`Rescue_A`, `b`, `c`, `b` a
   - `[TEXSLOW]` logs each new texture whose decode and upload take 8 ms or more (the first 300): size, layers, mips, DXGI format, KB, decode ms and upload ms.
   - `[TEXCOST]`, with each `[HEAP]` line, gives the new textures since the last report by DXGI format: count, MB, decode ms and upload ms.
 - **Profile:** `LSWTCS_GLSTEPS=1`, so each worker build logs its GLSL sizes and time (`[GLSTEP]`).
+
+## Run 74: `0.0.79-log73` (first build, before the texture lines) handheld, crash on the second level in a row
+
+One session: the hub, `PalaceRescue` again (`Rescue_A` to `e`), the hub, then `PodSprint_A`. The tester saw stutters in cutscenes and in play; the game crashed entering `PodSprint`, 418 s in. The SD's `env.txt` was the old one (no `GLSTEPS`), and the NRO was log73's first build, so there are no `[TEXCOST]` or `[TEXSLOW]` lines.
+
+**Crash:**
+- A data abort on a compile worker (a `std::thread`), inside Mesa's nouveau compiler (`buildLiveSetsPreSSA` calling `LValue::isUniform`), reading address 0x20.
+- That code allocates its bitsets with C `malloc` and does not check for failure, so a failed allocation reads near 0. The C++ allocation handler cannot see C allocations.
+- The last `[HEAP]` line, about 5 s before: 2829 MB in use of 3043 MB, 213 MB free (57 inside, 155 at the top). In between, a level load decoded 204 textures and built 11 programs. Likely out of memory; not proven.
+
+**Heap** (`[HEAP]`):
+- Replay 150: 1889 MB in use with 44 programs. Most of it is the guest window (595 MB) and the GL copy of guest memory (`[GL] resources: shared memory 512 MB`).
+- From there it rose with programs built: replay 4650, 824 programs, 2579 MB; replay 5700, 879 programs, 2676 MB. After textures and render targets, that is about 0.6-1 MB per program.
+- 822 compiled stages were alive at the end. They are kept for reuse and never deleted, and Mesa keeps each compiled-but-unlinked shader's whole GLSL IR.
+- The 384 MB reserve stopped 244 saved programs from compiling, and the session still ran short.
+- The address memo was cleared 24 times. It does grow without bound, so log73's cap was needed.
+
+**Waits for programs** (`[GLWAIT]`):
+- With worker 0 raised, single-program waits took 107-229 ms (run 73: 499-601 ms).
+- At the end, with the heap nearly full, builds on the render thread took 513-1555 ms for one program.
+
+**Stutters:**
+- On a second visit, program builds are small (`program=` 6-120 ms per stall), apart from the end.
+- Most of the time now goes to new textures at each area entry, cutscenes included: 77-204 textures per frame, decode 0.27-1.57 s and upload 0.68-1.42 s, about 7 ms per texture.
+
+| Place | FPS | p95 frame |
+| --- | --- | --- |
+| Hub | 37.0 | 41 ms |
+| `Rescue_A` | 29.1 | 42 ms |
+| `Rescue_b` | 28.2 | 47 ms |
+| `Rescue_c` | 26.0 | 53 ms |
+| `Rescue_e` | 29.6 | 43 ms |
+
+## Log 74: `0.0.80-log74`
+
+- **Stage cache bounded** (`LSWTCS_GLSTAGEMAX`, default 96). The least recently used stages are deleted first. A stage between its compile and its program's link is pinned.
+- **`[HEAPGL]`** with each `[HEAP]` line:
+  - stages cached, evicted and reused;
+  - the heap kept per stage compile and per link, as averages of in-use bytes around each step (other threads add noise).
+- **Reserve for saved programs not asked for:** 512 MB (`LSWTCS_GLKEEPMB`).
+- **The crash handler logs the heap's untouched top** (no malloc lock taken).
+- Still in from log73's second build: `[TEXSLOW]`, `[TEXCOST]`, and `LSWTCS_GLSTEPS=1` in the profile.

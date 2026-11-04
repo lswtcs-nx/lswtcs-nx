@@ -356,11 +356,12 @@ std::atomic<bool> g_prog_frame_wait{false};
 // left to build and waited 500-600 ms for one program that takes about 100 ms, worker 0 sharing core 2 at 0x2D with the audio
 // threads (0x2B) and the log writer and Mesa's thread (0x2C). The audio is held during the wait anyway (host_audio_hold).
 Handle g_worker0_handle = INVALID_HANDLE;
-// log73: saved programs not yet asked for are not compiled while the heap has less than LSWTCS_GLKEEPMB free (default 384 MB);
+// log73: saved programs not yet asked for are not compiled while the heap has less than LSWTCS_GLKEEPMB free (default 512 MB since
+// log74: run 74 crashed in Mesa's compiler with about 200 MB left, after a level load);
 // such a program is built on request if the game asks for it later.
 uint32_t g_prog_dropped = 0;
 uint32_t keep_free_mb() {
-    static const uint32_t mb = [] { const char* e = getenv("LSWTCS_GLKEEPMB"); return e ? uint32_t(atoi(e)) : 384u; }();
+    static const uint32_t mb = [] { const char* e = getenv("LSWTCS_GLKEEPMB"); return e ? uint32_t(atoi(e)) : 512u; }();
     return mb;
 }
 std::vector<uint64_t> g_frame_wait;      // render thread: content keys the current replay waits for
@@ -516,11 +517,48 @@ void note_program_use(uint64_t ckey) {
 // compiled again for every program (hub: 52 programs over 77 unique shaders). In-memory for the session
 // only; objects are shared across the compile contexts (EGL share context). 0 = failed to compile.
 std::mutex g_stage_mtx;
-std::unordered_map<uint64_t, GLuint> g_stages;
-uint32_t g_stage_reused = 0;
+// Compiled stages kept for the next program that shares one. Bounded since log74 (LSWTCS_GLSTAGEMAX, default 96, least recently
+// used out first; a stage between its compile and its program's link is pinned). Run 74: 822 stages alive at the end, and Mesa
+// keeps each compiled-but-unlinked shader's whole GLSL IR (for a later link); the heap grew about 0.6-1 MB per program built and
+// the session crashed in Mesa's compiler with about 200 MB left.
+struct Stage { GLuint sh = 0; uint64_t last = 0; uint32_t pins = 0; };
+std::unordered_map<uint64_t, Stage> g_stages;
+uint64_t g_stage_clock = 0;
+uint32_t g_stage_reused = 0, g_stage_evicted = 0;
+// Heap kept by each step (log74), from the heap's in-use bytes around it; other threads allocate meanwhile, so these are averages
+// over many builds: a stage compile (kept while the stage is cached) and a link (kept while the program lives).
+int64_t g_kept_compile = 0, g_kept_link = 0;
+uint32_t g_kept_compile_n = 0, g_kept_link_n = 0;
 bool stage_reuse_on() {
     static const bool on = env_on("LSWTCS_GLSTAGEREUSE", true);
     return on;
+}
+size_t stage_max() {
+    static const size_t n = [] { const char* e = getenv("LSWTCS_GLSTAGEMAX"); return e ? size_t(atoi(e)) : size_t(96); }();
+    return n;
+}
+int64_t heap_in_use() {
+    uint64_t size, used, inside, top;
+    lsw_heap_stats(&size, &used, &inside, &top);
+    return int64_t(used);
+}
+// Under g_stage_mtx: delete the least recently used unpinned stages past the limit (programs already linked do not need them).
+void evict_stages_locked() {
+    while (g_stages.size() > stage_max()) {
+        auto victim = g_stages.end();
+        for (auto it = g_stages.begin(); it != g_stages.end(); ++it)
+            if (it->second.pins == 0 && (victim == g_stages.end() || it->second.last < victim->second.last)) victim = it;
+        if (victim == g_stages.end()) return;
+        if (victim->second.sh) glDeleteShader(victim->second.sh);
+        g_stages.erase(victim);
+        ++g_stage_evicted;
+    }
+}
+void release_stage(uint64_t h) {
+    std::lock_guard<std::mutex> lk(g_stage_mtx);
+    auto it = g_stages.find(h);
+    if (it != g_stages.end() && it->second.pins) --it->second.pins;
+    evict_stages_locked();
 }
 
 GLuint program_build(uint64_t ckey, const ProgSources& s) {
@@ -542,22 +580,39 @@ GLuint program_build(uint64_t ckey, const ProgSources& s) {
         }
         return sh;
     };
+    uint64_t pinned[3];
+    int npinned = 0;
     auto compile = [&](GLenum type, const std::string& src) -> GLuint {
         if (!stage_reuse_on()) return compile_new(type, src);
         const uint64_t h = XXH3_64bits_withSeed(src.data(), src.size(), type);
         {
             std::lock_guard<std::mutex> lk(g_stage_mtx);
             auto it = g_stages.find(h);
-            if (it != g_stages.end()) { ++g_stage_reused; return it->second; }
+            if (it != g_stages.end()) {
+                ++g_stage_reused;
+                ++it->second.pins;
+                it->second.last = ++g_stage_clock;
+                pinned[npinned++] = h;
+                return it->second.sh;
+            }
         }
+        const int64_t u0 = heap_in_use();
         const GLuint sh = compile_new(type, src);   // outside the lock: other threads keep compiling
+        const int64_t kept = heap_in_use() - u0;
         std::lock_guard<std::mutex> lk(g_stage_mtx);
-        auto ins = g_stages.emplace(h, sh);
+        g_kept_compile += kept;
+        ++g_kept_compile_n;
+        auto ins = g_stages.emplace(h, Stage{sh, ++g_stage_clock, 0});
         if (!ins.second) {   // another thread compiled the same stage meanwhile: use theirs
             if (sh) glDeleteShader(sh);
             ++g_stage_reused;
         }
-        return ins.first->second;
+        ++ins.first->second.pins;
+        ins.first->second.last = g_stage_clock;
+        pinned[npinned++] = h;
+        const GLuint out = ins.first->second.sh;
+        evict_stages_locked();
+        return out;
     };
     // Draws without a pixel shader (depth-only; colour writes masked) get an empty fragment shader:
     // a VS+GS program with no fragment stage hung Eden's shader recompiler.
@@ -567,6 +622,7 @@ GLuint program_build(uint64_t ckey, const ProgSources& s) {
     const GLuint p = compile(GL_FRAGMENT_SHADER, s.ps.empty() ? kEmptyFs : s.ps);
     const GLuint g = s.gs.empty() ? 0 : compile(GL_GEOMETRY_SHADER, s.gs);
     const uint64_t t_link = gp_now();
+    const int64_t link_u0 = heap_in_use();
     GLuint prog = 0;
     if (v && p && (s.gs.empty() || g)) {
         prog = glCreateProgram();
@@ -590,8 +646,15 @@ GLuint program_build(uint64_t ckey, const ProgSources& s) {
             if (g) glDetachShader(prog, g);
         }
     }
-    if (!stage_reuse_on())   // shared stages stay alive for the next program
+    if (prog) {
+        const int64_t kept = heap_in_use() - link_u0;
+        std::lock_guard<std::mutex> lk(g_stage_mtx);
+        g_kept_link += kept;
+        ++g_kept_link_n;
+    }
+    if (!stage_reuse_on())   // shared stages stay alive for the next program (up to stage_max)
         for (GLuint sh : {v, p, g}) if (sh) glDeleteShader(sh);
+    for (int i = 0; i < npinned; ++i) release_stage(pinned[i]);
     static const bool timing = env_on("LSWTCS_GLTIMING", false);
     if (timing) {
         printf("[GLPROGT] %016llX: compile %llu ms, link %llu ms (VS %zu KB, PS %zu KB, GS %zu KB)\n", (unsigned long long)ckey,
@@ -3903,6 +3966,13 @@ PresentSrc replay() {
         {
             std::lock_guard<std::mutex> lk(g_prog_mtx);
             entries = g_prog_entries.size(); queued = g_prog_queue.size(); compiled = g_prog_compiled; dropped = g_prog_dropped;
+        }
+        {
+            std::lock_guard<std::mutex> lk(g_stage_mtx);
+            printf("[HEAPGL] replay %llu: stages cached %zu (limit %zu, %u evicted, %u reused) | heap kept per stage compile %lld KB (%u), "
+                   "per link %lld KB (%u)\n", (unsigned long long)g_replays, g_stages.size(), stage_max(), g_stage_evicted, g_stage_reused,
+                   g_kept_compile_n ? (long long)(g_kept_compile / g_kept_compile_n / 1024) : 0LL, g_kept_compile_n,
+                   g_kept_link_n ? (long long)(g_kept_link / g_kept_link_n / 1024) : 0LL, g_kept_link_n);
         }
         printf("[HEAP] replay %llu: heap %llu MB, in use %llu MB, free %llu MB (inside %llu, top %llu) | programs %u compiled, %zu known, "
                "%zu queued, %u not compiled (low memory), %zu in use, %zu stages | textures %zu (%llu MB), memo %zu, samplers %zu, fbos %zu, "

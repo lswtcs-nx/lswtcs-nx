@@ -357,6 +357,7 @@ extern "C" void lsw_log_path(char* out, size_t capacity, const char* name) {
     snprintf(out, capacity, "%s/%s", g_log_dir, name);
 }
 
+extern "C" char* fake_heap_end;   // libnx: the end of newlib's heap range (see lsw_heap_stats)
 alignas(16) u8 __nx_exception_stack[0x10000];
 u64 __nx_exception_stack_size = sizeof(__nx_exception_stack);
 extern "C" void __libnx_exception_handler(ThreadExceptionDump* ctx) {
@@ -372,6 +373,12 @@ extern "C" void __libnx_exception_handler(ThreadExceptionDump* ctx) {
                 ctx->error_desc, (unsigned long long)ctx->pc.x, (unsigned long long)(ctx->pc.x - b),
                 (unsigned long long)ctx->lr.x, (unsigned long long)(ctx->lr.x - b),
                 (unsigned long long)ctx->far.x, (unsigned long long)ctx->sp.x);
+        {   // log74: run 74's crash was in Mesa's compiler, likely a failed C malloc (null + 0x20). No malloc lock here (the
+            // crashing thread may hold it): only the untouched top of the heap, which malloc grows into.
+            char* const brk = static_cast<char*>(sbrk(0));
+            fprintf(o, "[CRASH] heap untouched top %lld MB\n",
+                    brk == reinterpret_cast<char*>(-1) ? -1LL : (long long)((fake_heap_end - brk) >> 20));
+        }
         for (int i = 0; i < 29; ++i) fprintf(o, "[CRASH] x%-2d=0x%016llX\n", i, (unsigned long long)ctx->cpu_gprs[i].x);
 #ifndef LSW_DEKO_BACKEND
         if (o == f) {

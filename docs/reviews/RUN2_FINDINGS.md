@@ -2977,3 +2977,81 @@ One session of 333 s: the hub, `Gungan_A`, `Gungan_B`, the hub, `PalaceRescue` (
   - `[HEAPGL]` pool counts and `[BOPOOL]`;
   - the hub arrival and `PodSprint_A` entry against run 80.
 - **Risk:** wrong pixels from reused storage (`LSWTCS_BOPOOL=0` to check).
+
+
+## Run 81: `0.0.85-log79` handheld, crash loading a save
+
+The game crashed at the hub arrival after loading a save (replay about 1686, the 892-draw scene with 86 new textures).
+
+**The crash** is open issue 1 in `docs/ISSUES.md`:
+- Stack: `nvAddressSpaceUnmap` < `nouveau_bo_del` < `nouveau_bo_ref` < `__wrap_nouveau_bo_ref` < `pushbuf_flush` < `nouveau_pushbuf_kick` < `nvc0_flush` < `fence_sync` < `arena_fence` < `render_thread_main`.
+- Fault address 0x58: a buffer object whose device pointer is null.
+- This is the arena-fence path of earlier003. Its last occurrence was run 28.
+
+**The texture storage pool:**
+- Its last report (replay 1650) had 87 buffers tracked and none kept or reused.
+- Keeps start only when textures are evicted; in run 82 that was around replay 9000.
+- The crash cannot be pinned on the pool, but its last 36 replays were not reported.
+- Log80 prints the pool's first keep and first reuse, so a later crash log shows whether the pool had started.
+
+## Run 82: `0.0.85-log79` handheld
+
+320 s on run 80's route: the hub, `Gungan_A`, `Gungan_B`, the hub, `Rescue_A`, `Rescue_b`, the hub, `PodSprint_A`, the hub. No crash.
+
+**Boot and saved programs:**
+- The boot is smooth again: one gap over 250 ms in the logos against 19 in run 80; 28 `[GSPIKE]` against 44.
+- The reader at 0x2D queued the 1255 files in 16.3 s.
+- `levels.bin` was read: 6 levels, 1075 entries.
+- At the hub's start, 218 of its 1169 queued programs moved ahead. Later levels found theirs already built.
+- No `[GLWAIT]` of 100 ms or more.
+
+**Textures, against run 80 (same route):**
+
+| | Run 82 (log79) | Run 80 (log78) |
+| --- | --- | --- |
+| Decode on the render thread | 824 ms for 4268 ms of work | 1625 ms for 4216 |
+| Upload per new texture | 2.20 ms | 2.48 |
+| Uploads of 12 ms or more | 49 | 30 |
+| `Gungan_A` entry | 256 ms | 297 |
+| Hub returns | 299 and 396 ms | 295 and 441 |
+| `Rescue_A` | 379 ms | 430 |
+| `PodSprint_A` entry | 879 ms, then 326 | 977, then 328 |
+
+- These are single events: each is within about ±10 %, except the decode.
+- The hub arrival is not comparable. Replay 1416 drew 293 draws with 39 textures, not run 80's scene. It took 587 ms, of which 479 were uploads (23 of 11-41 ms each); the guest also spent 821 ms preparing that frame.
+- `PodSprint_A`'s next frame still waited 236 ms on one 5 KB upload.
+
+**The texture storage pool:** on, with the layout as expected.
+- 283 storages reused against 1437 new ones; 408 kept and 711 freed because the pool was full.
+- It started keeping around replay 9000, after textures were first evicted.
+
+**A 1.9 s freeze in `Gungan_B`** (replay 5537):
+- The guest waited 1878 ms for the render thread, whose replay took 14 ms.
+- In over-1-s freezes, the render thread was 88 % blocked in `nvIoctl2`, the GPU submit (run 80: 82 %).
+- Worker 0 was building a 1136 ms program (68 KB vertex shader) at the time.
+- Cause not found.
+
+**Where uploads wait:**
+- Render-thread samples inside `create_texture`: 38 % in `_util_queue_fence_wait`, waiting for Mesa's GL thread to run the commands queued before the upload.
+- The GL thread's own texture-storage creation (`nvAddressSpaceMap`, `nvMapCreate`, memset) shows in only 21 samples, so it does not explain the waits.
+- In Mesa 20.1, `CompressedTexSubImage3D` is always synchronous under glthread, even from a PBO.
+
+**Other figures:**
+- Heap: 346 MB free at the lowest (run 80: 335).
+- FPS: hub 45.8, `Gungan_A` 26.7, `Gungan_B` 31.1, `Rescue_A` 27.7, `Rescue_b` 34.5, `PodSprint_A` 31.7 (time in each level, loading included).
+
+## Log 80: `0.0.86-log80`, where uploads wait
+
+Diagnostics only. Behaviour is log79's.
+
+- `lsw_glthread_sync_hook` is now always set with glthread on. It counts the render thread's waits for Mesa's GL thread.
+  - `LSWTCS_GLSYNCLOG` still adds the per-call `[GLSYNC]` report.
+- **`[TEXSLOW]` and `[TEXCOST]`:** the part of each upload spent waiting for the GL thread. The rest is the driver's own work on the render thread.
+- **`[GLSTALL]`:** that replay's total wait for the GL thread, and the waits of 5 ms or more by GL call.
+- **`[GLSYNCLONG]`:** any single wait of 200 ms or more, with its call and replay (first 100). It covers waits outside the replay, such as `arena_fence`'s `glFenceSync`.
+- **`[BOPOOL]`:** the first freed storage kept, and the first reuse.
+- The boot line now says `(normal build)` instead of `(log77 A)`.
+- **Test:** handheld, the same route. Read:
+  - in `[TEXSLOW]`, whether the 13-41 ms uploads are GL-thread waits or driver time;
+  - which calls `[GLSTALL]` lists;
+  - `[GLSYNCLONG]` against any long freeze.

@@ -242,6 +242,9 @@ void pool_release(nouveau_bo* bo, const PoolKey& k) {
         if (keep) { g_pool_free.emplace(k, bo); g_pool_bytes += k.size; ++g_pool_kept; }
         else { g_pool_owned.erase(bo); ++g_pool_dropped; }
     }
+    // log80: says when the pool starts working, so a later crash log shows whether it had (run 81's crash came before any keep).
+    static bool first = true;
+    if (keep && first) { first = false; std::printf("[BOPOOL] first freed texture storage kept (%llu KB)\n", (unsigned long long)(k.size >> 10)); }
     if (!keep) { nouveau_bo* q = bo; __real_nouveau_bo_ref(nullptr, &q); }   // the last reference: libdrm deletes it
 }
 } // namespace
@@ -265,7 +268,12 @@ extern "C" int __wrap_nouveau_bo_new(nouveau_device* d, uint32_t flags, uint32_t
             if (it != g_pool_free.end()) { got = it->second; g_pool_free.erase(it); g_pool_bytes -= key.size; ++g_pool_hits; }
             else ++g_pool_misses;
         }
-        if (got) { *out = got; return 0; }   // still holds the one reference the pool kept
+        if (got) {   // still holds the one reference the pool kept
+            static bool first = true;
+            if (first) { first = false; std::printf("[BOPOOL] first texture storage reused (%llu KB)\n", (unsigned long long)(key.size >> 10)); }
+            *out = got;
+            return 0;
+        }
     }
     // A render target of states Z and J: a big-page mapping, as deko3d gives compressed images. Horizon may otherwise map a compressed kind without compression.
     if ((lsw_nvc0_rt_compress & 1) && config) {

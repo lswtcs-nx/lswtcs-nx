@@ -1921,38 +1921,62 @@ GlTex create_texture(const LswGpuTexDesc& d) {
 // log73: what new textures cost. Run 73: entering an area decoded and uploaded 100-160 textures in one frame, 0.3-0.6 s decoding
 // and 0.7-1.1 s uploading, about 7 ms a texture, with nothing saying which ones. [TEXSLOW]: each texture over 8 ms (first 300);
 // [TEXCOST] (with [HEAP]): new textures since the last report by format (DXGI number): count, MB, decode ms, upload ms.
-struct TexCost { uint32_t n = 0; uint64_t bytes = 0, dec_ns = 0, up_ns = 0; };
+struct TexCost { uint32_t n = 0; uint64_t bytes = 0, dec_ns = 0, up_ns = 0, sync_ns = 0; };
 std::map<uint32_t, TexCost> g_tex_cost;
+// log80: the render thread's waits for Mesa's GL thread (_mesa_glthread_finish_before: every GL call glthread cannot queue, the
+// texture uploads among them), from lsw_glthread_sync_hook, now set whenever glthread is on. Runs 80-81: area entries spent most of
+// their time in uploads, many waiting 13-41 ms (about a display refresh) whatever the texture's size, and one upload of 10 KB took
+// 220-420 ms in the next frame; profiles put the render thread in that wait, but not what the GL thread was doing.
+// [TEXSLOW] / [TEXCOST] give the waiting part of each upload; [GLSTALL] the waits of 5 ms or more in that replay by call;
+// [GLSYNCLONG] any single wait of 200 ms or more (first 100), e.g. run 81's 1.9 s freeze in Gungan_B with a 14 ms replay.
+uint64_t g_sync_wait_ns = 0;
+struct LongSync { const char* func; uint32_t n; uint64_t ns; };
+LongSync g_long_sync[8];
+uint32_t g_long_sync_used = 0;
+void note_sync_wait(const char* func, uint64_t ns) {
+    g_sync_wait_ns += ns;
+    if (ns < 5000000) return;
+    if (ns >= 200000000) {
+        static uint32_t logged = 0;
+        if (logged++ < 100) printf("[GLSYNCLONG] replay %llu: %s waited %.1f ms for Mesa's GL thread\n", (unsigned long long)g_replays,
+                                   func ? func : "?", ns / 1e6);
+    }
+    for (uint32_t i = 0; i < g_long_sync_used; ++i)
+        if (g_long_sync[i].func == func) { ++g_long_sync[i].n; g_long_sync[i].ns += ns; return; }
+    if (g_long_sync_used < 8) g_long_sync[g_long_sync_used++] = {func, 1, ns};
+}
 uint64_t g_tex_pre_made = 0, g_tex_pre_skipped = 0;   // log75 texture_prepass
 uint64_t g_dec_batches = 0, g_dec_wall_ns = 0, g_dec_work_ns = 0;   // log78 parallel decode: batches, wall time, summed work
-void note_texture_cost(const LswGpuTexDesc& d, uint64_t dec_ns, uint64_t up_ns) {
+void note_texture_cost(const LswGpuTexDesc& d, uint64_t dec_ns, uint64_t up_ns, uint64_t sync_ns) {
     TexCost& c = g_tex_cost[d.dxgi];
-    ++c.n; c.bytes += uint64_t(d.layer_bytes) * d.layers; c.dec_ns += dec_ns; c.up_ns += up_ns;
+    ++c.n; c.bytes += uint64_t(d.layer_bytes) * d.layers; c.dec_ns += dec_ns; c.up_ns += up_ns; c.sync_ns += sync_ns;
     static uint32_t logged = 0;
     if (dec_ns + up_ns >= 8000000 && logged < 300) {
         ++logged;
-        printf("[TEXSLOW] replay %llu: %ux%u x%u %s, mips %u, dxgi %u, %u KB: decode %.1f ms, upload %.1f ms\n",
+        printf("[TEXSLOW] replay %llu: %ux%u x%u %s, mips %u, dxgi %u, %u KB: decode %.1f ms, upload %.1f ms (%.1f waiting for Mesa's "
+               "GL thread)\n",
                (unsigned long long)g_replays, d.width, d.height, d.layers, d.dim == 2 && d.layers == 6 ? "cube" : "2d-array", d.mips,
-               d.dxgi, (d.layer_bytes * d.layers) >> 10, dec_ns / 1e6, up_ns / 1e6);
+               d.dxgi, (d.layer_bytes * d.layers) >> 10, dec_ns / 1e6, up_ns / 1e6, sync_ns / 1e6);
     }
 }
 void report_texture_cost() {
     if (g_tex_cost.empty()) return;
     std::string s;
-    uint32_t n = 0; uint64_t bytes = 0, dec = 0, up = 0;
+    uint32_t n = 0; uint64_t bytes = 0, dec = 0, up = 0, sync = 0;
     for (const auto& kv : g_tex_cost) {
         const TexCost& c = kv.second;
-        n += c.n; bytes += c.bytes; dec += c.dec_ns; up += c.up_ns;
+        n += c.n; bytes += c.bytes; dec += c.dec_ns; up += c.up_ns; sync += c.sync_ns;
         char b[96];
         snprintf(b, sizeof b, " %u:%u/%lluMB/%llu+%llums", kv.first, c.n, (unsigned long long)(c.bytes >> 20),
                  (unsigned long long)(c.dec_ns / 1000000), (unsigned long long)(c.up_ns / 1000000));
         s += b;
     }
-    printf("[TEXCOST] replay %llu: %u new textures, %llu MB, decode %llu ms, upload %llu ms | by dxgi count/MB/decode+upload:%s | "
+    printf("[TEXCOST] replay %llu: %u new textures, %llu MB, decode %llu ms, upload %llu ms (%llu waiting for Mesa's GL thread) | "
+           "by dxgi count/MB/decode+upload:%s | "
            "session: made before the draws %llu, left to the draw loop (resolve memory) %llu, parallel decode batches %llu "
            "(%llu ms of decode work in %llu ms)\n",
            (unsigned long long)g_replays, n, (unsigned long long)(bytes >> 20), (unsigned long long)(dec / 1000000),
-           (unsigned long long)(up / 1000000), s.c_str(), (unsigned long long)g_tex_pre_made, (unsigned long long)g_tex_pre_skipped,
+           (unsigned long long)(up / 1000000), (unsigned long long)(sync / 1000000), s.c_str(), (unsigned long long)g_tex_pre_made, (unsigned long long)g_tex_pre_skipped,
            (unsigned long long)g_dec_batches, (unsigned long long)(g_dec_work_ns / 1000000), (unsigned long long)(g_dec_wall_ns / 1000000));
     g_tex_cost.clear();
 }
@@ -1986,8 +2010,9 @@ GlTex get_texture(const uint32_t* fetch6) {
         const uint64_t td0 = gp_now();
         { RpScope rp(RP_DECODE); ok = lsw_gpu_decode_texture(fetch6, phys, &d) && d.ok; }
         const uint64_t td1 = gp_now();
+        const uint64_t sync0 = g_sync_wait_ns;
         if (ok) { RpScope rp(RP_TEXUP); t = create_texture(d); }
-        if (ok) note_texture_cost(d, td1 - td0, gp_now() - td1);
+        if (ok) note_texture_cost(d, td1 - td0, gp_now() - td1, g_sync_wait_ns - sync0);
         t.last_used = g_replays;
         g_tex_bytes += t.bytes;
         g_textures.emplace(key, t);
@@ -3619,9 +3644,9 @@ void texture_prepass(const LswGpuFrame& f, bool gpurt) {
         GlTex t;
         if (j.ok) {
             RpScope rp(RP_TEXUP);
-            const uint64_t u0 = gp_now();
+            const uint64_t u0 = gp_now(), sync0 = g_sync_wait_ns;
             t = create_texture(j.d);
-            note_texture_cost(j.d, j.ns, gp_now() - u0);
+            note_texture_cost(j.d, j.ns, gp_now() - u0, g_sync_wait_ns - sync0);
         }
         t.last_used = g_replays;
         g_tex_bytes += t.bytes;
@@ -3649,6 +3674,8 @@ PresentSrc replay() {
     uint64_t rp0[RP_COUNT];
     memcpy(rp0, g_rp, sizeof rp0);
     const uint32_t prog0 = g_prog_compiled, tex0 = g_tex_created;
+    const uint64_t sync0 = g_sync_wait_ns;
+    g_long_sync_used = 0;
     uint64_t ml_ns0, ml_cont0, ml_calls0;
     lsw_malloc_lock_stats(&ml_ns0, &ml_cont0, &ml_calls0);
     g_prog_pending_draws = 0;
@@ -4342,11 +4369,19 @@ PresentSrc replay() {
             snprintf(split + n, sizeof split - n, " other=%llu", (unsigned long long)((total > staged ? total - staged : 0) / 1000000));
             uint64_t ml_ns, ml_cont, ml_calls;
             lsw_malloc_lock_stats(&ml_ns, &ml_cont, &ml_calls);
+            char longs[320];
+            int ln = 0;
+            longs[0] = 0;
+            for (uint32_t i = 0; i < g_long_sync_used && ln < int(sizeof longs) - 64; ++i)
+                ln += snprintf(longs + ln, sizeof longs - ln, " %s %ux %llu ms", g_long_sync[i].func ? g_long_sync[i].func : "?",
+                               g_long_sync[i].n, (unsigned long long)(g_long_sync[i].ns / 1000000));
             printf("[GLSTALL] replay %llu took %llu ms, %u draws, %u skipped (program compiling), %zu programs queued | "
-                   "built %u programs, %u textures |%s | malloc lock: %llu ms waited, %llu of %llu contended\n",
+                   "built %u programs, %u textures |%s | malloc lock: %llu ms waited, %llu of %llu contended | waits for Mesa's GL "
+                   "thread %llu ms, of 5 ms or more:%s\n",
                    (unsigned long long)g_replays, (unsigned long long)ms, drawn, g_prog_pending_draws, queued,
                    g_prog_compiled - prog0, g_tex_created - tex0, split, (unsigned long long)((ml_ns - ml_ns0) / 1000000),
-                   (unsigned long long)(ml_cont - ml_cont0), (unsigned long long)(ml_calls - ml_calls0));
+                   (unsigned long long)(ml_cont - ml_cont0), (unsigned long long)(ml_calls - ml_calls0),
+                   (unsigned long long)((g_sync_wait_ns - sync0) / 1000000), g_long_sync_used ? longs : " none");
             fflush(stdout);
         }
     }
@@ -5291,6 +5326,11 @@ void glsync_hook(const char* func, uint64_t wait_ns) {
         if (g_glsync[i].func == func) { ++g_glsync[i].n; g_glsync[i].ns += wait_ns; return; }
     if (g_glsync_used < 64) g_glsync[g_glsync_used++] = {func, 1, wait_ns};
 }
+bool g_glsync_log = false;
+void glsync_count(const char* func, uint64_t wait_ns) {   // log80: always, with glthread on
+    note_sync_wait(func, wait_ns);
+    if (g_glsync_log) glsync_hook(func, wait_ns);
+}
 void glsync_report(uint32_t replays) {
     if (!g_glsync_used) return;
     std::sort(g_glsync, g_glsync + g_glsync_used, [](const GlSyncStat& a, const GlSyncStat& b) { return a.ns > b.ns; });
@@ -5322,7 +5362,10 @@ void enable_glthread() {
     _glapi_set_dispatch(_mesa_get_dispatch(ctx));
     void* after = _glapi_get_dispatch();
     printf("[GL] glthread %s (dispatch %p -> %p)\n", after != before ? "ON" : "did not engage", before, after);
-    if (after != before && env_on("LSWTCS_GLSYNCLOG", false)) lsw_glthread_sync_hook = glsync_hook;
+    if (after != before) {
+        g_glsync_log = env_on("LSWTCS_GLSYNCLOG", false);
+        lsw_glthread_sync_hook = glsync_count;
+    }
     g_glpipe = after != before && env_on("LSWTCS_GLPIPE", false);
     if (g_glpipe) printf("[GL] glthread pipeline ON: fences, arena upload and swap run on the worker (LSWTCS_GLPIPE=1)\n");
 }

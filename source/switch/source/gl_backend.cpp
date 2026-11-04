@@ -137,6 +137,9 @@ uint64_t g_frames_posted = 0;   // guest swaps
 uint64_t g_frames_done = 0;     // guest swaps the render thread has replayed and presented (under g_mtx)
 extern "C" void lswtcs_gil_blocking(void (*fn)(void*), void* arg);   // kernel_stubs.cpp
 extern "C" void lsw_malloc_lock_stats(uint64_t* wait_ns, uint64_t* contended, uint64_t* calls);   // platform_switch.cpp
+extern "C" void lsw_heap_stats(uint64_t* size, uint64_t* in_use, uint64_t* free_inside, uint64_t* untouched);   // platform_switch.cpp
+extern "C" uint32_t lsw_heap_free_mb();                                                                         // platform_switch.cpp
+extern "C" void lsw_bridge_counts(uint32_t* shaders, uint32_t* translations, uint32_t* memo, uint32_t* memo_clears);   // gl_bridge.cc
 
 bool env_on(const char* name, bool def) {
     const char* e = getenv(name);
@@ -348,6 +351,18 @@ std::condition_variable g_prog_done_cv;   // a worker published a program (rende
 // second and the hub's first seconds had 0.3-0.6 s of empty audio per second, at normal frame rates. LSWTCS_GLWORKER1=always: as before.
 std::condition_variable g_prog_cv1;
 std::atomic<bool> g_prog_frame_wait{false};
+// log73: while a replay waits for its programs, worker 0 runs above the audio threads on core 2 (LSWTCS_GLWAITBOOST, default 0x2A;
+// 0 = off). Run 73 (a level never seen before): the game's new program went to worker 0 at once, the render thread found nothing
+// left to build and waited 500-600 ms for one program that takes about 100 ms, worker 0 sharing core 2 at 0x2D with the audio
+// threads (0x2B) and the log writer and Mesa's thread (0x2C). The audio is held during the wait anyway (host_audio_hold).
+Handle g_worker0_handle = INVALID_HANDLE;
+// log73: saved programs not yet asked for are not compiled while the heap has less than LSWTCS_GLKEEPMB free (default 384 MB);
+// such a program is built on request if the game asks for it later.
+uint32_t g_prog_dropped = 0;
+uint32_t keep_free_mb() {
+    static const uint32_t mb = [] { const char* e = getenv("LSWTCS_GLKEEPMB"); return e ? uint32_t(atoi(e)) : 384u; }();
+    return mb;
+}
 std::vector<uint64_t> g_frame_wait;      // render thread: content keys the current replay waits for
 // LSWTCS_GLWAIT (default 1): a replay whose programs are not built yet waits for them, the render thread
 // building queued programs itself next to the workers (all of a new scene's programs in parallel; the
@@ -610,6 +625,7 @@ void compile_worker_main(int index) {
         pin_to_core(2, "shader-compile worker");
         const Result rc = svcSetThreadPriority(CUR_THREAD_HANDLE, 0x2D);
         printf("[NX] shader-compile worker 0 priority 0x2D (rc 0x%X)\n", rc);
+        g_worker0_handle = threadGetCurHandle();
     }
     if (!eglMakeCurrent(g_display, EGL_NO_SURFACE, EGL_NO_SURFACE, g_worker_ctx[index])) {
         printf("[GLPROG] worker %d: eglMakeCurrent failed (0x%X)\n", index, eglGetError());
@@ -632,6 +648,18 @@ void compile_worker_main(int index) {
             g_prog_queue.pop_front();
             auto it = g_prog_entries.find(job.first);
             if (it != g_prog_entries.end() && it->second.state != kProgQueued) continue;   // duplicate
+            if (it != g_prog_entries.end() && !it->second.requested) {
+                const uint32_t free_mb = lsw_heap_free_mb();
+                if (free_mb < keep_free_mb()) {   // erased: a later request queues it again with its sources
+                    g_prog_entries.erase(it);
+                    if (g_prog_dropped++ == 0) {
+                        printf("[HEAP] %u MB free: saved programs not asked for are no longer compiled (LSWTCS_GLKEEPMB=%u)\n",
+                               free_mb, keep_free_mb());
+                        fflush(stdout);
+                    }
+                    continue;
+                }
+            }
         }
         const uint64_t t0 = gp_now();
         static const bool steps = env_on("LSWTCS_GLSTEPS", false);   // DIAG: log each worker step
@@ -665,6 +693,7 @@ void compile_worker_main(int index) {
 
 // Render thread, LSWTCS_GLWAIT: build queued programs here too until every program in g_frame_wait is
 // settled (the workers take from the same queue; whichever is free takes the next one).
+extern uint64_t g_replays;   // defined with the texture cache below
 void wait_frame_programs() {
     auto pending = [] {
         for (uint64_t k : g_frame_wait) {
@@ -673,12 +702,19 @@ void wait_frame_programs() {
         }
         return false;
     };
+    static const int boost = [] { const char* e = getenv("LSWTCS_GLWAITBOOST"); return e ? int(strtol(e, nullptr, 0)) : 0x2A; }();
     std::unique_lock<std::mutex> lk(g_prog_mtx);
-    if (pending()) {
-        host_audio_hold(true);   // the game's audio waits with the picture (audio_switch.cpp)
-        g_prog_frame_wait.store(true, std::memory_order_relaxed);
-        g_prog_cv1.notify_all();
-    }
+    if (!pending()) { g_frame_wait.clear(); return; }
+    host_audio_hold(true);   // the game's audio waits with the picture (audio_switch.cpp)
+    g_prog_frame_wait.store(true, std::memory_order_relaxed);
+    g_prog_cv1.notify_all();
+    const bool boosted = boost > 0 && g_worker0_handle != INVALID_HANDLE &&
+                         R_SUCCEEDED(svcSetThreadPriority(g_worker0_handle, boost));
+    const uint64_t wait_t0 = gp_now();
+    const uint32_t compiled0 = g_prog_compiled;
+    const size_t waited_for = g_frame_wait.size();
+    uint32_t here_n = 0;
+    uint64_t here_ns = 0, here_max = 0;
     while (pending()) {
         if (!g_prog_queue.empty()) {
             auto job = std::move(g_prog_queue.front());
@@ -695,12 +731,25 @@ void wait_frame_programs() {
             e.prog = prog;
             ++g_prog_compiled;
             g_prog_compile_ns += dt;
+            ++here_n;
+            here_ns += dt;
+            here_max = std::max(here_max, dt);
         } else {
             g_prog_done_cv.wait(lk);   // the rest is being built by workers
         }
     }
+    if (boosted) svcSetThreadPriority(g_worker0_handle, 0x2D);
     g_prog_frame_wait.store(false, std::memory_order_relaxed);
     host_audio_hold(false);
+    const uint64_t wait_ms = (gp_now() - wait_t0) / 1000000;
+    if (wait_ms >= 100) {   // log73: who built what while the picture waited
+        printf("[GLWAIT] replay %llu waited %llu ms for %zu programs: %u built here (%llu ms, longest %llu ms), %u by the workers meanwhile, "
+               "%zu still queued, worker 0 %s\n",
+               (unsigned long long)g_replays, (unsigned long long)wait_ms, waited_for, here_n,
+               (unsigned long long)(here_ns / 1000000), (unsigned long long)(here_max / 1000000), g_prog_compiled - compiled0 - here_n,
+               g_prog_queue.size(), boosted ? "raised" : "not raised");
+        fflush(stdout);
+    }
     g_frame_wait.clear();
 }
 
@@ -3806,6 +3855,27 @@ PresentSrc replay() {
                    (unsigned long long)(ml_cont - ml_cont0), (unsigned long long)(ml_calls - ml_calls0));
             fflush(stdout);
         }
+    }
+    if (g_replays % 150 == 0) {   // log73: the host heap and what the render path keeps (run 73: std::bad_alloc after 592 s)
+        uint64_t hs, hu, hf, ht;
+        lsw_heap_stats(&hs, &hu, &hf, &ht);
+        uint32_t bs, bt, bm, bc;
+        lsw_bridge_counts(&bs, &bt, &bm, &bc);
+        size_t entries, queued;
+        uint32_t compiled, dropped;
+        {
+            std::lock_guard<std::mutex> lk(g_prog_mtx);
+            entries = g_prog_entries.size(); queued = g_prog_queue.size(); compiled = g_prog_compiled; dropped = g_prog_dropped;
+        }
+        printf("[HEAP] replay %llu: heap %llu MB, in use %llu MB, free %llu MB (inside %llu, top %llu) | programs %u compiled, %zu known, "
+               "%zu queued, %u not compiled (low memory), %zu in use, %zu stages | textures %zu (%llu MB), memo %zu, samplers %zu, fbos %zu, "
+               "RT %llu MB | guest shaders %u, translations %u, address memo %u (cleared %u)\n",
+               (unsigned long long)g_replays, (unsigned long long)(hs >> 20), (unsigned long long)(hu >> 20),
+               (unsigned long long)((hf + ht) >> 20), (unsigned long long)(hf >> 20), (unsigned long long)(ht >> 20),
+               compiled, entries, queued, dropped, g_programs.size(), g_stages.size(), g_textures.size(),
+               (unsigned long long)(g_tex_bytes >> 20), g_tex_memo.size(), g_samplers.size(), g_draw_fbos.size(),
+               (unsigned long long)(g_rt_bytes >> 20), bs, bt, bm, bc);
+        fflush(stdout);
     }
     if (gldiag_on() && (g_replays <= 5 || (g_replays % 120) == 0)) {
         {

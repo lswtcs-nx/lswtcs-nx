@@ -18,6 +18,8 @@
 #include <mutex>
 #include <thread>
 #include <typeinfo>
+#include <malloc.h>
+#include <new>
 #ifndef LSW_DEKO_BACKEND
 extern "C" void lsw_bo_check_init(uint64_t);
 extern "C" void lsw_bo_check_dump(FILE*, const uintptr_t*, size_t);
@@ -477,6 +479,38 @@ extern "C" void lsw_malloc_lock_stats(uint64_t* wait_ns, uint64_t* contended, ui
     *calls = s_malloc_calls;
 }
 
+// Host heap (log73). Run 73 aborted with std::bad_alloc on the walker thread after 592 s, and nothing in the log said how full
+// the heap was. libnx gives newlib's malloc one range (fake_heap_start..fake_heap_end, all the memory left at start); malloc grows
+// into it with sbrk and never hands memory back, so what is free = the untouched top + freed chunks inside (mallinfo fordblks).
+// The guest window and Mesa's buffer objects come out of the same heap.
+extern "C" char* fake_heap_start;
+extern "C" char* fake_heap_end;
+extern "C" void lsw_heap_stats(uint64_t* size, uint64_t* in_use, uint64_t* free_inside, uint64_t* untouched) {
+    const struct mallinfo mi = mallinfo();
+    char* const brk = static_cast<char*>(sbrk(0));
+    *size = uint64_t(fake_heap_end - fake_heap_start);
+    *in_use = mi.uordblks;
+    *free_inside = mi.fordblks;
+    *untouched = (brk != reinterpret_cast<char*>(-1) && brk >= fake_heap_start && brk <= fake_heap_end) ? uint64_t(fake_heap_end - brk) : 0;
+}
+// Free memory left, in MB (untouched top + free chunks).
+extern "C" uint32_t lsw_heap_free_mb() {
+    uint64_t size, used, inside, top;
+    lsw_heap_stats(&size, &used, &inside, &top);
+    return uint32_t((inside + top) >> 20);
+}
+// A C++ allocation failed: log the heap once, then let the retry throw std::bad_alloc as before (no allocation in here).
+static void lsw_new_failed() {
+    std::set_new_handler(nullptr);
+    uint64_t size, used, inside, top;
+    lsw_heap_stats(&size, &used, &inside, &top);
+    char line[192];
+    snprintf(line, sizeof line, "[HEAP] C++ allocation failed: heap %llu MB, in use %llu MB, free inside %llu MB, untouched top %llu MB\n",
+             (unsigned long long)(size >> 20), (unsigned long long)(used >> 20), (unsigned long long)(inside >> 20), (unsigned long long)(top >> 20));
+    fputs(line, stdout);
+    fflush(stdout);
+}
+
 // ---- init -----------------------------------------------------------------------------------
 extern "C" void lsw_boot_mark(const char* what);   // main.cpp: [BOOT] milliseconds since the process started
 extern "C" bool lsw_switch_init() {
@@ -513,6 +547,13 @@ extern "C" bool lsw_switch_init() {
     printf("[NX] TotalMemory %llu MB, UsedMemory %llu MB at start\n",
            (unsigned long long)(info_u64(InfoType_TotalMemorySize) >> 20),
            (unsigned long long)(info_u64(InfoType_UsedMemorySize) >> 20));
+    {
+        std::set_new_handler(lsw_new_failed);
+        uint64_t size, used, inside, top;
+        lsw_heap_stats(&size, &used, &inside, &top);
+        printf("[HEAP] at start: heap %llu MB, in use %llu MB, untouched top %llu MB\n", (unsigned long long)(size >> 20),
+               (unsigned long long)(used >> 20), (unsigned long long)(top >> 20));
+    }
     load_env_file(LSW_DATA_DIR "/env.txt");
     lsw_boot_mark("logs open, settings read");   // (log68) the steps of the 8.4 s before the save storage was up in run 67
     lsw_hw_monitor_start();

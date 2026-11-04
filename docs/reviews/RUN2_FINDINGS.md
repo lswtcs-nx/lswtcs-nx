@@ -2591,3 +2591,47 @@ One session for the author's update: the hub, then `Gungan_A` to `E`, a single p
 | `Gungan_E` | - | 33.1 | - |
 
 The draw-count bands used for the previous update no longer fit handheld: with the GPU as the limit, frames with fewer draws are not lighter. Run 71's heavy-band 2500-4000 reading of 37 FPS came from 14 s of frames.
+
+## Run 73: `0.0.78-log72` handheld, a level never seen before, crash
+
+One session: the hub, then Episode I `PalaceRescue` (`Rescue_A`, `b`, `c`, `b` again, `e`). The tester felt uneven frame pacing and stutters. The game ended at 592 s.
+
+**Crash:**
+- `std::bad_alloc` on the walker thread, then `abort()`.
+- Stack: `operator new` < the rehash of `get_shader`'s address memo (`gl_bridge.cc:132`) < `prepare_full` < `pm4_extract_ib` < `async_walker_body`.
+- No GL error before it (every `[GLDRAW]` err 0x0), and no log line gives the host heap's use, so the cause is not proven.
+- Different from runs 68-72: the workers compiled 1122 programs (950-969 before). Run 70 ran 600 s without a crash.
+- The address memo is never trimmed. Its key is the microcode's address, and each entry keeps a copy of the microcode.
+- The tester's `glprogs2` after this run: 1288 programs, 56 MB of GLSL, median 45 KB. The next boot compiles all of them.
+
+**FPS by place** (same filter as run 72):
+
+| Place | FPS | p95 frame |
+| --- | --- | --- |
+| Hub | 38.0 | 40 ms |
+| `Rescue_A` | 28.5 | 42 ms |
+| `Rescue_b` | 30.0 | 43 ms |
+| `Rescue_c` | 26.3 | 50 ms |
+| `Rescue_e` | 30.5 | 38 ms |
+
+**Stutters:**
+- Frames of 250 ms or more: 6.5 % of play time in `PalaceRescue`, 1.7 % in run 72's `Gungan`.
+- Most are first-use program builds: 156 programs built while the picture waited, 174 ms each (runs 66-72: at most 23, 3-21 ms each).
+- Four waits were for one program alone, 499-601 ms each.
+- Worker time per program grew from run to run: 91 ms (run 66), 136 (run 71), 193 (run 72), 249 (run 73). From log71, worker 0 shares core 2 at 0x2D with the guest audio thread and `xma` (0x2B) and with the log writer and Mesa's thread (0x2C).
+- A new program goes to worker 0 at once, so the render thread finds nothing left to build and waits.
+- Entering an area also decodes and uploads 100-160 textures in one frame: about 0.3-0.6 s decoding and 0.7-1.1 s uploading.
+- Steady frames vary: 28-36 ms for 56 % of frames, 36-45 ms for 28 %. On a 60 Hz display that alternates between 2 and 3 refreshes. This is the frame rate itself, not a pacing fault.
+
+## Log 73: `0.0.79-log73`
+
+- **`[HEAP]` every 150 replays:**
+  - The host heap: size, in use, free inside, untouched top.
+  - Programs: compiled, known, queued, not compiled for memory, in use.
+  - Stages, textures, the texture memo, samplers, FBOs and render-target MB.
+  - Guest shaders, translations, and the address memo with its clears.
+- **Allocation failure handler:** a failed C++ allocation logs `[HEAP] C++ allocation failed` with the heap's figures, then throws as before.
+- **Address memo capped at 8192 entries.** When full it is emptied (the bucket array too). The shaders themselves stay.
+- **Saved programs not asked for stop compiling when the heap has less than `LSWTCS_GLKEEPMB` free** (default 384 MB). One `[HEAP]` line says when this starts. Such a program is built if the game asks for it.
+- **Worker 0 at 0x2A while a replay waits for its programs** (`LSWTCS_GLWAITBOOST`, 0 = off), back to 0x2D after. The audio is already held during the wait.
+- **`[GLWAIT]` for waits of 100 ms or more:** programs waited for, built on the render thread (ms, longest), built by the workers meanwhile, and whether worker 0 was raised.

@@ -384,3 +384,18 @@ The measurements below are from heavy frames (1300+ draws, the start of `Gungan_
 **Run 64:** inlinable guest calls changed nothing (CPU per guest call 161 ns against 156-158; the same profile). The main thread's time is inside large guest functions: memory accesses through the region table, writes back into `ctx`, float compares and FPCR switches. Options left on the CPU side are in RUN2_FINDINGS.md, run 64. None is expected to reach 10 % alone.
 
 **Loading (log65):** the tester turned to load times. During loads, two loader threads hold the guest turn while blocked on the card, about 30 % of the time, so reading and processing never overlap. log65 tries freeing the turn during file calls, plus 512 KB reads, in modes cycled over loads (RUN2_FINDINGS.md, log 65). Run 64's loads: hub to Gungan 7-8 s, Gungan to hub about 21 s.
+
+## mk9-nx study (4 November 2026)
+
+mk9-nx (Thorhax, Mortal Kombat Komplete Edition, ReXGlue recompilation on deko3d, GPL-3.0: techniques only, no code) runs 60 FPS at CPU 1785 MHz. Read: `docs/mk9-notes.md`, `app/perf_overrides.toml`, `app/jobs.toml`. Compared with run 72's profile: the guest main thread holds 88 % of the turn samples; its profile is flat (top function `sub_8231ED30`, a vector matrix routine, 4.7 %).
+
+**Worth trying here:**
+
+| Technique | Their result | Here |
+| --- | --- | --- |
+| Guest loads and stores without `volatile`, plus a compiler barrier at every loop header (GCC turns polling loops into infinite loops without it) | +15-20 % FPS in masseffect-nx | Route 2 item 3, not done. Fits a flat profile. Do it on a copy of the generated output; A/B pair, docked. |
+| Read-only image constants folded into the code; float loads straight into the vector unit | 58.8 -> 59.2 FPS | Small; could ride with the item above. |
+| First controller to press Start or A becomes player 1 | fixed a sign-in prompt from a second controller | Fallback for co-op order if log72's Joy-Con merge leaves cases. |
+| Switch button icons drawn over the Xbox icon atlas at texture upload (known atlas by hash, re-encode touched blocks) | all prompts right | Cosmetic; the tester's and the author's call. |
+
+**Already here or not useful:** registers as locals (`lswtcs_locals.toml`); `skip_msr`, their largest gain (11 -> 47 FPS), removed a global lock our `mtmsrd` never had (it only stores `ctx.msr`); native sound mixer (our guest audio thread is 2 % of the turn and the reverb is already native); physical allocation scan (ours is a bump allocator); critical section spin (one core under the turn); store cards instead of render-thread hashing (render thread is not the limit, and every guest store pays for them); drawing nothing while a pipeline compiles (they turned it off: coloured triangles; we wait, as they now do); LTO (run 64, no gain).

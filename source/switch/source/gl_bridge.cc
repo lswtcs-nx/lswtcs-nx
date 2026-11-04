@@ -124,9 +124,20 @@ uint64_t hash_ucode(const uint32_t* p, uint32_t n) {
 // Within one memory epoch no guest code has run, so the same address needs no memcmp at all (3 % of the walker in run 8).
 struct UcodeMemo { std::vector<uint32_t> be; SpirvShader* shader = nullptr; uint32_t epoch = 0; };
 extern "C" uint32_t lsw_gpu_shm_epoch();
+// Sizes for the [HEAP] line (log73), written by the walker, read by the render thread.
+std::atomic<uint32_t> g_memo_size{0}, g_memo_clears{0}, g_shader_count{0}, g_gl_count{0};
+constexpr size_t kMemoMax = 8192;
 
 SpirvShader* get_shader(Bridge& b, xenos::ShaderType type, const uint32_t* ucode_be, uint32_t dwords) {
   static std::unordered_map<uint64_t, UcodeMemo> memo_map;
+  // Bounded since log73. The key is the microcode's address, so a shader loaded at a new address (each level's load) or sent
+  // inline in the command buffer (IM_LOAD_IMMEDIATE: a new address as the ring moves on) adds an entry for good, each with a copy
+  // of the microcode. Run 73 aborted with std::bad_alloc in this map's rehash after 592 s. A clear only costs one hash per address
+  // again; the shaders stay in b.shaders. The swap also returns the bucket array.
+  if (memo_map.size() >= kMemoMax) {
+    std::unordered_map<uint64_t, UcodeMemo>().swap(memo_map);
+    g_memo_clears.fetch_add(1, std::memory_order_relaxed);
+  }
   const uint64_t mkey = uint64_t(reinterpret_cast<uintptr_t>(ucode_be)) ^ (uint64_t(dwords) << 40) ^
                         (type == xenos::ShaderType::kPixel ? 0x8000000000000000ull : 0);
   UcodeMemo& memo = memo_map[mkey];
@@ -154,10 +165,12 @@ SpirvShader* get_shader(Bridge& b, xenos::ShaderType type, const uint32_t* ucode
     }
     raw = sh.get();
     b.shaders.emplace(key, std::move(sh));
+    g_shader_count.store(uint32_t(b.shaders.size()), std::memory_order_relaxed);
   }
   memo.be.assign(ucode_be, ucode_be + dwords);
   memo.shader = raw;
   memo.epoch = epoch;
+  g_memo_size.store(uint32_t(memo_map.size()), std::memory_order_relaxed);
   return raw;
 }
 
@@ -275,6 +288,7 @@ const LswGlShader* get_glsl(Bridge& b, SpirvShader& shader, uint64_t modificatio
   }
   const LswGlShader* raw = out.get();
   b.gl.emplace(key, std::move(out));
+  g_gl_count.store(uint32_t(b.gl.size()), std::memory_order_relaxed);
   return raw;
 }
 
@@ -463,6 +477,14 @@ const char* memo_differs(const LswGpuDraw& a, const Bridge& b, const LswGpuDraw&
 }
 
 }  // namespace
+
+// [HEAP] (log73): guest shaders known, their GL translations, address memo entries and how often the memo was cleared.
+extern "C" void lsw_bridge_counts(uint32_t* shaders, uint32_t* translations, uint32_t* memo, uint32_t* memo_clears) {
+  *shaders = g_shader_count.load(std::memory_order_relaxed);
+  *translations = g_gl_count.load(std::memory_order_relaxed);
+  *memo = g_memo_size.load(std::memory_order_relaxed);
+  *memo_clears = g_memo_clears.load(std::memory_order_relaxed);
+}
 
 extern "C" uint32_t lsw_gpu_system_constants_size(void) {
   return kLswGlClipPlaneOffset + kLswGlClipPlaneSize;

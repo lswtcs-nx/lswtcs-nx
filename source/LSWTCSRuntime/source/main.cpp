@@ -17,6 +17,7 @@ extern "C" bool lsw_initialize_kernel_variables();
 #include <cstdlib>
 #include <cstring>
 #include <cstdint>
+#include <chrono>
 #include <signal.h>
 #include <windows.h>
 
@@ -1157,9 +1158,19 @@ extern "C" void lsw_deko_resources_prepare(uint8_t* physical,size_t bytes);
 extern "C" uint8_t* lsw_switch_guest_window(size_t size);   // reserves + backs the used ranges
 #endif
 
+// [BOOT] (log67): milliseconds since main() began, at the steps of the boot (here, the render thread in gl_backend.cpp, the first
+// guest frame in VdSwap), to see where the time before the first frame goes (run 66: about 16 s, the guest 94-99 % idle).
+extern "C" void lsw_boot_mark(const char* what) {
+    static const auto t0 = std::chrono::steady_clock::now();
+    const long long ms = (long long)std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
+    printf("[BOOT] %lld ms %s\n", ms, what);
+    fflush(stdout);
+}
 int main() {
+    lsw_boot_mark("main");
 #ifdef __SWITCH__
     if (!lsw_switch_init()) return 1;   // selected user's native save must be available
+    lsw_boot_mark("platform and save storage up");
 #ifdef LSW_DEKO_BACKEND
     extern int lsw_deko_startup_check();
     const int diagnostic = lsw_deko_startup_check();
@@ -1307,6 +1318,7 @@ int main() {
     fclose(f);
     printf("[INIT] Loaded image.bin: 0x%zX bytes\n", nread);
     lsw_text_patch_image(g_base + PPC_IMAGE_BASE, nread);   // log65: the console's name in the save messages (kernel_stubs.cpp)
+    lsw_boot_mark("image loaded");
 
     // image.bin is a RAM dump of a RUNNING Xenia instance. Diffed against the pristine
     // image decrypted from Default.xex (XenonUtils Image::ParseImage -> pristine.bin):
@@ -1702,6 +1714,7 @@ int main() {
             printf("[INIT] TABLEGUARD VirtualProtect failed: %lu\n", GetLastError());
     }
 
+    lsw_boot_mark("patches done, calling _xstart");
     printf("[INIT] Calling _xstart at 0x8229E618\n");
     lswtcs_gil_enter();  // main thread joins the GIL (LSWTCS_GIL)
     _xstart(ctx, g_base);

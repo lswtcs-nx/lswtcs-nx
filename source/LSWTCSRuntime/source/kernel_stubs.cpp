@@ -619,6 +619,7 @@ enum : uint32_t { kLoadTurnFree = 1, kLoadBigReads = 2 };
 enum { kLoadRead, kLoadOpen, kLoadAttr, kLoadKinds };
 static std::atomic<uint32_t> g_load_mode{0};
 static std::atomic<uint32_t> g_load_swap{0};   // VdSwap count, for the reports
+extern "C" void lsw_boot_mark(const char* what);   // main.cpp: [BOOT] (log67)
 extern "C" void lsw_level_name(char* out, size_t capacity);   // native_crt.cpp
 extern std::atomic<uint64_t> g_file_bytes_read;   // below: bytes the game read, per call
 namespace {
@@ -7549,6 +7550,7 @@ PPC_FUNC(__imp__VdSwap) {
                 g_geom_vert_ready, g_geom_vert_ready/6, g_geom_flat, g_geom_tex, g_geom_skip);
       g_geom_flat=g_geom_tex=g_geom_skip=0; }
     load_ep_poll(uint32_t(count));   // [LOADEP]
+    if (count == 1 || count == 300) { lsw_boot_mark(count == 1 ? "first guest frame" : "guest frame 300"); }
     // Asset-load probe: bytes read from disk per ~2s window. Non-zero in steady state ⇒
     // still streaming assets; ~0 ⇒ load done/idle (gate is elsewhere, not disk).
     { static int _rf=0; static uint64_t _last=0;

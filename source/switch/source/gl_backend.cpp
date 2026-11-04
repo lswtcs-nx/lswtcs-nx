@@ -50,6 +50,7 @@ extern std::atomic<uint32_t> g_capture_request;   // win32_switch.cpp: capture c
 extern std::atomic<uint32_t> g_ab_toggle_request;   // win32_switch.cpp: A/B toggle combo (L + R + left stick)
 extern std::atomic<bool> g_frame_light;   // win32_switch.cpp: pad layout "auto" reads it (light or frozen frames: a menu)
 extern "C" void lsw_load_light_edge(uint32_t replay);   // kernel_stubs.cpp: a light stretch began, the load mode moves on
+extern "C" void lsw_boot_mark(const char* what);   // main.cpp: [BOOT] milliseconds since the process started (log67)
 extern "C" void lsw_ft_ring_dump();   // kernel_stubs.cpp: game frame times of the last 120 swaps ([FTRING])
 extern "C" void lsw_sched_ab_set(int audioprio, int walkoff);   // kernel_stubs.cpp: LSWTCS_ABCYCLE
 extern "C" void lsw_shm_frame_hash_set(int on);                 // kernel_stubs.cpp: H
@@ -652,8 +653,12 @@ void program_cache_init() {
     g_driver_hash = XXH3_64bits(drv.data(), drv.size());
     if (g_binary_cache_on) mkdir("glcache", 0777);
     if (prog_list_on()) mkdir(LSW_PROGLIST_DIR, 0777);
-    uint32_t queued = 0;
-    if (g_num_workers > 0 && prog_list_on())
+    // The saved programs (about 950 files, 48 MB) were read here, on the render thread, before the first frame; the guest sat 94-99 %
+    // idle meanwhile (run 66). Now a reader thread queues them while the game boots (log67, LSWTCS_GLPROGBG, default on). A program
+    // the game asks for before the reader gets to it is built on request as before; the reader then skips its key.
+    auto read_list = [] {
+        const uint64_t t0 = gp_now();
+        uint32_t queued = 0;
         if (DIR* d = opendir(LSW_PROGLIST_DIR)) {
             while (dirent* de = readdir(d)) {
                 const char* n = de->d_name;
@@ -665,19 +670,34 @@ void program_cache_init() {
                 s.vs = lsw_glsl_fold_fetch(s.vs);   // saved before fetch folding: what the game will now ask for
                 s.ps = lsw_glsl_fold_fetch(s.ps);
                 const uint64_t ckey = program_cache_key(s);   // driver changed -> different key: still compiled
-                std::lock_guard<std::mutex> lk(g_prog_mtx);
-                if (g_prog_entries.count(ckey)) continue;
-                g_prog_entries[ckey] = ProgEntry{};
-                g_prog_queue.emplace_back(ckey, std::move(s));
-                ++queued;
+                {
+                    std::lock_guard<std::mutex> lk(g_prog_mtx);
+                    if (g_prog_entries.count(ckey)) continue;
+                    g_prog_entries[ckey] = ProgEntry{};
+                    g_prog_queue.emplace_back(ckey, std::move(s));
+                    ++queued;
+                    g_prog_boot_queued = queued;
+                }
+                g_prog_cv.notify_one();
             }
             closedir(d);
         }
-    g_prog_boot_queued = queued;
+        printf("[GLPROG] %u saved programs queued for background compile in %llu ms\n", queued, (unsigned long long)((gp_now() - t0) / 1000000));
+        fflush(stdout);
+    };
     for (int i = 0; i < g_num_workers; ++i) std::thread(compile_worker_main, i).detach();
+    const bool list = g_num_workers > 0 && prog_list_on();
+    if (list && env_on("LSWTCS_GLPROGBG", true)) {
+        std::thread([read_list] {
+            svcSetThreadPriority(CUR_THREAD_HANDLE, 0x3B);   // lowest application priority: the game's own loading comes first
+            read_list();
+        }).detach();
+    } else if (list) {
+        read_list();
+    }
     g_prog_cv.notify_all();
-    printf("[GLPROG] %d compile workers; %u saved programs queued for background compile; binary cache %s (%d formats)\n",
-           g_num_workers, queued, g_binary_cache_on ? "ON" : "off", formats);
+    printf("[GLPROG] %d compile workers; saved programs read %s; binary cache %s (%d formats)\n", g_num_workers,
+           !list ? "never" : env_on("LSWTCS_GLPROGBG", true) ? "in the background" : "now", g_binary_cache_on ? "ON" : "off", formats);
     fflush(stdout);
 }
 
@@ -1925,8 +1945,14 @@ void apply_state(const LswGpuDrawRec& r, const DrawTarget& dt) {
         if (i >= dt.nrt) cm = 0;
         glColorMaski(i, cm & 1, (cm >> 1) & 1, (cm >> 2) & 1, (cm >> 3) & 1);
     }
-    // Depth (RB_DEPTHCONTROL: bit1 enable, bit2 write, 4-6 func; Xenos and GL compare orders match).
-    const bool zen = (r.depthcontrol >> 1) & 1, zwr = (r.depthcontrol >> 2) & 1;
+    // Depth (RB_DEPTHCONTROL: bit1 enable, bit2 write, 4-6 func; Xenos and GL compare orders match). With the test off, Xenos does
+    // not write depth either (as D3D's ZENABLE, and Xenia's normalized depth control). Until log67 the write was kept, as an
+    // always-passing test: a box the game draws before the characters with 0x734 (test off, write bit on, alpha blended:
+    // CDF1199F, in every capture since run 17) stamped its depth over them. What lay behind it then failed the test and stayed
+    // black (the dark outlines under the bricks), and the studs' dark decal drawn after it (85DC6248) passed over the characters
+    // standing on the bricks (run 66, zprobe_8197). LSWTCS_ZWRITE_NOTEST=1 brings the old behaviour back.
+    static const bool write_without_test = env_on("LSWTCS_ZWRITE_NOTEST", false);
+    const bool zen = (r.depthcontrol >> 1) & 1, zwr = ((r.depthcontrol >> 2) & 1) && (zen || write_without_test);
     if (zen || zwr) {
         glEnable(GL_DEPTH_TEST);
         glDepthFunc(zen ? GL_NEVER + ((r.depthcontrol >> 4) & 7) : GL_ALWAYS);
@@ -3051,16 +3077,21 @@ PresentSrc replay() {
             const bool frozen = now.size() >= 30 && fresh * 100 <= now.size();
             static uint32_t frozen_run = 0, live_run = 0;
             if (frozen) { ++frozen_run; live_run = 0; } else { ++live_run; frozen_run = 0; }
+            // No scene at all (log67): the hub's character selection draws 171 records, all HUD (144 in the 720-row viewport),
+            // and no scene draw, so it was neither light nor frozen (run 66). Play always has hundreds of scene draws.
+            static uint32_t noscene_run = 0;
+            if (now.size() < 30 && f.draws.size() >= 150) ++noscene_run; else noscene_run = 0;
             static bool menu = false;
             const bool was = menu;
-            if (light_run >= 30 || frozen_run >= 20) menu = true;
-            else if (heavy_run >= 3 && live_run >= 3) menu = false;
+            if (light_run >= 30 || frozen_run >= 20 || noscene_run >= 10) menu = true;
+            else if (heavy_run >= 3 && live_run >= 3 && now.size() >= 30) menu = false;
             if (menu != was) {
                 g_frame_light.store(menu, std::memory_order_relaxed);
                 static uint32_t lines = 0;
                 if (lines++ < 400) {
                     printf("[MENUPROBE] replay %llu: %s (%zu records, %zu scene draws, %zu new, %u HUD-viewport draws)\n", (unsigned long long)g_replays,
-                           menu ? (light_run >= 30 ? "light, a menu or a loading screen" : "frozen scene, a menu") : "play", f.draws.size(), now.size(), fresh, ui);
+                           menu ? (light_run >= 30 ? "light, a menu or a loading screen" : noscene_run >= 10 ? "no scene, a menu" : "frozen scene, a menu") : "play",
+                           f.draws.size(), now.size(), fresh, ui);
                     fflush(stdout);
                 }
             }
@@ -4642,13 +4673,18 @@ void render_thread_main() {
     { s32 p = 0; if (R_SUCCEEDED(svcGetThreadPriority(&p, CUR_THREAD_HANDLE))) g_render_prio_start = p; }
     lsw_prof_register("render", -1);
     lsw_core_load_start();
+    lsw_boot_mark("render thread start");
     g_gl_ok = egl_init();
+    lsw_boot_mark("EGL and Mesa up");
     if (g_gl_ok) resources_init();
+    lsw_boot_mark("GL resources");
     if (g_gl_ok) program_cache_init();
+    lsw_boot_mark("program cache started");
     if (g_gl_ok && env_on("LSWTCS_GLTEST", false)) gl_self_test();
     if (g_gl_ok && env_on("LSWTCS_GLBENCH", false)) gl_bench();
     if (g_gl_ok && env_on("LSWTCS_GLDEPTHPROBE", false)) gl_depth_probe();
     if (g_gl_ok) enable_glthread();
+    lsw_boot_mark("render thread ready");
     fflush(stdout);
     uint64_t presented = 0, swaps = 0;
     for (;;) {

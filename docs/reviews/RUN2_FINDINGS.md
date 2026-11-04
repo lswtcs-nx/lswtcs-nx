@@ -2314,3 +2314,63 @@ The tester asked whether loading can be made faster. Built after run 64; not run
   - Each full capture now gives every draw's `c03=` hash, and prints each distinct block once (`[GLCAPVP]`). Studs drawn with another camera (stale constants) would show there.
   - A toggle combo: hold L + R and click the left stick to step through `LSWTCS_ABTOGGLE` (`[ABTOGGLE]`; frames.log records each state). The toggled state holds until the next press. The profile steps through the base parts that reuse or skip data between frames: P, H and S together, then H alone, P alone, S alone.
   - The fault predates the GPU letters, and run 17 showed tile merging is not the cause.
+
+## Run 65 and log66 (in brief, documented with log67)
+
+**Run 65** (`0.0.71-log65`, handheld):
+- Save dates and the "Xbox 360" text replacements were right, as the tester confirmed.
+- No load ran in mode `ob`. The mode advanced only after 10 s without file calls, and the music reads every 2-4 s.
+- The black brick parts and the studs over the characters come from the same draws (`8B12FE19`/`AB23B41D`), which sample a cube map while the game binds a 2D texture.
+- The draws share the camera block c0-c3 with the characters, so it is not a stale camera.
+
+**log66** (`0.0.72-log66`):
+- A cube stand-in built from the 2D image (`[CUBE2D]`).
+- A per-draw colour and depth probe in full captures (`zprobe_<replay>.bin`, read with `private/session-tools/zprobe.py`).
+- The capture log gains the vertex system constants.
+- The load mode moves on at each stretch of light frames (`[LOADMODE]`).
+- A frozen scene counts as a menu for the pad layout (`[MENUPROBE]`).
+
+## Run 66: `0.0.72-log66` handheld, 4 November 2026: the depth write without a test, and a hang on quitting
+
+One session, three full captures, then a hang and a crash when the tester quit to the main menu.
+
+**The black parts and the studs over the characters have one cause: depth written with the depth test off.**
+- The cube stand-in did not remove the black parts.
+- The depth probe shows what does. Before the characters, the game draws a box (`CDF1199F`, 12 triangles, alpha blended) with RB_DEPTHCONTROL 0x734: test off, write bit on.
+- The GL backend applied that as an always-passing test with depth writes. Xenos, like D3D's ZENABLE and Xenia's normalized depth control, writes no depth with the test off.
+- In capture 8197, on Jar Jar's body:
+  - the character writes depth 0.99353, in front of the studs (0.99425);
+  - the box then rewrites 0.99423, behind him;
+  - the studs' dark decal (`85DC6248`, test on, no write) then passes over him.
+- In capture 9024, the black band under the grey brick is a cell nothing coloured before the box. The box stamped its depth there, and the rock and waterfall drawn later failed against it.
+- The box is in every capture since run 17 (studs over the legs, dark outlines).
+
+**Hang and crash on quitting** (load mode `ob`):
+- After the first 512 KB read of the quit load, the game's I/O thread (`sub_824FD9A8`) and loader (`sub_82508C48`) passed the turn back and forth for about 50 s: about 150,000 switches a second, 5 µs each, no file calls. The screen stayed black.
+- Then the loader crashed reading guest address 0x02422379 (`sub_824FC308`, called from `sub_8230C8C8`).
+- The turn released during file calls (`o`) is the likely cause: the game may close a file while another thread reads it, which the turn used to prevent.
+
+**Loads:**
+- With 512 KB refills (`b`), the card read 60-66 MB/s against 23-35 MB/s, and Gungan to hub read 71.5 MB in 1.1 s against 58.5 MB in 1.7 s.
+- The file-call span of that load barely moved (4.4 against 4.6 s), so loads are not bound by the card or by the turn during reads.
+
+**Character selection:**
+- The hub's character screen has 171 records: 144 in the 720-row HUD viewport and no scene draw.
+- It was neither light (under 150) nor a frozen scene, so it stayed by position.
+
+**Boot:**
+- About 16 s pass from the first log line to the first frame, with the guest 94-99 % idle.
+- Then come about 10 s of logo screens, the menus (the tester's time), and an 11 s load to the hub.
+- Before the first frame, the render thread reads the roughly 950 saved programs (48 MB) one file at a time.
+- The program binary cache stays off. It is opt-in after 2026-10-08 (garbage on the title, slow builds) and under the "cheaper, not cached" rule.
+
+## Log 67: `0.0.73-log67`
+
+- **Depth writes only with the depth test on** (`apply_state`), as Xenos does. `LSWTCS_ZWRITE_NOTEST=1` restores the old behaviour.
+- **A frame with no scene draw counts as a menu** (at least 150 records, under 30 scene draws, for 10 frames), so the character selection is by label (`[MENUPROBE] ... no scene, a menu`).
+- **Loads use `b` only** (`LSWTCS_LOADMODES=b`), with `o` off.
+- **The saved programs are read by a background thread** at the lowest priority (`LSWTCS_GLPROGBG`, default on). A program the game asks for first is built on request, and the reader then skips its key.
+- **`[BOOT]` marks** in milliseconds since `main()`:
+  - platform up, image loaded, patches done;
+  - the render thread's EGL/Mesa, GL resources, program cache and ready;
+  - guest frames 1 and 300.

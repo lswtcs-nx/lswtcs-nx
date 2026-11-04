@@ -8854,11 +8854,17 @@ PPC_FUNC(__imp__XamEnumerate) {
     }
     ctx.r3.u32 = 0x00000012u;  // ERROR_NO_MORE_FILES
 }
+struct LswPad { uint16_t buttons; uint8_t lt, rt; int16_t lx, ly, rx, ry; };
+static bool lsw_host_pad_user(uint32_t user, LswPad& out);
 PPC_FUNC(__imp__XamInputGetCapabilities) {
     PPC_FUNC_PROLOGUE();
     // r3=user_index, r4=flags, r5=X_INPUT_CAPABILITIES*. Report a connected gamepad
-    // for user 0 (so the game treats the pad as present) and zero the struct.
-    if (ctx.r3.u32 != 0) { ctx.r3.u32 = 0x0000048Fu; return; }   // DEVICE_NOT_CONNECTED
+    // for user 0 (so the game treats the pad as present) and zero the struct. Users 1-3 (log70): connected while the host has a
+    // pad for that player (on the Switch, player 2's controller).
+    if (ctx.r3.u32 != 0) {
+        LswPad probe;
+        if (!lsw_host_pad_user(ctx.r3.u32, probe)) { ctx.r3.u32 = 0x0000048Fu; return; }   // DEVICE_NOT_CONNECTED
+    }
     uint32_t p = ctx.r5.u32;
     if (p) { for (int i = 0; i < 20; i += 4) PPC_STORE_U32(p + i, 0);
              PPC_STORE_U8(p + 0, 1);   // type = XINPUT_DEVTYPE_GAMEPAD
@@ -8875,7 +8881,22 @@ PPC_FUNC(__imp__XamInputGetKeystrokeEx) { PPC_FUNC_PROLOGUE(); ctx.r3.u32 = 0x00
 //   3. LSWTCS_AUTOSTART=1: periodic Start/A pulses (unattended runs)
 //   4. DIAG: file "press_now" in the working dir -> whitespace-separated button names
 //      (start back a b x y up down left right lb rb, or "wait"), each held 8 polls then released 8
-struct LswPad { uint16_t buttons; uint8_t lt, rt; int16_t lx, ly, rx, ry; };
+// Players 2-4 (log70): XInput slot = user index, nothing else mixed in (no keyboard, no scripts). The Switch shim
+// (win32_switch.cpp) answers slots 0-1 by the connected controllers in order; the game takes two players.
+static bool lsw_host_pad_user(uint32_t user, LswPad& out) {
+    typedef DWORD (WINAPI *PFN_XIGS)(DWORD, void*);
+    static const PFN_XIGS xigs = [] {
+        const char* e = getenv("LSWTCS_NOPAD");
+        if (e && e[0] == '1') return PFN_XIGS(nullptr);
+        HMODULE m = LoadLibraryA("xinput1_4.dll"); if (!m) m = LoadLibraryA("xinput9_1_0.dll");
+        return m ? (PFN_XIGS)GetProcAddress(m, "XInputGetState") : PFN_XIGS(nullptr);
+    }();
+    if (!xigs || user == 0 || user >= 4) return false;
+    struct { DWORD packet; WORD buttons; BYTE lt, rt; SHORT lx, ly, rx, ry; } st{};
+    if (xigs(DWORD(user), &st) != 0) return false;
+    out = {st.buttons, st.lt, st.rt, st.lx, st.ly, st.rx, st.ry};
+    return true;
+}
 static bool lsw_host_pad(LswPad& out) {
     typedef DWORD (WINAPI *PFN_XIGS)(DWORD, void*);
     static PFN_XIGS xigs = nullptr; static int tried = 0;
@@ -8920,7 +8941,24 @@ PPC_FUNC(__imp__XamInputGetState) {
     PPC_FUNC_PROLOGUE();
     static std::atomic<uint32_t> calls{0};
     uint32_t n = ++calls;
-    if (ctx.r3.u32 != 0) { ctx.r3.u32 = 0x0000048Fu; return; }   // only player 0 connected
+    if (ctx.r3.u32 != 0) {   // players 2-4 (log70): the host pad of that player, if there is one
+        const uint32_t user = ctx.r3.u32, q = ctx.r5.u32;
+        LswPad pad{};
+        if (user >= 4 || !lsw_host_pad_user(user, pad)) { ctx.r3.u32 = 0x0000048Fu; return; }   // DEVICE_NOT_CONNECTED
+        static LswPad last[4]{};
+        static uint32_t packets[4] = {1, 1, 1, 1};
+        static bool seen[4] = {};
+        if (!seen[user]) { seen[user] = true; printf("[PADS] the game reads player %u's controller\n", user + 1); fflush(stdout); }
+        if (lsw_guest::compare(&pad, &last[user], sizeof(pad)) != 0) { ++packets[user]; last[user] = pad; }
+        if (q) {
+            PPC_STORE_U32(q + 0, packets[user]);
+            PPC_STORE_U32(q + 4, ((uint32_t)pad.buttons << 16) | ((uint32_t)pad.lt << 8) | pad.rt);
+            PPC_STORE_U32(q + 8, ((uint32_t)(uint16_t)pad.lx << 16) | (uint16_t)pad.ly);
+            PPC_STORE_U32(q + 12, ((uint32_t)(uint16_t)pad.rx << 16) | (uint16_t)pad.ry);
+        }
+        ctx.r3.u32 = 0;
+        return;
+    }
     uint32_t p = ctx.r5.u32;
     LswPad pad{};
     lsw_host_pad(pad);

@@ -11,6 +11,7 @@
 #include <cstdlib>
 #include <ctime>
 #include <mutex>
+#include <thread>
 #include <string>
 #include <cstring>
 #include <dirent.h>
@@ -594,41 +595,180 @@ USHORT RtlCaptureStackBackTrace(ULONG, ULONG, void**, ULONG* hash) { if (hash) *
 
 // ---- modules -----------------------------------------------------------------------------------
 // The runtime loads XInput dynamically (kernel_stubs lsw_host_pad). On Switch "xinput1_4.dll" resolves
-// to a libnx HID pad (player 1 + handheld) with the same XINPUT_STATE layout and button bits.
+// to libnx HID pads (players 1 and 2, log70) with the same XINPUT_STATE layout and button bits.
 namespace {
-PadState g_pad;
+PadState g_pad;   // one player (LSWTCS_PLAYERS=1): No1 + handheld merged; also the "module" handle LoadLibraryA hands out
 std::once_flag g_pad_once;
-DWORD WINAPI nx_xinput_get_state(DWORD slot, void* out) {
-    if (slot != 0) return 1167;   // ERROR_DEVICE_NOT_CONNECTED
-    std::call_once(g_pad_once, [] {
+// Local co-op (log70). The game takes two players: the second joins with START on the second pad. With LSWTCS_PLAYERS=2 (the
+// default) the handheld Joy-Cons, controller 1 and controller 2 are read separately, and the players are the connected ones in that
+// order: a lone controller or the handheld is always player 1, a second one is player 2. A single Joy-Con is held sideways (hold type
+// horizontal); its face buttons are taken by position. LSWTCS_PLAYERS=1: one merged pad, as before log70. [PADS] logs who is who.
+int g_players = 2;
+PadState g_src[3];   // handheld, No1, No2
+const char* const kSrcName[3] = {"handheld", "controller 1", "controller 2"};
+struct XiState { DWORD packet; WORD buttons; BYTE lt, rt; SHORT lx, ly, rx, ry; };
+std::atomic<bool> g_applet_busy{false};
+bool g_by_label = false;   // face buttons by label (LSWTCS_PADLAYOUT), decided on player 1's polls
+
+void pads_init() {
+    const char* e = getenv("LSWTCS_PLAYERS");
+    g_players = e && atoi(e) == 1 ? 1 : 2;
+    if (g_players == 1) {
         padConfigureInput(1, HidNpadStyleSet_NpadStandard);
         padInitializeDefault(&g_pad);
-    });
-    padUpdate(&g_pad);
-    struct { DWORD packet; WORD buttons; BYTE lt, rt; SHORT lx, ly, rx, ry; } st{};
-    const u64 b = padGetButtons(&g_pad);
+        return;
+    }
+    padConfigureInput(2, HidNpadStyleSet_NpadStandard);
+    const Result rc = hidSetNpadJoyHoldType(HidNpadJoyHoldType_Horizontal);
+    padInitialize(&g_src[0], HidNpadIdType_Handheld);
+    padInitialize(&g_src[1], HidNpadIdType_No1);
+    padInitialize(&g_src[2], HidNpadIdType_No2);
+    printf("[PADS] two players: the connected ones of handheld, controller 1, controller 2, in that order; single Joy-Cons sideways "
+           "(rc 0x%X); L + R + Plus, or SL + SR + Plus/Minus on a single Joy-Con, opens the controller screen\n", rc);
+    fflush(stdout);
+}
+
+// Player `slot`'s source among the connected ones (handheld, No1, No2), or null.
+PadState* player_source(DWORD slot, int* src) {
+    for (PadState& p : g_src) padUpdate(&p);
+    int n = 0;
+    for (int i = 0; i < 3; ++i) {
+        if (!padIsConnected(&g_src[i])) continue;
+        if (n++ == int(slot)) { *src = i; return &g_src[i]; }
+    }
+    return nullptr;
+}
+
+bool single_joycon(u32 style) {
+    return (style & (HidNpadStyleTag_NpadJoyLeft | HidNpadStyleTag_NpadJoyRight)) && !(style & HidNpadStyleSet_NpadFullCtrl);
+}
+
+// [PADS] when the players change (connected sources and their styles).
+void log_players() {
+    static u64 last = ~0ull;
+    u64 now = 0;
+    for (int i = 0; i < 3; ++i) now |= u64(padIsConnected(&g_src[i]) ? (padGetStyleSet(&g_src[i]) & 0xFF) | 0x100 : 0) << (i * 9);
+    if (now == last) return;
+    last = now;
+    char b[256];
+    int k = snprintf(b, sizeof b, "[PADS]");
+    int player = 0;
+    for (int i = 0; i < 3 && k < 200; ++i) {
+        if (!padIsConnected(&g_src[i])) continue;
+        const u32 style = padGetStyleSet(&g_src[i]);
+        const char* kind = style & HidNpadStyleTag_NpadHandheld ? "handheld" : style & HidNpadStyleTag_NpadFullKey ? "Pro Controller"
+                         : style & HidNpadStyleTag_NpadJoyDual ? "two Joy-Cons" : style & HidNpadStyleTag_NpadJoyLeft ? "left Joy-Con sideways"
+                         : style & HidNpadStyleTag_NpadJoyRight ? "right Joy-Con sideways" : "other";
+        k += snprintf(b + k, sizeof b - k, " %s %s (%s, style 0x%X);", ++player <= g_players ? (player == 1 ? "player 1:" : "player 2:") : "unused:",
+                      kSrcName[i], kind, style);
+    }
+    if (!player) snprintf(b + k, sizeof b - k, " no controller");
+    printf("%s\n", b);
+    fflush(stdout);
+}
+
+// The system's controller screen (connect, split Joy-Cons with SL + SR), on its own thread so the game's thread does not wait.
+void show_controller_applet() {
+    bool idle = false;
+    if (!g_applet_busy.compare_exchange_strong(idle, true)) return;
+    std::thread([] {
+        HidLaControllerSupportArg arg;
+        hidLaCreateControllerSupportArg(&arg);
+        arg.hdr.player_count_min = 2;   // the screen shows only while fewer players are connected
+        arg.hdr.player_count_max = 2;
+        HidLaControllerSupportResultInfo info{};
+        const Result rc = hidLaShowControllerSupport(&info, &arg);
+        printf("[PADS] controller screen closed: rc 0x%X, %d players\n", rc, int(info.player_count));
+        fflush(stdout);
+        g_applet_busy.store(false);
+    }).detach();
+}
+
+// A single Joy-Con held sideways, by position: the bottom button is the 360's A. Left Joy-Con: Left, Down, Up, Right are bottom,
+// right, left, top; Minus is Start, L is Back. Right Joy-Con: A, X, B, Y; Plus is Start, R is Back. SL and SR are the bumpers, ZL or
+// ZR the left trigger, the stick is the 360's left stick. LSWTCS_JOYROT=1 turns the stick a quarter by hand, in case the system
+// does not for the horizontal hold.
+void map_single_joycon(const PadState& pad, u32 style, XiState& st) {
+    static const bool rot = [] { const char* e = getenv("LSWTCS_JOYROT"); return e && e[0] == '1'; }();
+    struct M { u64 nx; WORD xi; };
+    static const M kLeft[] = {{HidNpadButton_Left, 0x1000}, {HidNpadButton_Down, 0x2000}, {HidNpadButton_Up, 0x4000},
+                              {HidNpadButton_Right, 0x8000}, {HidNpadButton_Minus, 0x0010}, {HidNpadButton_L, 0x0020},
+                              {HidNpadButton_StickL, 0x0040}, {HidNpadButton_LeftSL, 0x0100}, {HidNpadButton_LeftSR, 0x0200}};
+    static const M kRight[] = {{HidNpadButton_A, 0x1000}, {HidNpadButton_X, 0x2000}, {HidNpadButton_B, 0x4000},
+                               {HidNpadButton_Y, 0x8000}, {HidNpadButton_Plus, 0x0010}, {HidNpadButton_R, 0x0020},
+                               {HidNpadButton_StickR, 0x0040}, {HidNpadButton_RightSL, 0x0100}, {HidNpadButton_RightSR, 0x0200}};
+    const bool left = style & HidNpadStyleTag_NpadJoyLeft;
+    const u64 b = padGetButtons(&pad);
+    for (const M& m : left ? kLeft : kRight) if (b & m.nx) st.buttons |= m.xi;
+    st.lt = (b & (left ? HidNpadButton_ZL : HidNpadButton_ZR)) ? 255 : 0;
+    const HidAnalogStickState s = padGetStickPos(&pad, left ? 0 : 1);
+    int32_t x = s.x, y = s.y;
+    if (rot) { const int32_t t = x; if (left) { x = -y; y = t; } else { x = y; y = -t; } }
+    st.lx = SHORT(x < -32767 ? -32767 : x > 32767 ? 32767 : x);
+    st.ly = SHORT(y < -32767 ? -32767 : y > 32767 ? 32767 : y);
+}
+
+// A full controller (handheld, Pro Controller, two Joy-Cons).
+void map_full(const PadState& pad, u64 b, XiState& st) {
     static const struct { u64 nx; WORD xi; } kMap[] = {
         {HidNpadButton_Up, 0x0001}, {HidNpadButton_Down, 0x0002}, {HidNpadButton_Left, 0x0004},
         {HidNpadButton_Right, 0x0008}, {HidNpadButton_Plus, 0x0010}, {HidNpadButton_Minus, 0x0020},
         {HidNpadButton_StickL, 0x0040}, {HidNpadButton_StickR, 0x0080}, {HidNpadButton_L, 0x0100},
         {HidNpadButton_R, 0x0200}};
     for (auto& m : kMap) if (b & m.nx) st.buttons |= m.xi;
+    if (g_by_label) {
+        if (b & HidNpadButton_A) st.buttons |= 0x1000;
+        if (b & HidNpadButton_B) st.buttons |= 0x2000;
+        if (b & HidNpadButton_X) st.buttons |= 0x4000;
+        if (b & HidNpadButton_Y) st.buttons |= 0x8000;
+    } else {
+        if (b & HidNpadButton_A) st.buttons |= 0x2000;
+        if (b & HidNpadButton_B) st.buttons |= 0x1000;
+        if (b & HidNpadButton_X) st.buttons |= 0x8000;
+        if (b & HidNpadButton_Y) st.buttons |= 0x4000;
+    }
+    st.lt = (b & HidNpadButton_ZL) ? 255 : 0;
+    st.rt = (b & HidNpadButton_ZR) ? 255 : 0;
+    const HidAnalogStickState l = padGetStickPos(&pad, 0), r = padGetStickPos(&pad, 1);
+    // Right stick pitch inverted (user's choice 2026-10-11). Clamped so -(-32768) cannot overflow.
+    st.lx = SHORT(l.x); st.ly = SHORT(l.y); st.rx = SHORT(r.x); st.ry = SHORT(-(r.y < -32767 ? -32767 : int32_t(r.y)));
+}
+
+DWORD WINAPI nx_xinput_get_state(DWORD slot, void* out) {
+    std::call_once(g_pad_once, pads_init);
+    if (slot >= DWORD(g_players)) return 1167;   // ERROR_DEVICE_NOT_CONNECTED
+    PadState* pad = &g_pad;
+    if (g_players == 1) {
+        padUpdate(&g_pad);
+    } else {
+        int src = -1;
+        pad = player_source(slot, &src);
+        if (slot == 0) log_players();
+        if (!pad) {
+            if (slot != 0) return 1167;
+            pad = &g_src[1];   // player 1 stays present for the game, idle until a controller connects
+        }
+    }
+    XiState st{};
+    const u64 b = padGetButtons(pad);
+    const u32 style = padGetStyleSet(pad);
     // Face buttons, LSWTCS_PADLAYOUT (log65):
     //   position  Switch A/B/X/Y act as the 360 pad's B/A/Y/X: the bottom button (Switch B) is the 360's A, as in the 360's
     //             layout (user's choice 2026-10-11; the default).
     //   label     Switch A is the 360's A: confirm on A as on the Switch, and the game's button letters match the Switch's.
     //   auto      label while the frames are light (under 150 draws for 30 frames: title, menus, load and save screens, loading),
     //             position in play. The in-level pause menu draws the level behind it, so it stays by position.
-    // The layout changes only while no face button is held, so a held button never turns into another. Hold L + R and press Minus
-    // for the next layout ([PADLAYOUT]).
-    {
+    // The layout changes only while no face button of player 1 is held, so a held button never turns into another. Hold L + R and
+    // press Minus for the next layout ([PADLAYOUT]). Player 2 follows player 1's layout; a single Joy-Con is always by position.
+    if (slot == 0) {
         static int layout = [] {
             const char* e = getenv("LSWTCS_PADLAYOUT");
             return e && !strcasecmp(e, "label") ? 1 : e && !strcasecmp(e, "auto") ? 2 : 0;
         }();
         static const char* const kLayoutName[3] = {"position", "label", "auto"};
         static u64 last_switch_ns = 0;
-        static bool by_label = layout == 1;
+        static bool first = true;
+        if (first) { first = false; g_by_label = layout == 1; }
         static uint32_t lines = 0;
         const u64 now_ns = armTicksToNs(armGetSystemTick());
         const u64 lr = HidNpadButton_L | HidNpadButton_R;
@@ -640,71 +780,67 @@ DWORD WINAPI nx_xinput_get_state(DWORD slot, void* out) {
         }
         const u64 face = HidNpadButton_A | HidNpadButton_B | HidNpadButton_X | HidNpadButton_Y;
         const bool want = layout == 1 || (layout == 2 && g_frame_light.load(std::memory_order_relaxed));
-        if (want != by_label && !(b & face)) {
-            by_label = want;
-            if (lines++ < 400) { printf("[PADLAYOUT] face buttons by %s (layout %s)\n", by_label ? "label" : "position", kLayoutName[layout]); fflush(stdout); }
-        }
-        if (by_label) {
-            if (b & HidNpadButton_A) st.buttons |= 0x1000;
-            if (b & HidNpadButton_B) st.buttons |= 0x2000;
-            if (b & HidNpadButton_X) st.buttons |= 0x4000;
-            if (b & HidNpadButton_Y) st.buttons |= 0x8000;
-        } else {
-            if (b & HidNpadButton_A) st.buttons |= 0x2000;
-            if (b & HidNpadButton_B) st.buttons |= 0x1000;
-            if (b & HidNpadButton_X) st.buttons |= 0x8000;
-            if (b & HidNpadButton_Y) st.buttons |= 0x4000;
+        if (want != g_by_label && !(b & face)) {
+            g_by_label = want;
+            if (lines++ < 400) { printf("[PADLAYOUT] face buttons by %s (layout %s)\n", g_by_label ? "label" : "position", kLayoutName[layout]); fflush(stdout); }
         }
     }
-    // Capture combos (LSWTCS_CAPCOMBO, default on), right stick clicked last, at most once per 3 s:
-    // ZL + ZR: full capture, screenshot, per-draw [GLDRAWCAP] log, the frame's GLSL, the frame history (LSWTCS_GLHISTORY)
-    // and every resolve/render target as PNG. L + R: the same without the targets. The files reach the SD card in the
-    // background, while the game runs: [CAPSAVE] says when they are done.
-    // Only a request here: the render thread takes it at its next replay and does the logging, because file access
-    // from this thread held the game for 1-2.6 s per capture and the trigger files were polled every 30 replays.
-    {
-        static const bool combo_on = [] { const char* e = getenv("LSWTCS_CAPCOMBO"); return !(e && e[0] == '0'); }();
-        static u64 last_ns = 0;
-        const u64 triggers = HidNpadButton_ZL | HidNpadButton_ZR;
-        const u64 shoulders = HidNpadButton_L | HidNpadButton_R;
-        const u64 now_ns = armTicksToNs(armGetSystemTick());
-        if (combo_on && (b & HidNpadButton_StickR) && now_ns - last_ns > 3000000000ull) {
-            const bool full = (b & triggers) == triggers;
-            if (full || (b & shoulders) == shoulders) {
-                last_ns = now_ns;
-                g_capture_request.store(full ? 2 : 1, std::memory_order_relaxed);
+    if (g_players > 1 && single_joycon(style)) map_single_joycon(*pad, style, st);
+    else map_full(*pad, b, st);
+    // Controller screen (log70): L + R + Plus on a full controller, SL + SR + Plus or Minus on a single Joy-Con, any player. Plus is
+    // also Start, so the game pauses behind it.
+    if (g_players > 1) {
+        const u64 lr = HidNpadButton_L | HidNpadButton_R;
+        const bool sl = b & HidNpadButton_AnySL, sr = b & HidNpadButton_AnySR;
+        if (((b & lr) == lr && (b & HidNpadButton_Plus)) || (sl && sr && (b & (HidNpadButton_Plus | HidNpadButton_Minus))))
+            show_controller_applet();
+    }
+    if (slot == 0) {
+        // Capture combos (LSWTCS_CAPCOMBO, default on), right stick clicked last, at most once per 3 s:
+        // ZL + ZR: full capture, screenshot, per-draw [GLDRAWCAP] log, the frame's GLSL, the frame history (LSWTCS_GLHISTORY)
+        // and every resolve/render target as PNG. L + R: the same without the targets. The files reach the SD card in the
+        // background, while the game runs: [CAPSAVE] says when they are done.
+        // Only a request here: the render thread takes it at its next replay and does the logging, because file access
+        // from this thread held the game for 1-2.6 s per capture and the trigger files were polled every 30 replays.
+        {
+            static const bool combo_on = [] { const char* e = getenv("LSWTCS_CAPCOMBO"); return !(e && e[0] == '0'); }();
+            static u64 last_ns = 0;
+            const u64 triggers = HidNpadButton_ZL | HidNpadButton_ZR;
+            const u64 shoulders = HidNpadButton_L | HidNpadButton_R;
+            const u64 now_ns = armTicksToNs(armGetSystemTick());
+            if (combo_on && (b & HidNpadButton_StickR) && now_ns - last_ns > 3000000000ull) {
+                const bool full = (b & triggers) == triggers;
+                if (full || (b & shoulders) == shoulders) {
+                    last_ns = now_ns;
+                    g_capture_request.store(full ? 2 : 1, std::memory_order_relaxed);
+                }
+            }
+        }
+        // A/B toggle combo (log65): hold L + R and click the left stick -> the next state of LSWTCS_ABTOGGLE, then back to the
+        // profile's states (gl_backend.cpp, [ABTOGGLE]). For a fault that shows in one place, such as the studs over the legs.
+        {
+            static u64 last_toggle_ns = 0;
+            const u64 want = HidNpadButton_L | HidNpadButton_R | HidNpadButton_StickL;
+            const u64 now_ns = armTicksToNs(armGetSystemTick());
+            if ((b & want) == want && now_ns - last_toggle_ns > 1000000000ull) {
+                last_toggle_ns = now_ns;
+                g_ab_toggle_request.fetch_add(1, std::memory_order_relaxed);
+            }
+        }
+        // Mark combo: hold ZL + ZR and click the left stick -> "# mark N" in frames.log and [MARK] in stdout.log, so a
+        // tester can flag a moment (visual fault, audio jitter, combat start) without noting the time. Logging only.
+        {
+            static u64 last_mark_ns = 0;
+            const u64 want = HidNpadButton_ZL | HidNpadButton_ZR | HidNpadButton_StickL;
+            const u64 now_ns = armTicksToNs(armGetSystemTick());
+            if ((b & want) == want && now_ns - last_mark_ns > 1000000000ull) {
+                last_mark_ns = now_ns;
+                const uint32_t n = g_frame_marks.fetch_add(1, std::memory_order_relaxed) + 1;
+                printf("[MARK] %u at %llu ms\n", n, (unsigned long long)(now_ns / 1000000ull));
+                fflush(stdout);
             }
         }
     }
-    // A/B toggle combo (log65): hold L + R and click the left stick -> the next state of LSWTCS_ABTOGGLE, then back to the
-    // profile's states (gl_backend.cpp, [ABTOGGLE]). For a fault that shows in one place, such as the studs over the legs.
-    {
-        static u64 last_toggle_ns = 0;
-        const u64 want = HidNpadButton_L | HidNpadButton_R | HidNpadButton_StickL;
-        const u64 now_ns = armTicksToNs(armGetSystemTick());
-        if ((b & want) == want && now_ns - last_toggle_ns > 1000000000ull) {
-            last_toggle_ns = now_ns;
-            g_ab_toggle_request.fetch_add(1, std::memory_order_relaxed);
-        }
-    }
-    // Mark combo: hold ZL + ZR and click the left stick -> "# mark N" in frames.log and [MARK] in stdout.log, so a
-    // tester can flag a moment (visual fault, audio jitter, combat start) without noting the time. Logging only.
-    {
-        static u64 last_mark_ns = 0;
-        const u64 want = HidNpadButton_ZL | HidNpadButton_ZR | HidNpadButton_StickL;
-        const u64 now_ns = armTicksToNs(armGetSystemTick());
-        if ((b & want) == want && now_ns - last_mark_ns > 1000000000ull) {
-            last_mark_ns = now_ns;
-            const uint32_t n = g_frame_marks.fetch_add(1, std::memory_order_relaxed) + 1;
-            printf("[MARK] %u at %llu ms\n", n, (unsigned long long)(now_ns / 1000000ull));
-            fflush(stdout);
-        }
-    }
-    st.lt = (b & HidNpadButton_ZL) ? 255 : 0;
-    st.rt = (b & HidNpadButton_ZR) ? 255 : 0;
-    const HidAnalogStickState l = padGetStickPos(&g_pad, 0), r = padGetStickPos(&g_pad, 1);
-    // Right stick pitch inverted (user's choice 2026-10-11). Clamped so -(-32768) cannot overflow.
-    st.lx = SHORT(l.x); st.ly = SHORT(l.y); st.rx = SHORT(r.x); st.ry = SHORT(-(r.y < -32767 ? -32767 : int32_t(r.y)));
     memcpy(out, &st, sizeof st);
     return ERROR_SUCCESS;
 }

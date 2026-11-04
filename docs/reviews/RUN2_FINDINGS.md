@@ -2506,3 +2506,11 @@ The tester: everything worked, and the game opened faster.
   - The boot reader queues those programs first, then the rest in directory order.
   - The log shows `[GLPROG] ... N of them first in the last session's order`; `LSWTCS_GLPROGORDER=0` turns it off.
   - The first log70 session writes the file; the effect shows from the second boot on.
+- **Local co-op** (same build, at the tester's request; the game takes two players):
+  - `LSWTCS_PLAYERS=2` (default) reads the handheld Joy-Cons, controller 1 and controller 2 apart. The players are the connected ones in that order, so a lone controller or the handheld is player 1.
+  - `XamInputGetState` and `XamInputGetCapabilities` answer for player 2 while a second controller is connected. Player 2 joins with Start.
+  - A single Joy-Con is held sideways (hold type horizontal), with its face buttons by position: the bottom button is the 360's A. SL and SR are the bumpers, Plus or Minus is Start.
+  - L + R + Plus (SL + SR + Plus/Minus on a single Joy-Con) opens the system's controller screen, on its own thread, to split Joy-Cons.
+  - `LSWTCS_JOYROT=1` turns a sideways Joy-Con's stick by hand, if the system does not.
+  - `[PADS]` logs who is who.
+  - Untested: the stick direction of a sideways Joy-Con, the controller screen from hbmenu, and the game's split screen in the GL backend.

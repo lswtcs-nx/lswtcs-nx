@@ -380,3 +380,5 @@ The measurements below are from heavy frames (1300+ draws, the start of `Gungan_
 | Author's levers | larger | Handheld resolution and GPU clock. |
 
 **log64 (CPU wall, first step):** guest calls made inlinable (`LSW_GAME_INLINE`: units along hot calls, weak linkage only for the 80 runtime overrides, `-fno-semantic-interposition`). Code text 6 % smaller. Measured over two docked sessions (log63 against log64). If it pays, the next steps are larger units or LTO over the hot units, then PGO.
+
+**Run 64:** inlinable guest calls changed nothing (CPU per guest call 161 ns against 156-158; the same profile). The main thread's time is inside large guest functions: memory accesses through the region table, writes back into `ctx`, float compares and FPCR switches. Options left on the CPU side are in RUN2_FINDINGS.md, run 64. None is expected to reach 10 % alone.

@@ -2226,3 +2226,28 @@ Handheld, stock clocks, states `MAPXSHNLUBIkhwregd` and `MAPXSHNLUBIkhwregdq`, a
 | 63 | 156 (155 to 157) |
 
 One log64 session compares against these. The log63 NRO is kept aside in case a reference session is wanted.
+
+## Run 64: `0.0.70-log64` handheld, 4 November 2026: inlinable guest calls change nothing
+
+Handheld, stock clocks, one session, state `MAPXSHNLUBIkhwregdq`, 54 visits. The session ran log64: the profiled code range is 75.16 MB, log64's `.text`. The tester saw nothing wrong.
+
+- **CPU per guest call did not fall.** Main-thread CPU per guest call was 161 ns (90 %: 160 to 163) over 20 heavy windows, against 156 in run 63 and 158 in run 62.
+  - The spread between sessions is about 3 %, not the 2 ns of one session's interval: run 54 gave 161 docked and 156 handheld with the same build.
+  - So the change is nil within that spread, and if anything slightly worse.
+- **The main thread's profile is unchanged.** It has the same top functions at the same shares: `sub_8231ED30` 5.4 → 5.2 %, `sub_82320328` 3.6 → 3.8 %, and so on. The top 40 hold 54 and 56 %.
+  - The time is spent inside large guest functions (`sub_8231ED30` is 790 generated lines), not in calls. Inlining small callees leaves that time alone, and LTO would hit the same limit.
+- **What the hot instructions are**, from per-PC samples of the main thread:
+  - **Guest memory accesses.** Each one is a shift, a load from `ppc_view_base` (the 512 MB region table) and the access itself, plus a byte swap. They are volatile, so nothing is cached or merged.
+  - **Scalar float compares** (`fcmp`, `fcmpe`) on values converted from single precision.
+  - **Writes of guest registers back into `ctx`** after each instruction, scalar and vector.
+  - **FPCR writes** where the code switches between scalar float and vector work (flush-to-zero on or off). The samples within two instructions after an `msr fpcr` are 1.6 % of the top 55 functions, which hold 60 % of the samples.
+- **Decision:** `LSW_GAME_INLINE` is off by default, and its tooling stays. The SD has the log63 NRO back.
+
+**What is left on the CPU side, sized honestly:**
+
+| Option | Size | Cost and risk |
+| --- | --- | --- |
+| The compare form of the address fold on this CPU (`LSW_ADDR_FOLD_CMOV`, already in `ppc_context.h`) | Unknown; on PC it was 20 % slower than the table | A flag and a 25-minute rebuild, measured in one session by CPU per guest call |
+| Flush-to-zero left fixed instead of switched | At most about 2 % | Changes denormal results of either scalar or vector math: not exact |
+| PGO | 0-9 % in the other ports | Instrumented build, a training session on the console, then a rebuild |
+| Plain guest memory instead of volatile | bo2 measured +5.8 % with three other changes | A loop polling memory that another thread writes could hang; needs an audit and compiler barriers |

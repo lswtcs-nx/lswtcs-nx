@@ -38,7 +38,9 @@ set(_head "")
 # LSW_GAME_INLINE (tools/make_game_units.py): units from game_units.txt, grouped along hot guest calls, and guest calls that GCC
 # may inline within a unit (lsw_guest_linkage.h, -fno-semantic-interposition below). Files the list does not name, such as
 # ppc_func_mapping.cpp, go into the ordinary batches after it.
-option(LSW_GAME_INLINE "Group game units along hot calls and let guest calls inline" ON)
+# Run 64: no gain. Main-thread CPU per guest call 161 ns against 156-158 in runs 62-63 (cross-session spread about 3 %), the same
+# top functions at the same shares: the time is inside large guest functions, not in calls. Off by default; the tooling stays.
+option(LSW_GAME_INLINE "Group game units along hot calls and let guest calls inline" OFF)
 set(GAME_UNITS_FILE "${CMAKE_CURRENT_SOURCE_DIR}/game_units.txt")
 if(LSW_GAME_INLINE AND EXISTS "${GAME_UNITS_FILE}")
     file(RELATIVE_PATH _shared "${UNITY_DIR}" "${RECOMP_OUTPUT}/ppc_recomp_shared.h")

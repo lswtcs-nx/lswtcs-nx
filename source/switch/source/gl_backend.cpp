@@ -443,6 +443,51 @@ bool program_list_read(const char* path, ProgSources& s) {
     return ok;
 }
 
+// Use order (log70): glprogs2/order.bin holds the keys of the programs a session asked for, in the order of the first request; the
+// next boot queues those first, the rest after in directory order. Run 69: with the boot 13 s shorter, the hub came up while about
+// 150 of the 950 saved programs still waited in directory order; the render thread built 23 of them during the arrival with the audio
+// held (5-49 FPS for 8 s, 1.9 s of empty audio in play). LSWTCS_GLPROGORDER=0: directory order only.
+constexpr uint32_t kOrderMagic = 0x4F57534Cu;   // "LSWO"
+std::vector<uint64_t> g_prog_prev_order;   // read at boot (program_cache_init), before any request
+std::vector<uint64_t> program_order_read() {
+    std::vector<uint64_t> keys;
+    if (FILE* f = fopen(LSW_PROGLIST_DIR "/order.bin", "rb")) {
+        uint32_t hdr[2] = {};
+        if (fread(hdr, sizeof hdr, 1, f) == 1 && hdr[0] == kOrderMagic && hdr[1] <= 8192) {
+            keys.resize(hdr[1]);
+            if (hdr[1] && fread(keys.data(), sizeof(uint64_t), hdr[1], f) != hdr[1]) keys.clear();
+        }
+        fclose(f);
+    }
+    return keys;
+}
+void program_order_save(const std::vector<uint64_t>& keys) {
+    const char* path = LSW_PROGLIST_DIR "/order.bin";
+    const char* tmp = LSW_PROGLIST_DIR "/order.tmp";
+    FILE* f = fopen(tmp, "wb");
+    if (!f) return;
+    const uint32_t hdr[2] = {kOrderMagic, uint32_t(keys.size())};
+    const bool ok = fwrite(hdr, sizeof hdr, 1, f) == 1 && fwrite(keys.data(), sizeof(uint64_t), keys.size(), f) == keys.size();
+    fclose(f);
+    if (!ok) { remove(tmp); return; }
+    remove(path);   // the SD card's rename does not replace
+    if (rename(tmp, path) != 0) remove(tmp);
+}
+// Render thread: the first request of each program this session. Saved after 32, 128, 256, 512 and 1024 programs, this session's
+// order first, then the previous order's keys not asked for yet (a short session keeps the older tail).
+void note_program_use(uint64_t ckey) {
+    static std::unordered_set<uint64_t> seen;
+    static std::vector<uint64_t> order;
+    if (!prog_list_on() || !seen.insert(ckey).second) return;
+    order.push_back(ckey);
+    const size_t n = order.size();
+    if (n != 32 && n != 128 && n != 256 && n != 512 && n != 1024) return;
+    auto keys = std::make_shared<std::vector<uint64_t>>(order);
+    for (uint64_t k : g_prog_prev_order)
+        if (keys->size() < 8192 && !seen.count(k)) keys->push_back(k);
+    lsw_bg_submit_other(keys->size() * 8, [keys] { program_order_save(*keys); });
+}
+
 // Compile + link one program in the calling thread's context. Returns 0 on failure (logged).
 // Compiled shader stages shared by programs (LSWTCS_GLSTAGEREUSE, default on), keyed by GLSL + stage:
 // programs pair a few vertex / geometry shaders with many pixel shaders, and each stage used to be
@@ -656,33 +701,51 @@ void program_cache_init() {
     // The saved programs (about 950 files, 48 MB) were read here, on the render thread, before the first frame; the guest sat 94-99 %
     // idle meanwhile (run 66). Now a reader thread queues them while the game boots (log67, LSWTCS_GLPROGBG, default on). A program
     // the game asks for before the reader gets to it is built on request as before; the reader then skips its key.
+    if (prog_list_on() && env_on("LSWTCS_GLPROGORDER", true)) g_prog_prev_order = program_order_read();
     auto read_list = [] {
         const uint64_t t0 = gp_now();
-        uint32_t queued = 0;
+        uint32_t queued = 0, ordered = 0;
+        std::unordered_set<std::string> done;   // file names already read through the order
+        auto queue_file = [&](const char* n) {
+            char path[64];
+            snprintf(path, sizeof path, LSW_PROGLIST_DIR "/%s", n);
+            ProgSources s;
+            if (!program_list_read(path, s)) { remove(path); return false; }
+            s.vs = lsw_glsl_fold_fetch(s.vs);   // saved before fetch folding: what the game will now ask for
+            s.ps = lsw_glsl_fold_fetch(s.ps);
+            const uint64_t ckey = program_cache_key(s);   // driver changed -> different key: still compiled
+            {
+                std::lock_guard<std::mutex> lk(g_prog_mtx);
+                if (g_prog_entries.count(ckey)) return true;
+                g_prog_entries[ckey] = ProgEntry{};
+                g_prog_queue.emplace_back(ckey, std::move(s));
+                ++queued;
+                g_prog_boot_queued = queued;
+            }
+            g_prog_cv.notify_one();
+            return true;
+        };
+        for (uint64_t k : g_prog_prev_order) {   // a file is named by the key it was asked for with
+            char n[32];
+            snprintf(n, sizeof n, "%016llX.glsl3", (unsigned long long)k);
+            if (done.count(n)) continue;
+            struct stat st;
+            if (stat((std::string(LSW_PROGLIST_DIR "/") + n).c_str(), &st) != 0) continue;
+            done.insert(n);
+            const uint32_t before = queued;
+            queue_file(n);
+            ordered += queued - before;
+        }
         if (DIR* d = opendir(LSW_PROGLIST_DIR)) {
             while (dirent* de = readdir(d)) {
                 const char* n = de->d_name;
-                if (strlen(n) != 22 || strcmp(n + 16, ".glsl3") != 0) continue;
-                char path[64];
-                snprintf(path, sizeof path, LSW_PROGLIST_DIR "/%s", n);
-                ProgSources s;
-                if (!program_list_read(path, s)) { remove(path); continue; }
-                s.vs = lsw_glsl_fold_fetch(s.vs);   // saved before fetch folding: what the game will now ask for
-                s.ps = lsw_glsl_fold_fetch(s.ps);
-                const uint64_t ckey = program_cache_key(s);   // driver changed -> different key: still compiled
-                {
-                    std::lock_guard<std::mutex> lk(g_prog_mtx);
-                    if (g_prog_entries.count(ckey)) continue;
-                    g_prog_entries[ckey] = ProgEntry{};
-                    g_prog_queue.emplace_back(ckey, std::move(s));
-                    ++queued;
-                    g_prog_boot_queued = queued;
-                }
-                g_prog_cv.notify_one();
+                if (strlen(n) != 22 || strcmp(n + 16, ".glsl3") != 0 || done.count(n)) continue;
+                queue_file(n);
             }
             closedir(d);
         }
-        printf("[GLPROG] %u saved programs queued for background compile in %llu ms\n", queued, (unsigned long long)((gp_now() - t0) / 1000000));
+        printf("[GLPROG] %u saved programs queued for background compile in %llu ms, %u of them first in the last session's order (%zu keys)\n",
+               queued, (unsigned long long)((gp_now() - t0) / 1000000), ordered, g_prog_prev_order.size());
         fflush(stdout);
     };
     for (int i = 0; i < g_num_workers; ++i) std::thread(compile_worker_main, i).detach();
@@ -762,6 +825,7 @@ GLuint program(const LswGlShader* vs, const LswGlShader* ps, const LswGlShader* 
         ProgSources s{vs->glsl, ps ? ps->glsl : std::string(), gs ? gs->glsl : std::string()};
         ckey = program_cache_key(s);
         g_prog_ckeys.emplace(key, ckey);
+        note_program_use(ckey);
         if (g_num_workers == 0) {   // synchronous: build right here (old behaviour)
             const uint64_t t0 = gp_now();
             const GLuint prog = program_build(ckey, s);

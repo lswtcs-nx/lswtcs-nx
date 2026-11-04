@@ -2469,3 +2469,40 @@ The tester: the cantina shop now takes A to select.
 - **Image read:** unbuffered 4 MB reads into a heap buffer, then copied into the guest window. The bytes are the same.
 - **`[LONGWAIT]`** skips waits with no timeout after 30 s from `main`.
 - Expected first guest frame: about 2-3 s plus the user selector's time, against 18.5 s.
+
+## Run 69
+
+The tester: everything worked, and the game opened faster.
+
+**Boot** (`[BOOT]`):
+- User selector: 79 to 3740 ms (the tester's time).
+- Guest memory: 0.25 s.
+- Image read: 0.28 s (was 1.40).
+- Data and dispatch table: 0.29 s.
+- Host pointer scan: 18 ms (was 1.96 s).
+- `_xstart` at 4.6 s; `[HOSTLINK]` at about 4.8 s, with no wait.
+- First guest frame at 5.4 s (run 68: 18.5 s). Without the selector, about 1.8 s.
+
+**Errors:** none. The log ends at a `[CLOCK]` line: the game was closed from the system.
+
+**Frame rate** (handheld):
+- 1300+ draws: 26.3 FPS over 54 s.
+- 300-1300 draws: 40.1 FPS.
+
+**Loads** (`b`):
+- Hub to Gungan: 10.1 s.
+- Gungan to hub: 22.5 s from the pause menu. The loading screen itself lasted about 11 s; the rest was the pause menu and the exit screens.
+
+**Audio:**
+- Empty in play (150+ draws): 3.1 s, against 0.4 s in run 68 and 0.2 s in run 66.
+- About 1.9 s of it came during the first arrival at the hub (37-45 s of frame time, 5-49 FPS). The background compile of the 950 saved programs (about 46 s on two workers) was still running, now that the boot is 13 s shorter. The render thread built 23 of the hub's programs on request (`[GLSTALL]` replay 1737, 96 still queued), with the audio held while it waited.
+- About 0.8 s came at 60 s: new shaders (`[SHADERNEW]` at swap 2594), compiled on the spot and saved for the next session.
+
+## Log 70: `0.0.76-log70`
+
+- **Program use order:**
+  - `glprogs2/order.bin` keeps the keys of the programs the session asked for, in the order of the first request.
+  - It is saved after 32, 128, 256, 512 and 1024 programs, as this session's order followed by the earlier order's keys not yet seen.
+  - The boot reader queues those programs first, then the rest in directory order.
+  - The log shows `[GLPROG] ... N of them first in the last session's order`; `LSWTCS_GLPROGORDER=0` turns it off.
+  - The first log70 session writes the file; the effect shows from the second boot on.

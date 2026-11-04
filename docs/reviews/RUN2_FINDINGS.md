@@ -2577,3 +2577,17 @@ The tester went to the hub twice and started with two detached Joy-Cons, one in 
 
 - **Joy-Cons at start:** No1 and No2 go to dual assignment. Two single Joy-Cons (one left, one right) are merged into one controller (`hidMergeSingleJoyAsDualJoy`, `[PADS] ... joined as one controller`). Two players with a Joy-Con each come only from the controller screen, then player 2's Start.
 - **`LSWTCS_LOADMODES=-`:** back to 64 KB refills.
+
+## Run 72: `0.0.78-log72` handheld, measurement by place
+
+One session for the author's update: the hub, then `Gungan_A` to `E`, a single player, no captures. FPS counts only frames with 150 or more draws (450 or more for 3-tile builds) and frame times under 1 s. The heavy part is 1300+ draws (3900+ before one tile).
+
+| Place | Run 10 (oldest with level tags) | Run 72 handheld | Run 71 docked |
+| --- | --- | --- | --- |
+| Hub | 14.7 | 44.2 | 55.0 |
+| `Gungan_B` | 14.1 | 29.4 | 36.8 |
+| `Gungan_B` heavy part | 9.8 | 27.4 | 30.0 |
+| `Gungan_C` | 15.9 | 31.5 | 53.5 (18 s) |
+| `Gungan_E` | - | 33.1 | - |
+
+The draw-count bands used for the previous update no longer fit handheld: with the GPU as the limit, frames with fewer draws are not lighter. Run 71's heavy-band 2500-4000 reading of 37 FPS came from 14 s of frames.

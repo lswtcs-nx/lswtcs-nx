@@ -2848,3 +2848,28 @@ One session on B (the log says `(log77 B)`): the hub, `Gungan_A`, `B`, `C`, `E`,
 - With `volatile`, guest accesses kept their order whatever their types. Without it, GCC may assume that a 32-bit store and a 64-bit or 16-bit load of the same guest address do not alias, and reorder or forward them. The game reads stale values.
 - So B's figures do not measure the technique.
 - B also ran with that extra (unsafe) freedom and still gained at most about 2-5 % per guest call. The fixed build can only gain less.
+
+## Run 79: `0.0.83-log77` (A) handheld
+
+One session: the hub, `Gungan_A` to `E`, the hub. No crash. Log76's texture staging (included in A) is tested here for the first time.
+
+**Texture uploads:**
+- 2.73 ms per new texture, against 7.40 in run 77 and 8.02 in run 76 (both log75). That is 65 % less.
+- Render-thread samples no longer show staging buffer objects. The remaining `nouveau_bo_new` / `nvMapCreate` samples are the textures' own storage, one buffer object per texture.
+- Small textures still cost the most: BC3 64x64 with 7 mips 9.1 ms; BC3 256x256 with 9 mips 7.7 ms.
+- Decode: 2.18 ms per texture. A BC1 1024x1024 takes about 9 ms, on the render thread.
+
+**Area-entry stalls in `Gungan`:**
+- Texture time inside `[GLSTALL]` went from 3045 ms over 4 stalls (run 77) to 1600 ms over 6.
+- The longest frame in `Gungan_A` went from 1565 to 765 ms.
+
+**Two other stalls at the `Gungan_B` entry** (replays 5341 and 5350):
+- They are 535 and 688 ms of `bind` (program, uniform buffers, texture units), not textures or program builds.
+- 533 saved programs were still queued then: the reader took 131 s to queue the 1255 files, and the workers were still compiling.
+- Mesa's GL thread was idle 77 % of the session, so the stall is not its translating. Cause not found.
+
+**Other figures:**
+- FPS: hub 37.3; `Gungan_B` 28.6 (heavy part 25.7); `Gungan_C` 31.3.
+- CPU per guest call: 161 ns.
+- Heap: 2438 MB in use at the end, 604 MB free.
+- Clocks: CPU 1020 MHz, GPU 307.2 MHz, memory 1331 MHz. Docked (run 71): GPU 768, memory 1600.

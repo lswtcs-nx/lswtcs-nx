@@ -414,3 +414,43 @@ Runs 73-75 crashed from host memory, and the remaining stutters are texture uplo
 **Cost:** the live renderer is about 6,700 lines of GL path with months of fixes (tiles, resolves, untiling, EDRAM, ZCULL). `deko_backend.cpp` is 835 lines from the 1 November baseline. A switch is a rewrite, and the author's call ("not now").
 
 **Recommendation:** fix the two causes found in the Mesa path first (log75), measure, and bring deko3d to the author only if memory or upload costs remain. The case for it would be memory (programs, the 512 MB copy) and upload cost, not FPS.
+
+## Zoom out after run 79 (4 November 2026)
+
+**Where the port stands (handheld, stock clocks):**
+- **Stability:**
+  - Runs 76, 77 and 79 had no crash, up to 870 s and three levels.
+  - Runs 73-75's out-of-memory crashes came from rpmalloc keeping freed blocks (log75) and no heap figures (log73). 604 MB stays free now.
+- **FPS** (same route, `Gungan`):
+
+  | Place | Run 10 | Run 79 handheld | Run 71 docked |
+  | --- | --- | --- | --- |
+  | Hub | 14.7 | 37-44 | 55 |
+  | `Gungan_B` | 14.1 | 28.6 | 36.8 |
+  | `Gungan_B` heavy part | 9.8 | 25.7 | 30.0 |
+
+- **Stutters:**
+  - New textures cost 2.7 ms each (log76; was 8).
+  - A level's first visit still builds its programs on first use: 0.5-2.6 s for the largest. Later visits find them in the saved list.
+- **Boot:** first guest frame at 5-10 s. The saved-program list (1255 files) then takes about 2 minutes to queue and longer to compile, in the background.
+
+**What limits each mode:**
+- **Handheld is GPU-bound.** The port runs the handheld GPU at 307.2 MHz, the lowest of Nintendo's three official handheld profiles (307.2, 384, 460.8 MHz). Docked runs it at 768.
+- **Docked is CPU-bound.** The main guest thread at 1020 MHz, the same clock in both modes.
+- **So handheld's ceiling is today's docked FPS:** `Gungan_B` 36.8, heavy part 30.0, hub 55.
+
+**Options, by expected value:**
+
+| Option | Expected | Cost and risk | Whose call |
+| --- | --- | --- | --- |
+| Handheld GPU profile 384 or 460.8 MHz (official, not overclock) | Up to the docked FPS: `Gungan_B` about +17-28 %, hub more | A setting; battery and heat | Author (and tester: stock clocks) |
+| Texture decode off the render thread; pooled storage for small textures | Area-entry and cutscene stalls about halved again | Medium; decode is pure CPU | Ours |
+| Saved programs: queue the current level's first, read the list faster | Fewer first-minutes stalls (run 79's 0.5-0.7 s `bind` frames) | Small | Ours |
+| CPU wall (docked): native rewrites of the hottest guest functions, PGO | 5-10 % each, unmeasured | Medium-large; no single hot function (top one 4.7 %) | Ours |
+| Guest memory without volatile (log77 B) | At most 2-5 % per guest call even with unsafe aliasing; a correct build would need `-fno-strict-aliasing` | Wrong behaviour seen (run 78) | Shelved |
+| Deko3D | Memory and upload costs; FPS 0-10 % handheld, capped by docked | Renderer rewrite | Author |
+| Guest threads on several cores (Route 1) | Docked CPU wall | Large; earlier attempts stalled on locks | Ours, later |
+
+**Recommendation:**
+- Bring the handheld GPU profile to the author first: it is the only lever that moves handheld FPS by more than noise.
+- On our side, finish the stutter work (texture decode, small textures, saved-list order). The port is stable now, and stutters are what the tester notices most.

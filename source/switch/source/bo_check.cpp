@@ -15,7 +15,9 @@ int __real_nouveau_bo_wait(nouveau_bo*, uint32_t, nouveau_client*);
 }
 #include <cstdio>
 #include <cstdlib>
+#include <cstddef>
 #include <mutex>
+#include <unordered_map>
 
 namespace {
 using namespace lsw_bo_check;
@@ -177,8 +179,90 @@ extern "C" void lsw_bo_check_finish() {
     if (FILE* f = OpenReport()) { lsw_bo_check_dump(f, nullptr, 0); std::fclose(f); }
 }
 extern "C" volatile int lsw_nvc0_rt_compress;   // mesa_compress_edits.py
+
+// ---- log78: a pool of freed texture storage ----
+// Run 79: every new texture's storage was a new buffer object, and on the Switch nouveau_bo_new is a memalign, a memset and two
+// calls to the GPU service (nvMapCreate, nvAddressSpaceMap); the render thread spent about 0.6 s of the session there
+// (nvc0_miptree_create), the biggest share of a small texture's cost. Freed block-linear buffers (textures and render targets: a
+// memory kind other than pitch) of up to 4 MB in video memory are now kept, up to 64 MB, and handed to the next request with the same
+// size, alignment, flags, kind and tile mode. Release waits for the buffer's fence first, as libdrm's nouveau_bo_del does, so the GPU
+// is done with it. The contents are not cleared: GL leaves new texture storage undefined, and every texture is uploaded whole.
+// Mirrors libdrm_nouveau 1.0.1's private BO (private.h); the first buffer the pool sees checks the layout, and the pool turns itself
+// off if it does not match. LSWTCS_BOPOOL=0 turns it off. Not used while the BO checker above is armed.
+namespace {
+struct BoPriv { nouveau_bo base; int32_t refcnt; void* map_addr; uint32_t name; uint32_t access; NvMap map; NvFence fence; };
+static_assert(offsetof(BoPriv, refcnt) == 80, "libdrm_nouveau 1.0.1 layout");
+struct PoolKey {
+    uint64_t size; uint32_t flags, align, memtype, tile_mode;
+    bool operator==(const PoolKey& o) const {
+        return size == o.size && flags == o.flags && align == o.align && memtype == o.memtype && tile_mode == o.tile_mode;
+    }
+};
+struct PoolKeyHash {
+    size_t operator()(const PoolKey& k) const {
+        return size_t(k.size * 1000003u) ^ (size_t(k.flags) << 1) ^ (size_t(k.align) << 7) ^ (size_t(k.memtype) << 13) ^ (size_t(k.tile_mode) << 21);
+    }
+};
+std::mutex g_pool_mtx;
+std::unordered_map<nouveau_bo*, PoolKey> g_pool_owned;   // buffers made through the pool path, live or kept
+std::unordered_multimap<PoolKey, nouveau_bo*, PoolKeyHash> g_pool_free;
+uint64_t g_pool_bytes = 0, g_pool_hits = 0, g_pool_misses = 0, g_pool_kept = 0, g_pool_dropped = 0;
+int g_pool_state = -1;   // -1: not checked yet, 0: off, 1: on
+constexpr uint64_t kPoolMaxBo = 4ull << 20, kPoolCap = 64ull << 20;
+bool pool_wanted() {
+    static const bool on = [] { const char* e = getenv("LSWTCS_BOPOOL"); return !(e && e[0] == '0'); }();
+    return on && g_pool_state != 0 && !g_ledger.enabled.load(std::memory_order_relaxed);
+}
+bool pool_eligible(uint32_t flags, uint64_t size, const nouveau_bo_config* config) {
+    return config && config->nvc0.memtype != 0 && (flags & NOUVEAU_BO_VRAM) && size && size <= kPoolMaxBo &&
+           !(lsw_nvc0_rt_compress & 1);
+}
+// The layout check, on a buffer just made by libdrm: its NvMap handle is the public handle, the fence is unset, the CPU copy exists.
+bool pool_layout_ok(nouveau_bo* bo) {
+    const BoPriv* p = reinterpret_cast<const BoPriv*>(bo);
+    return p->map.handle == bo->handle && p->fence.id == UINT32_MAX && p->map_addr &&
+           (reinterpret_cast<uintptr_t>(p->map_addr) & 0xFFF) == 0;
+}
+void pool_release(nouveau_bo* bo, const PoolKey& k) {
+    BoPriv* p = reinterpret_cast<BoPriv*>(bo);
+    if (int32_t(p->fence.id) >= 0) {   // as nouveau_bo_fence_wait
+        nvFenceWait(&p->fence, -1);
+        p->fence.id = UINT32_MAX;
+        p->fence.value = 0;
+    }
+    p->access = 0;
+    bool keep;
+    {
+        std::lock_guard<std::mutex> lk(g_pool_mtx);
+        keep = g_pool_bytes + k.size <= kPoolCap;
+        if (keep) { g_pool_free.emplace(k, bo); g_pool_bytes += k.size; ++g_pool_kept; }
+        else { g_pool_owned.erase(bo); ++g_pool_dropped; }
+    }
+    if (!keep) { nouveau_bo* q = bo; __real_nouveau_bo_ref(nullptr, &q); }   // the last reference: libdrm deletes it
+}
+} // namespace
+
+// [HEAPGL] (gl_backend.cpp): buffers handed out from the pool, made new, kept, too many to keep, MB kept now.
+extern "C" void lsw_bo_pool_stats(uint64_t* hits, uint64_t* misses, uint64_t* kept, uint64_t* dropped, uint64_t* bytes, int* state) {
+    std::lock_guard<std::mutex> lk(g_pool_mtx);
+    *hits = g_pool_hits; *misses = g_pool_misses; *kept = g_pool_kept; *dropped = g_pool_dropped; *bytes = g_pool_bytes; *state = g_pool_state;
+}
+
 extern "C" int __wrap_nouveau_bo_new(nouveau_device* d, uint32_t flags, uint32_t align, uint64_t size,
                                       nouveau_bo_config* config, nouveau_bo** out) {
+    const bool pooled = out && pool_wanted() && pool_eligible(flags, size, config);
+    PoolKey key{};
+    if (pooled) {
+        key = {(size + 0xFFF) & ~uint64_t(0xFFF), flags, align < 0x1000 ? 0x1000u : align, config->nvc0.memtype, config->nvc0.tile_mode};
+        nouveau_bo* got = nullptr;
+        {
+            std::lock_guard<std::mutex> lk(g_pool_mtx);
+            auto it = g_pool_free.find(key);
+            if (it != g_pool_free.end()) { got = it->second; g_pool_free.erase(it); g_pool_bytes -= key.size; ++g_pool_hits; }
+            else ++g_pool_misses;
+        }
+        if (got) { *out = got; return 0; }   // still holds the one reference the pool kept
+    }
     // A render target of states Z and J: a big-page mapping, as deko3d gives compressed images. Horizon may otherwise map a compressed kind without compression.
     if ((lsw_nvc0_rt_compress & 1) && config) {
         align = 0x20000;
@@ -187,17 +271,50 @@ extern "C" int __wrap_nouveau_bo_new(nouveau_device* d, uint32_t flags, uint32_t
     }
     const int rc = __real_nouveau_bo_new(d, flags, align, size, config, out);
     const auto caller = reinterpret_cast<uintptr_t>(__builtin_return_address(0));
-    if (!rc && out && *out) Observe([&] { g_ledger.Created(reinterpret_cast<uintptr_t>(*out), reinterpret_cast<uintptr_t>(d), Read(reinterpret_cast<uintptr_t>(*out)), Here(caller)); });
+    if (!rc && out && *out) {
+        // A new buffer at an address the pool knew means libdrm freed the old one without passing here: forget it.
+        bool track = false;
+        {
+            std::lock_guard<std::mutex> lk(g_pool_mtx);
+            if (pooled && g_pool_state < 0) {
+                g_pool_state = pool_layout_ok(*out) ? 1 : 0;
+                std::printf("[BOPOOL] texture storage pool %s (libdrm private layout %s)\n", g_pool_state ? "on" : "OFF",
+                            g_pool_state ? "as expected" : "differs");
+            }
+            track = pooled && g_pool_state == 1;
+            if (track) g_pool_owned[*out] = key; else g_pool_owned.erase(*out);
+        }
+        Observe([&] { g_ledger.Created(reinterpret_cast<uintptr_t>(*out), reinterpret_cast<uintptr_t>(d), Read(reinterpret_cast<uintptr_t>(*out)), Here(caller)); });
+    }
     return rc;
 }
 extern "C" int __wrap_nouveau_bo_name_ref(nouveau_device* d, uint32_t name, nouveau_bo** out) {
     const int rc = __real_nouveau_bo_name_ref(d, name, out);
     const auto caller = reinterpret_cast<uintptr_t>(__builtin_return_address(0));
+    if (!rc && out && *out) { std::lock_guard<std::mutex> lk(g_pool_mtx); g_pool_owned.erase(*out); }   // log78 pool: not a pooled buffer
     if (!rc && out && *out) Observe([&] { g_ledger.Created(reinterpret_cast<uintptr_t>(*out), reinterpret_cast<uintptr_t>(d), Read(reinterpret_cast<uintptr_t>(*out)), Here(caller)); });
     return rc;
 }
 extern "C" void __wrap_nouveau_bo_ref(nouveau_bo* bo, nouveau_bo** out) {
     const auto caller = reinterpret_cast<uintptr_t>(__builtin_return_address(0));
+    if (out && *out && *out != bo && g_pool_state == 1 && pool_wanted()) {   // log78 pool: the last reference of a pooled buffer
+        nouveau_bo* const last = *out;
+        PoolKey key{};
+        bool owned;
+        {
+            std::lock_guard<std::mutex> lk(g_pool_mtx);
+            auto it = g_pool_owned.find(last);
+            owned = it != g_pool_owned.end();
+            if (owned) key = it->second;
+        }
+        if (owned && __atomic_load_n(&reinterpret_cast<BoPriv*>(last)->refcnt, __ATOMIC_ACQUIRE) == 1) {
+            nouveau_bo* taken = nullptr;
+            if (bo) __real_nouveau_bo_ref(bo, &taken);   // +1 on the new one, nothing released
+            *out = bo;
+            pool_release(last, key);
+            return;
+        }
+    }
     nouveau_bo* previous = nullptr;
     if (g_ledger.enabled.load(std::memory_order_acquire)) {
         previous = out ? *out : nullptr;

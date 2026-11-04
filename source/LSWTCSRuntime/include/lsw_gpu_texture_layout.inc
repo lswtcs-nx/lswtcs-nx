@@ -110,6 +110,28 @@ extern "C" int64_t lsw_gpu_tiled_offset(uint32_t x,uint32_t y,uint32_t z,
                xe::gpu::texture_address::Tiled2D(x,y,pitch,log2_bytes);
 }
 
+// log78: decode into storage the caller provides (reserve returns at least `bytes`, or null), so several threads can decode at
+// once: lsw_gpu_decode_texture's scratch() is one buffer for the process.
+extern "C" int lsw_gpu_decode_texture_into(const uint32_t* fetch6,const uint8_t* physical,LswGpuTexDesc* out,
+                                           uint8_t* (*reserve)(void* context,uint32_t bytes),void* context) {
+  *out={};
+  LswGpuTextureLayout layout{};
+  if (!reserve || !lsw_gpu_plan_texture(fetch6,&layout)) return 0;
+  uint8_t* destination=reserve(context,layout.image.data_size);
+  if (!destination) return 0;
+  struct Decode {const uint8_t* source; uint8_t* destination;} decode{physical,destination};
+  if (!physical || !lsw_gpu_visit_texture_blocks(&layout,[](void* c,const LswGpuTextureBlock* block) {
+    auto& decode=*static_cast<Decode*>(c);
+    auto* o=decode.destination+block->decoded_offset;
+    auto* in=decode.source+block->physical;
+    if (!block->byte_xor) std::memcpy(o,in,block->bytes);
+    else for (uint32_t i=0;i<block->bytes;++i) o[i]=in[i^block->byte_xor];
+    return true;
+  },&decode)) return 0;
+  *out=layout.image;out->data=destination;
+  return 1;
+}
+
 extern "C" int lsw_gpu_decode_texture(const uint32_t* fetch6,const uint8_t* physical,
                                       LswGpuTexDesc* out) {
   *out={};

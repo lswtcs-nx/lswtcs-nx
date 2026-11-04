@@ -141,6 +141,8 @@ extern "C" void lsw_heap_stats(uint64_t* size, uint64_t* in_use, uint64_t* free_
 extern "C" uint32_t lsw_heap_free_mb();                                                                         // platform_switch.cpp
 extern "C" void lsw_bridge_counts(uint32_t* shaders, uint32_t* translations, uint32_t* memo, uint32_t* memo_clears);   // gl_bridge.cc
 extern "C" void lsw_big_alloc_stats(size_t* bytes, size_t* count) __attribute__((weak));   // rpmalloc_switch.c (LSW_RPMALLOC)
+extern "C" void lsw_bo_pool_stats(uint64_t* hits, uint64_t* misses, uint64_t* kept, uint64_t* dropped, uint64_t* bytes,
+                                  int* state) __attribute__((weak));   // bo_check.cpp (log78)
 
 bool env_on(const char* name, bool def) {
     const char* e = getenv(name);
@@ -515,6 +517,147 @@ void note_program_use(uint64_t ckey) {
     lsw_bg_submit_other(keys->size() * 8, [keys] { program_order_save(*keys); });
 }
 
+// log78: programs by level (glprogs2/levels.bin; LSWTCS_GLPROGLEVEL, default on). Run 79: the saved programs are queued in the last
+// session's order of first use, so a level met again found its programs anywhere in the queue: at the Gungan_B entry 533 were still
+// queued and the render thread waited 535-688 ms on single programs. Each level (lsw_level_name) now keeps the programs it used, over
+// sessions; when the game starts a level, its saved programs not built yet move to the front of the queue, in the level's order of
+// first use, behind the ones the game already asked for. Again when the saved-program reader finishes.
+constexpr uint32_t kLevelsMagic = 0x4C57534Cu;   // "LSWL"
+constexpr uint32_t kLevelsMax = 512, kLevelKeysMax = 4096;
+using LevelLists = std::unordered_map<uint64_t, std::vector<uint64_t>>;   // level (hash of its name) -> program keys
+LevelLists g_level_prev;              // read at boot: earlier sessions
+LevelLists g_level_now;               // render thread: this session, first use first
+std::unordered_set<uint64_t> g_level_seen;   // render thread: level and key pairs noted this session
+uint64_t g_level_hash = 0;            // render thread: the current level, 0 before the first
+char g_level_label[128] = "";         // render thread: its name
+uint32_t g_level_seq_cur = 0;         // render thread: lsw_level_seq() last seen
+uint32_t g_level_unsaved = 0;         // render thread: notes since the last save
+uint32_t g_level_moved = 0;           // render thread: saved programs moved ahead, session
+std::atomic<bool> g_prog_reader_done{false};
+bool prog_level_on() {
+    static const bool on = env_on("LSWTCS_GLPROGLEVEL", true);
+    return on;
+}
+uint64_t level_pair(uint64_t level, uint64_t key) { return level * 0x9E3779B97F4A7C15ull ^ key; }
+LevelLists program_levels_read() {
+    LevelLists out;
+    FILE* f = fopen(LSW_PROGLIST_DIR "/levels.bin", "rb");
+    if (!f) return out;
+    uint32_t hdr[2] = {};
+    if (fread(hdr, sizeof hdr, 1, f) == 1 && hdr[0] == kLevelsMagic && hdr[1] <= kLevelsMax) {
+        for (uint32_t i = 0; i < hdr[1]; ++i) {
+            uint64_t level = 0;
+            uint32_t n = 0;
+            if (fread(&level, sizeof level, 1, f) != 1 || fread(&n, sizeof n, 1, f) != 1 || n > kLevelKeysMax) { out.clear(); break; }
+            std::vector<uint64_t>& keys = out[level];
+            keys.resize(n);
+            if (n && fread(keys.data(), sizeof(uint64_t), n, f) != n) { out.clear(); break; }
+        }
+    }
+    fclose(f);
+    return out;
+}
+void program_levels_save(const std::vector<std::pair<uint64_t, std::vector<uint64_t>>>& levels) {
+    const char* path = LSW_PROGLIST_DIR "/levels.bin";
+    const char* tmp = LSW_PROGLIST_DIR "/levels.tmp";
+    FILE* f = fopen(tmp, "wb");
+    if (!f) return;
+    const uint32_t hdr[2] = {kLevelsMagic, uint32_t(levels.size())};
+    bool ok = fwrite(hdr, sizeof hdr, 1, f) == 1;
+    for (const auto& [level, keys] : levels) {
+        const uint32_t n = uint32_t(keys.size());
+        ok = ok && fwrite(&level, sizeof level, 1, f) == 1 && fwrite(&n, sizeof n, 1, f) == 1 &&
+             fwrite(keys.data(), sizeof(uint64_t), n, f) == n;
+    }
+    fclose(f);
+    if (!ok) { remove(tmp); return; }
+    remove(path);   // the SD card's rename does not replace
+    if (rename(tmp, path) != 0) remove(tmp);
+}
+// Render thread: this session's lists, then the earlier sessions' keys this session did not note for that level, saved off this thread.
+void program_levels_flush() {
+    g_level_unsaved = 0;
+    auto out = std::make_shared<std::vector<std::pair<uint64_t, std::vector<uint64_t>>>>();
+    size_t bytes = 0;
+    auto add = [&](uint64_t level) {
+        if (out->size() >= kLevelsMax) return;
+        std::vector<uint64_t> keys;
+        if (auto it = g_level_now.find(level); it != g_level_now.end()) keys = it->second;
+        if (auto it = g_level_prev.find(level); it != g_level_prev.end())
+            for (uint64_t k : it->second)
+                if (keys.size() < kLevelKeysMax && !g_level_seen.count(level_pair(level, k))) keys.push_back(k);
+        bytes += keys.size() * 8 + 12;
+        out->emplace_back(level, std::move(keys));
+    };
+    for (const auto& kv : g_level_now) add(kv.first);
+    for (const auto& kv : g_level_prev) if (!g_level_now.count(kv.first)) add(kv.first);
+    lsw_bg_submit_other(bytes, [out] { program_levels_save(*out); });
+}
+// Render thread: a program drawn in the current level (once per level and program).
+void note_level_use(uint64_t ckey) {
+    if (!g_level_hash || !prog_list_on() || !prog_level_on()) return;
+    if (!g_level_seen.insert(level_pair(g_level_hash, ckey)).second) return;
+    std::vector<uint64_t>& keys = g_level_now[g_level_hash];
+    if (keys.size() < kLevelKeysMax) keys.push_back(ckey);
+    if (++g_level_unsaved >= 32) program_levels_flush();
+}
+// Render thread: the queue becomes [asked for by the game] [this level's saved programs, in its order] [the rest]; later copies of a
+// key are dropped (a worker would skip them anyway, and two adjacent copies could be built twice at once).
+void prog_queue_level_first(const char* why) {
+    std::unordered_map<uint64_t, uint32_t> rank;
+    auto add = [&](const LevelLists& lists) {
+        auto it = lists.find(g_level_hash);
+        if (it != lists.end()) for (uint64_t k : it->second) rank.emplace(k, uint32_t(rank.size()));
+    };
+    add(g_level_now);
+    add(g_level_prev);
+    size_t asked = 0, moved = 0, total = 0;
+    if (!rank.empty()) {
+        std::lock_guard<std::mutex> lk(g_prog_mtx);
+        std::deque<std::pair<uint64_t, ProgSources>> first, rest;
+        std::vector<std::pair<uint32_t, std::pair<uint64_t, ProgSources>>> level;
+        std::unordered_set<uint64_t> placed;
+        for (auto& job : g_prog_queue) {
+            if (!placed.insert(job.first).second) continue;
+            auto e = g_prog_entries.find(job.first);
+            const bool queued = e != g_prog_entries.end() && e->second.state == kProgQueued;
+            auto r = rank.find(job.first);
+            if (queued && e->second.requested) first.push_back(std::move(job));
+            else if (queued && r != rank.end()) level.emplace_back(r->second, std::move(job));
+            else rest.push_back(std::move(job));
+        }
+        std::stable_sort(level.begin(), level.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+        asked = first.size();
+        moved = level.size();
+        g_prog_queue = std::move(first);
+        for (auto& j : level) g_prog_queue.push_back(std::move(j.second));
+        for (auto& j : rest) g_prog_queue.push_back(std::move(j));
+        total = g_prog_queue.size();
+    }
+    g_level_moved += uint32_t(moved);
+    printf("[GLPROG] level %s (%s): %zu saved programs known for it, %zu still queued moved ahead (behind %zu asked for), %zu queued\n",
+           g_level_label, why, rank.size(), moved, asked, total);
+    fflush(stdout);
+    if (moved) g_prog_cv.notify_one();
+}
+// Render thread, once per replay.
+void level_watch() {
+    if (!prog_list_on() || !prog_level_on() || g_num_workers == 0) return;
+    static bool reader_seen = false;
+    const uint32_t seq = lsw_level_seq();
+    if (seq != g_level_seq_cur) {
+        g_level_seq_cur = seq;
+        if (g_level_unsaved) program_levels_flush();
+        lsw_level_name(g_level_label, sizeof g_level_label);
+        g_level_hash = g_level_label[0] ? (XXH3_64bits(g_level_label, strlen(g_level_label)) | 1) : 0;
+        if (g_level_hash) prog_queue_level_first("level start");
+    }
+    if (!reader_seen && g_prog_reader_done.load(std::memory_order_acquire)) {
+        reader_seen = true;
+        if (g_level_hash) prog_queue_level_first("saved list read");
+    }
+}
+
 // Compile + link one program in the calling thread's context. Returns 0 on failure (logged).
 // Compiled shader stages shared by programs (LSWTCS_GLSTAGEREUSE, default on), keyed by GLSL + stage:
 // programs pair a few vertex / geometry shaders with many pixel shaders, and each stage used to be
@@ -837,6 +980,12 @@ void program_cache_init() {
     // idle meanwhile (run 66). Now a reader thread queues them while the game boots (log67, LSWTCS_GLPROGBG, default on). A program
     // the game asks for before the reader gets to it is built on request as before; the reader then skips its key.
     if (prog_list_on() && env_on("LSWTCS_GLPROGORDER", true)) g_prog_prev_order = program_order_read();
+    if (prog_list_on() && prog_level_on()) {
+        g_level_prev = program_levels_read();
+        size_t n = 0;
+        for (const auto& kv : g_level_prev) n += kv.second.size();
+        printf("[GLPROG] programs by level: %zu levels, %zu entries from earlier sessions\n", g_level_prev.size(), n);
+    }
     auto read_list = [] {
         const uint64_t t0 = gp_now();
         uint32_t queued = 0, ordered = 0;
@@ -882,6 +1031,7 @@ void program_cache_init() {
         printf("[GLPROG] %u saved programs queued for background compile in %llu ms, %u of them first in the last session's order (%zu keys)\n",
                queued, (unsigned long long)((gp_now() - t0) / 1000000), ordered, g_prog_prev_order.size());
         fflush(stdout);
+        g_prog_reader_done.store(true, std::memory_order_release);
     };
     for (int i = 0; i < g_num_workers; ++i) std::thread(compile_worker_main, i).detach();
     const bool list = g_num_workers > 0 && prog_list_on();
@@ -889,8 +1039,11 @@ void program_cache_init() {
         std::thread([read_list] {
             // log71: core 2 beside worker 0, below the audio threads there. On core 0 at 0x3B (log67-70) it competed with the guest
             // threads for 8-15 s of the boot, the logos and menus included.
+            // log78: 0x2C, above worker 0 (0x2D). Run 79: at the same priority as worker 0, which only stops between programs, the
+            // reader took 131 s for 1255 files, and the programs it had not reached yet were missing from the queue's order. It
+            // mostly waits on the SD card, which gives the core back.
             pin_to_core(2, "saved-program reader");
-            svcSetThreadPriority(CUR_THREAD_HANDLE, 0x2D);
+            svcSetThreadPriority(CUR_THREAD_HANDLE, 0x2C);
             read_list();
         }).detach();
     } else if (list) {
@@ -920,7 +1073,9 @@ struct ProgKeyHash {
         return std::hash<const void*>()(k.vs) ^ (std::hash<const void*>()(k.ps) * 31) ^ (std::hash<const void*>()(k.gs) * 131);
     }
 };
-std::unordered_map<ProgKey, GLuint, ProgKeyHash> g_programs;   // render thread: settled programs
+// Render thread: settled programs; level = g_level_seq_cur when last noted for the level lists (log78).
+struct SettledProg { GLuint prog = 0; uint32_t level = 0; uint64_t ckey = 0; };
+std::unordered_map<ProgKey, SettledProg, ProgKeyHash> g_programs;
 std::unordered_map<ProgKey, uint64_t, ProgKeyHash> g_prog_ckeys;   // render thread: content key per shader set
 
 // Program for a draw, or 0 if it is not ready (still compiling: the draw is skipped this frame) or
@@ -953,7 +1108,10 @@ GLuint program(const LswGlShader* vs, const LswGlShader* ps, const LswGlShader* 
     }
     const ProgKey key{vs, ps, gs};
     auto it = g_programs.find(key);
-    if (it != g_programs.end()) return it->second;
+    if (it != g_programs.end()) {
+        if (it->second.level != g_level_seq_cur) { it->second.level = g_level_seq_cur; note_level_use(it->second.ckey); }
+        return it->second.prog;
+    }
     // Content key (hashing ~100 KB of GLSL once per shader set, not per draw).
     uint64_t ckey;
     auto ck = g_prog_ckeys.find(key);
@@ -964,13 +1122,14 @@ GLuint program(const LswGlShader* vs, const LswGlShader* ps, const LswGlShader* 
         ckey = program_cache_key(s);
         g_prog_ckeys.emplace(key, ckey);
         note_program_use(ckey);
+        note_level_use(ckey);
         if (g_num_workers == 0) {   // synchronous: build right here (old behaviour)
             const uint64_t t0 = gp_now();
             const GLuint prog = program_build(ckey, s);
             std::lock_guard<std::mutex> lk(g_prog_mtx);
             ++g_prog_compiled;
             g_prog_compile_ns += gp_now() - t0;
-            g_programs.emplace(key, prog);
+            g_programs.emplace(key, SettledProg{prog, g_level_seq_cur, ckey});
             return prog;
         }
         // Off this thread: in run 10 the file work of a rewritten list was about 20 % of the render thread's samples in freezes. A full queue only means
@@ -1004,7 +1163,8 @@ GLuint program(const LswGlShader* vs, const LswGlShader* ps, const LswGlShader* 
         g_frame_wait.push_back(ckey);
         return 0;
     }
-    g_programs.emplace(key, e.prog);   // ready or failed: settled
+    g_programs.emplace(key, SettledProg{e.prog, g_level_seq_cur, ckey});   // ready or failed: settled
+    note_level_use(ckey);
     return e.prog;
 }
 // State F: early depth and stencil tests for pixel shaders that run late only because of the alpha test the translator emits in each
@@ -1589,7 +1749,7 @@ void gpu_prof_finish() {
     std::sort(top.begin(), top.end(), [](const auto& a, const auto& b) { return a.second.ns > b.second.ns; });
     for (size_t i = 0; i < top.size() && i < 10; ++i) {
         uint64_t ckey = 0;   // names the program's GLSL in sdmc:/lswtcs/glprogs2
-        for (const auto& kv : g_programs) if (kv.second == top[i].first) { auto ck = g_prog_ckeys.find(kv.first); if (ck != g_prog_ckeys.end()) ckey = ck->second; break; }
+        for (const auto& kv : g_programs) if (kv.second.prog == top[i].first) { auto ck = g_prog_ckeys.find(kv.first); if (ck != g_prog_ckeys.end()) ckey = ck->second; break; }
         printf("[GLGPU]   program %u (PS %016llX, file %016llX%s): %.2f ms over %u draws, %.2f Mpx\n", top[i].first, (unsigned long long)top[i].second.ps_key,
                (unsigned long long)ckey, g_early_progs.count(top[i].first) ? ", early tests" : "",
                top[i].second.ns / 1e6, top[i].second.draws, top[i].second.pixels / 1e6);
@@ -1751,6 +1911,7 @@ GlTex create_texture(const LswGpuTexDesc& d) {
 struct TexCost { uint32_t n = 0; uint64_t bytes = 0, dec_ns = 0, up_ns = 0; };
 std::map<uint32_t, TexCost> g_tex_cost;
 uint64_t g_tex_pre_made = 0, g_tex_pre_skipped = 0;   // log75 texture_prepass
+uint64_t g_dec_batches = 0, g_dec_wall_ns = 0, g_dec_work_ns = 0;   // log78 parallel decode: batches, wall time, summed work
 void note_texture_cost(const LswGpuTexDesc& d, uint64_t dec_ns, uint64_t up_ns) {
     TexCost& c = g_tex_cost[d.dxgi];
     ++c.n; c.bytes += uint64_t(d.layer_bytes) * d.layers; c.dec_ns += dec_ns; c.up_ns += up_ns;
@@ -1775,9 +1936,11 @@ void report_texture_cost() {
         s += b;
     }
     printf("[TEXCOST] replay %llu: %u new textures, %llu MB, decode %llu ms, upload %llu ms | by dxgi count/MB/decode+upload:%s | "
-           "session: made before the draws %llu, left to the draw loop (resolve memory) %llu\n",
+           "session: made before the draws %llu, left to the draw loop (resolve memory) %llu, parallel decode batches %llu "
+           "(%llu ms of decode work in %llu ms)\n",
            (unsigned long long)g_replays, n, (unsigned long long)(bytes >> 20), (unsigned long long)(dec / 1000000),
-           (unsigned long long)(up / 1000000), s.c_str(), (unsigned long long)g_tex_pre_made, (unsigned long long)g_tex_pre_skipped);
+           (unsigned long long)(up / 1000000), s.c_str(), (unsigned long long)g_tex_pre_made, (unsigned long long)g_tex_pre_skipped,
+           (unsigned long long)g_dec_batches, (unsigned long long)(g_dec_work_ns / 1000000), (unsigned long long)(g_dec_wall_ns / 1000000));
     g_tex_cost.clear();
 }
 
@@ -3260,6 +3423,98 @@ bool texture_prepass_on() {
     static const bool on = env_on("LSWTCS_TEXPREPASS", true);
     return on;
 }
+// log78: the pre-pass decodes its new textures on several threads (LSWTCS_TEXPARALLEL, default on): the render thread and two
+// helpers, one on core 2 at 0x2C (above the compile worker) and one on core 0 at 0x3B (the guest threads' priority: it runs when
+// they wait, as at an area entry, where the guest is held behind the render thread). Run 79: decoding (untiling and byte swaps,
+// pure CPU) took 2.2 ms a texture on the render thread, 9 ms for a BC1 1024x1024, and an area entry brings 80-200 textures. The
+// GL calls stay on the render thread, in the old order.
+struct DecodeJob {
+    uint32_t f6[6]; uint64_t key; std::vector<FetchKey> fks;
+    LswGpuTexDesc d; std::vector<uint8_t> buf; bool ok = false; uint64_t ns = 0;
+};
+struct DecodePool {
+    std::mutex m;
+    std::condition_variable cv, done_cv;
+    std::vector<DecodeJob>* jobs = nullptr;
+    size_t n = 0;
+    std::atomic<size_t> next{0}, done{0};
+    bool open = false;
+    int active = 0;
+    uint64_t gen = 0;
+};
+DecodePool g_dpool;
+uint8_t* decode_reserve(void* c, uint32_t bytes) {
+    auto* v = static_cast<std::vector<uint8_t>*>(c);
+    v->resize(bytes);
+    return v->data();
+}
+void decode_one(DecodeJob& j, const uint8_t* phys) {
+    const uint64_t t0 = gp_now();
+    j.ok = lsw_gpu_decode_texture_into(j.f6, phys, &j.d, decode_reserve, &j.buf) && j.d.ok;
+    j.ns = gp_now() - t0;
+}
+void decode_drain(const uint8_t* phys) {
+    for (;;) {
+        const size_t i = g_dpool.next.fetch_add(1);
+        if (i >= g_dpool.n) return;
+        decode_one((*g_dpool.jobs)[i], phys);
+        g_dpool.done.fetch_add(1);
+    }
+}
+void decode_helper(int core, int prio) {
+    lsw_prof_register(core == 2 ? "texdec_2" : "texdec_0", -1);
+    pin_to_core(core, "texture decode helper");
+    svcSetThreadPriority(CUR_THREAD_HANDLE, prio);
+    uint64_t seen = 0;
+    for (;;) {
+        {
+            std::unique_lock<std::mutex> lk(g_dpool.m);
+            g_dpool.cv.wait(lk, [&] { return g_dpool.open && g_dpool.gen != seen; });
+            seen = g_dpool.gen;
+            ++g_dpool.active;   // under the lock that closes the batch: no helper joins a closed one
+        }
+        decode_drain(g_base + 0x80000000ull);
+        {
+            std::lock_guard<std::mutex> lk(g_dpool.m);
+            --g_dpool.active;
+        }
+        g_dpool.done_cv.notify_all();
+    }
+}
+void decode_batch(std::vector<DecodeJob>& jobs) {
+    const uint8_t* phys = g_base + 0x80000000ull;
+    static const bool par = env_on("LSWTCS_TEXPARALLEL", true);
+    const uint64_t t0 = gp_now();
+    if (!par || jobs.size() < 3) {
+        for (DecodeJob& j : jobs) decode_one(j, phys);
+    } else {
+        static std::once_flag once;
+        std::call_once(once, [] {
+            std::thread(decode_helper, 2, 0x2C).detach();
+            std::thread(decode_helper, 0, 0x3B).detach();
+        });
+        {
+            std::lock_guard<std::mutex> lk(g_dpool.m);
+            g_dpool.jobs = &jobs;
+            g_dpool.n = jobs.size();
+            g_dpool.next.store(0);
+            g_dpool.done.store(0);
+            g_dpool.open = true;
+            ++g_dpool.gen;
+        }
+        g_dpool.cv.notify_all();
+        decode_drain(phys);
+        std::unique_lock<std::mutex> lk(g_dpool.m);
+        g_dpool.open = false;
+        g_dpool.done_cv.wait(lk, [&] { return g_dpool.active == 0 && g_dpool.done.load() >= g_dpool.n; });
+        g_dpool.jobs = nullptr;
+        g_dpool.n = 0;
+        ++g_dec_batches;
+    }
+    g_dec_wall_ns += gp_now() - t0;
+    for (const DecodeJob& j : jobs) g_dec_work_ns += j.ns;
+}
+
 void texture_prepass(const LswGpuFrame& f, bool gpurt) {
     std::vector<std::pair<uint32_t, uint32_t>> dst;   // this frame's resolve destinations, bytes (8 a pixel: an upper bound)
     for (const LswGpuDrawRec& r : f.draws)
@@ -3269,6 +3524,8 @@ void texture_prepass(const LswGpuFrame& f, bool gpurt) {
         }
     const uint8_t* phys = g_base + 0x80000000ull;
     const uint32_t made0 = g_tex_created;
+    std::vector<DecodeJob> jobs;
+    std::unordered_map<uint64_t, size_t> job_of_key;
     for (const LswGpuDrawRec& r : f.draws) {
         if (r.kind == 1) continue;
         const uint32_t* fetch_all = reinterpret_cast<const uint32_t*>(f.arena.data() + r.cb_fetch_off);
@@ -3295,15 +3552,37 @@ void texture_prepass(const LswGpuFrame& f, bool gpurt) {
                 if (!covered && gpurt)
                     for (const auto& kv : g_resolved) if (kv.first >= b && kv.first < end) { covered = true; break; }
                 if (covered) { ++g_tex_pre_skipped; continue; }
-                const uint64_t before = g_tex_bytes;
-                get_texture(f6);
-                // log76: a flush every 16 MB of new textures lets the copies' fences pass and their staging ranges return
-                // to Mesa's suballocator, which keeps every slab it ever made (mesa_texstage_edits.py).
-                static uint64_t since_flush = 0;
-                since_flush += g_tex_bytes - before;
-                if (since_flush >= (16ull << 20)) { glFlush(); since_flush = 0; }
+                auto [jt, fresh] = job_of_key.emplace(key, jobs.size());
+                if (fresh) {
+                    jobs.emplace_back();
+                    memcpy(jobs.back().f6, f6, sizeof jobs.back().f6);
+                    jobs.back().key = key;
+                }
+                jobs[jt->second].fks.push_back(fk);
             }
         }
+    }
+    if (jobs.empty()) return;
+    { RpScope rp(RP_DECODE); decode_batch(jobs); }
+    // The GL side in order, on this thread, as get_texture does.
+    static uint64_t since_flush = 0;
+    for (DecodeJob& j : jobs) {
+        GlTex t;
+        if (j.ok) {
+            RpScope rp(RP_TEXUP);
+            const uint64_t u0 = gp_now();
+            t = create_texture(j.d);
+            note_texture_cost(j.d, j.ns, gp_now() - u0);
+        }
+        t.last_used = g_replays;
+        g_tex_bytes += t.bytes;
+        g_textures.emplace(j.key, t);
+        for (const FetchKey& fk : j.fks) g_tex_memo.emplace(fk, t);
+        std::vector<uint8_t>().swap(j.buf);
+        // log76: a flush every 16 MB of new textures lets the copies' fences pass and their staging ranges return
+        // to Mesa's suballocator, which keeps every slab it ever made (mesa_texstage_edits.py).
+        since_flush += t.bytes;
+        if (since_flush >= (16ull << 20)) { glFlush(); since_flush = 0; }
     }
     g_tex_pre_made += g_tex_created - made0;
 }
@@ -3313,6 +3592,7 @@ PresentSrc replay() {
     if (!g_replay_same) { RpScope rp(RP_TAKE); gpu_frame_take(); }
     LswGpuFrame& f = g_gpu_frame_render;   // replayed again if no newer frame was published
     ++g_replays;
+    level_watch();
     ++g_gl_epoch;   // present / capture / clears changed state since the last replay
     g_tex_memo.clear();
     const bool gpurt = gpurt_on();
@@ -4036,11 +4316,16 @@ PresentSrc replay() {
             std::lock_guard<std::mutex> lk(g_stage_mtx);
             size_t big_bytes = 0, big_count = 0;
             if (lsw_big_alloc_stats) lsw_big_alloc_stats(&big_bytes, &big_count);
+            uint64_t ph = 0, pm = 0, pk = 0, pd = 0, pb = 0; int ps = -1;
+            if (lsw_bo_pool_stats) lsw_bo_pool_stats(&ph, &pm, &pk, &pd, &pb, &ps);
             printf("[HEAPGL] replay %llu: stages cached %zu (limit %zu, %u evicted, %u reused) | heap kept per stage compile %lld KB (%u), "
-                   "per link %lld KB (%u) | big blocks from newlib %zu MB (%zu)\n", (unsigned long long)g_replays, g_stages.size(), stage_max(),
+                   "per link %lld KB (%u) | big blocks from newlib %zu MB (%zu) | texture storage pool %s: reused %llu, new %llu, "
+                   "kept %llu, freed %llu, %llu MB kept now\n", (unsigned long long)g_replays, g_stages.size(), stage_max(),
                    g_stage_evicted, g_stage_reused,
                    g_kept_compile_n ? (long long)(g_kept_compile / g_kept_compile_n / 1024) : 0LL, g_kept_compile_n,
-                   g_kept_link_n ? (long long)(g_kept_link / g_kept_link_n / 1024) : 0LL, g_kept_link_n, big_bytes >> 20, big_count);
+                   g_kept_link_n ? (long long)(g_kept_link / g_kept_link_n / 1024) : 0LL, g_kept_link_n, big_bytes >> 20, big_count,
+                   ps == 1 ? "on" : ps == 0 ? "OFF" : "unused", (unsigned long long)ph, (unsigned long long)pm, (unsigned long long)pk,
+                   (unsigned long long)pd, (unsigned long long)(pb >> 20));
         }
         printf("[HEAP] replay %llu: heap %llu MB, in use %llu MB, free %llu MB (inside %llu, top %llu) | programs %u compiled, %zu known, "
                "%zu queued, %u not compiled (low memory), %zu in use, %zu stages | textures %zu (%llu MB), memo %zu, samplers %zu, fbos %zu, "

@@ -2873,3 +2873,37 @@ One session: the hub, `Gungan_A` to `E`, the hub. No crash. Log76's texture stag
 - CPU per guest call: 161 ns.
 - Heap: 2438 MB in use at the end, 604 MB free.
 - Clocks: CPU 1020 MHz, GPU 307.2 MHz, memory 1331 MHz. Docked (run 71): GPU 768, memory 1600.
+
+
+## Log 78: `0.0.84-log78`, three stutter fixes
+
+All three aim at run 79's stalls at area entries and level starts. Each has its own switch and prints its own figures.
+
+- **Texture decode in parallel** (`gl_backend.cpp`, `LSWTCS_TEXPARALLEL=0` = off).
+  - The pre-pass gathers the frame's new textures first, then decodes them on three threads: the render thread and two helpers. One helper is on core 2 at 0x2C. The other is on core 0 at 0x3B, so it runs while the guest is held at an area entry.
+  - Below 3 textures it decodes inline. GL calls stay on the render thread, in the old order.
+  - `lsw_gpu_decode_texture_into` (`lsw_gpu_texture_layout.inc`) decodes into a buffer the caller owns. `lsw_gpu_decode_texture` uses one buffer for the whole process.
+  - `[TEXCOST]` adds the batch count, the summed decode work and its wall time.
+- **A pool of freed texture storage** (`bo_check.cpp`, `LSWTCS_BOPOOL=0` = off).
+  - Freed block-linear buffer objects of up to 4 MB in video memory are kept, up to 64 MB in all. A later request with the same size, alignment, flags, kind and tile mode gets one back without `nvMapCreate`, `nvAddressSpaceMap` or the memset.
+  - These buffers hold textures and render targets.
+  - Release waits for the buffer's fence, as `nouveau_bo_del` does.
+  - The pool reads libdrm_nouveau 1.0.1's private BO (`reference-source/libdrm-nouveau/private.h`). The first buffer checks the layout. If it does not match, the pool turns itself off and says so in `[BOPOOL]`.
+  - It is off while the BO checker is armed.
+  - Reused storage is not cleared. GL leaves new storage undefined, and `create_texture` uploads every mip.
+  - `[HEAPGL]` adds reused, new, kept and freed buffers, and the MB kept.
+- **Saved programs by level** (`gl_backend.cpp`, `LSWTCS_GLPROGLEVEL=0` = off).
+  - `glprogs2/levels.bin` keeps, per level name (`lsw_level_name`), the programs drawn there. It is merged over sessions and saved off the render thread.
+  - When a level starts, its saved programs not built yet move to the front of the queue, in the level's order. They stay behind the programs the game already asked for.
+  - The same happens again when the reader finishes. Later copies of a key are dropped from the queue.
+  - `[GLPROG] level ...` prints what moved.
+  - The reader runs at 0x2C, above worker 0 (0x2D). In run 79 it shared 0x2D with worker 0 and took 131 s.
+- **Test:** handheld, a level played before, then one new to the session. Compare with run 79:
+  - the `[GLSTALL]` texture time;
+  - the longest frames at area entries;
+  - the reader's time (`[GLPROG] ... queued ... in N ms`);
+  - the stalls at the `Gungan_B` entry.
+- **The first run builds `levels.bin`.** The level ordering only helps from the second session on.
+- **Risk:**
+  - Wrong pixels from reused storage, such as a render target read before it is drawn. Turn the pool off to check.
+  - A hitch on Mesa's GL thread while the reader parses a file at its priority.

@@ -2825,3 +2825,26 @@ One session meant as log77 B in handheld: the hub, `Gungan_A`, `Gungan_B` (91 s 
 - CPU per guest call 162 ns (90 % 161-164). Runs 72 and 76 had 159 and 157.
 - `Gungan_B`: 27.9 FPS, heavy part 26.3 (run 72: 29.4 and 27.4).
 - Texture upload 7.4 ms per texture (run 76: 8.0).
+
+## Run 78: `0.0.83-log77nv` (B) handheld, wrong game behaviour
+
+One session on B (the log says `(log77 B)`): the hub, `Gungan_A`, `B`, `C`, `E`, `B` again, the hub. No crash.
+
+**The tester saw:**
+- The camera moving up and down by itself in the first part of the level.
+- Audio that seemed slightly lower in pitch.
+
+**Figures, against run 77 (log75, same route, handheld):**
+
+| | Run 78 (B) | Run 77 | Run 72 |
+| --- | --- | --- | --- |
+| CPU per guest call | 158 ns (90 % 152-160, fit 152) | 162 | 159 |
+| Guest calls per replay | up to 208 k | up to 169 k | |
+| `Gungan_B` FPS | 25.3 | 27.9 | |
+| `Gungan_B` heavy part | 23.0 FPS, p95 81 ms | 26.3 FPS, p95 55 ms | |
+
+**Cause (very likely):**
+- GameCode is compiled at `-O2` without `-fno-strict-aliasing`. The runtime has it.
+- With `volatile`, guest accesses kept their order whatever their types. Without it, GCC may assume that a 32-bit store and a 64-bit or 16-bit load of the same guest address do not alias, and reorder or forward them. The game reads stale values.
+- So B's figures do not measure the technique.
+- B also ran with that extra (unsafe) freedom and still gained at most about 2-5 % per guest call. The fixed build can only gain less.

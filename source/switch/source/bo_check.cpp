@@ -179,13 +179,15 @@ extern "C" void lsw_bo_check_finish() {
     if (FILE* f = OpenReport()) { lsw_bo_check_dump(f, nullptr, 0); std::fclose(f); }
 }
 extern "C" volatile int lsw_nvc0_rt_compress;   // mesa_compress_edits.py
+extern "C" uint32_t lsw_heap_free_mb();          // platform_switch.cpp
 
 // ---- log78: a pool of freed texture storage ----
 // Run 79: every new texture's storage was a new buffer object, and on the Switch nouveau_bo_new is a memalign, a memset and two
 // calls to the GPU service (nvMapCreate, nvAddressSpaceMap); the render thread spent about 0.6 s of the session there
 // (nvc0_miptree_create), the biggest share of a small texture's cost. Freed block-linear buffers (textures and render targets: a
-// memory kind other than pitch) of up to 4 MB in video memory are now kept, up to 64 MB, and handed to the next request with the same
-// size, alignment, flags, kind and tile mode. Release waits for the buffer's fence first, as libdrm's nouveau_bo_del does, so the GPU
+// memory kind other than pitch) of up to 4 MB are now kept, up to 32 MB, and handed to the next request with the same size,
+// alignment, flags, kind and tile mode. log79: in any domain. libdrm on the Switch reports no VRAM, so Mesa puts textures in GART;
+// run 80's VRAM-only filter matched nothing. Not kept while the heap has less than 256 MB free. Release waits for the buffer's fence first, as libdrm's nouveau_bo_del does, so the GPU
 // is done with it. The contents are not cleared: GL leaves new texture storage undefined, and every texture is uploaded whole.
 // Mirrors libdrm_nouveau 1.0.1's private BO (private.h); the first buffer the pool sees checks the layout, and the pool turns itself
 // off if it does not match. LSWTCS_BOPOOL=0 turns it off. Not used while the BO checker above is armed.
@@ -208,13 +210,14 @@ std::unordered_map<nouveau_bo*, PoolKey> g_pool_owned;   // buffers made through
 std::unordered_multimap<PoolKey, nouveau_bo*, PoolKeyHash> g_pool_free;
 uint64_t g_pool_bytes = 0, g_pool_hits = 0, g_pool_misses = 0, g_pool_kept = 0, g_pool_dropped = 0;
 int g_pool_state = -1;   // -1: not checked yet, 0: off, 1: on
-constexpr uint64_t kPoolMaxBo = 4ull << 20, kPoolCap = 64ull << 20;
+constexpr uint64_t kPoolMaxBo = 4ull << 20, kPoolCap = 32ull << 20;
+constexpr uint32_t kPoolMinFreeMb = 256;
 bool pool_wanted() {
     static const bool on = [] { const char* e = getenv("LSWTCS_BOPOOL"); return !(e && e[0] == '0'); }();
     return on && g_pool_state != 0 && !g_ledger.enabled.load(std::memory_order_relaxed);
 }
 bool pool_eligible(uint32_t flags, uint64_t size, const nouveau_bo_config* config) {
-    return config && config->nvc0.memtype != 0 && (flags & NOUVEAU_BO_VRAM) && size && size <= kPoolMaxBo &&
+    return config && config->nvc0.memtype != 0 && !(flags & NOUVEAU_BO_CONTIG) && size && size <= kPoolMaxBo &&
            !(lsw_nvc0_rt_compress & 1);
 }
 // The layout check, on a buffer just made by libdrm: its NvMap handle is the public handle, the fence is unset, the CPU copy exists.
@@ -231,10 +234,11 @@ void pool_release(nouveau_bo* bo, const PoolKey& k) {
         p->fence.value = 0;
     }
     p->access = 0;
+    const bool room = lsw_heap_free_mb() >= kPoolMinFreeMb;
     bool keep;
     {
         std::lock_guard<std::mutex> lk(g_pool_mtx);
-        keep = g_pool_bytes + k.size <= kPoolCap;
+        keep = room && g_pool_bytes + k.size <= kPoolCap;
         if (keep) { g_pool_free.emplace(k, bo); g_pool_bytes += k.size; ++g_pool_kept; }
         else { g_pool_owned.erase(bo); ++g_pool_dropped; }
     }

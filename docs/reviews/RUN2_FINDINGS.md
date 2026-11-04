@@ -2907,3 +2907,73 @@ All three aim at run 79's stalls at area entries and level starts. Each has its 
 - **Risk:**
   - Wrong pixels from reused storage, such as a render target read before it is drawn. Turn the pool off to check.
   - A hitch on Mesa's GL thread while the reader parses a file at its priority.
+
+
+## Run 80: `0.0.84-log78` handheld
+
+One session of 333 s: the hub, `Gungan_A`, `Gungan_B`, the hub, `PalaceRescue` (`Rescue_A`, `Rescue_b`), the hub, `PodSprint_A`, the hub. No crash.
+
+**Telling the build apart:** log78 still prints `[NX] guest code: ... (log77 A)`, because that text was not updated. Its own lines are `[GLPROG] programs by level` and `[GLPROG] level ...`.
+
+**Saved-program reader at 0x2C:**
+- It queued the 1255 files in 16.7 s. Run 79 took 131 s.
+- The cost: for those 17 s the boot's logo frames came 270-550 ms apart (`[GSPIKE]` with `rtwait`, 44 spikes against 15 in run 79). Mesa's GL thread, which presents, also runs at 0x2C on core 2.
+- No `[GLWAIT]` of 100 ms or more, as in run 79.
+- Run 79's `bind` stalls at the `Gungan_B` entry did not come back. Their cause is still unknown, so this is not credited to log78.
+
+**Parallel decode:**
+- 60 batches, 4216 ms of decode work done in 1625 ms.
+- Upload per new texture over the session: 2.48 ms (run 79: 2.73).
+
+**Area entries:**
+
+| | Run 80 | Run 79 |
+| --- | --- | --- |
+| Hub arrival (892 draws, 86 textures) | 759 ms, then 466 ms | 665 ms, then 62 ms |
+| its decode / upload | 113 / 459 ms | 278 / 200 ms |
+| `Gungan_A` entry | 297 ms (decode 68) | 470 ms (decode 256) |
+| hub returns | 295 and 441 ms (149 and 140 textures) | |
+| `Rescue_A` | 430 ms (151 textures) | |
+| `PodSprint_A` entry | 977 ms (256 textures: decode 520, upload 317), then 328 ms | |
+
+- At the hub arrival, 19 uploads waited 13-41 ms each, about one display refresh. Run 79 had 6 at the same place.
+- The next frame waited 420 ms on one 10 KB upload. `PodSprint_A`'s next frame waited 222 ms on one 5 KB upload.
+- Cause not proven. The render thread waits on Mesa's GL thread or on the GPU. Log78 made all uploads after all decodes, so none overlapped a decode.
+
+**Texture storage pool:** never used (`[HEAPGL]`: `unused`).
+- On the Switch, libdrm reports no VRAM, so Mesa puts textures in GART (`GART | NOSNOOP`).
+- The pool only took VRAM buffers.
+
+**Programs by level:**
+- Recorded: `Map\Map` held 177 programs at its second visit and 294 at its third.
+- This was the first session with the file, so no level had a saved list and nothing moved.
+
+**Heap:**
+- 335 MB free at the end, after `PodSprint`. Run 76, on the same levels, peaked at 2719 MB in use.
+- 34 saved programs were skipped by the 512 MB reserve.
+
+**FPS** (time in each level, loading included; not comparable with run 79's route):
+- hub 42.2 over four visits;
+- `Gungan_A` 36.8, `Gungan_B` 32.6 (84 s);
+- `Rescue_A` 28.1, `Rescue_b` 44.5;
+- `PodSprint_A` 35.4.
+
+## Log 79: `0.0.85-log79`
+
+- **Upload as soon as decoded** (`gl_backend.cpp`, `decode_and_upload`):
+  - The render thread uploads texture i once it is decoded. The helpers decode the next ones meanwhile.
+  - While texture i is still with a helper, the render thread decodes one that nobody has taken yet.
+  - Decoded buffers are freed one by one, so fewer are alive at once.
+- **Texture storage pool, any domain** (`bo_check.cpp`):
+  - The pool takes block-linear buffers of up to 4 MB, without `NOUVEAU_BO_CONTIG`.
+  - It keeps up to 32 MB (was 64), and nothing while the heap has less than 256 MB free.
+- **Saved-program reader back at 0x2D.**
+  - Worker 0 takes only programs the game asked for until the reader is done.
+  - The reader then gets core 2 whenever the SD card answers. Mesa's GL thread (0x2C) stays above it.
+- **Test:** handheld, the same route as run 80. This is the first session with `levels.bin`. Read:
+  - the logo frames at boot;
+  - the reader's time;
+  - `[GLPROG] level ...` lines that move programs;
+  - `[HEAPGL]` pool counts and `[BOPOOL]`;
+  - the hub arrival and `PodSprint_A` entry against run 80.
+- **Risk:** wrong pixels from reused storage (`LSWTCS_BOPOOL=0` to check).

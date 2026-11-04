@@ -852,7 +852,14 @@ void compile_worker_main(int index) {
                 while (g_prog_queue.empty() || !g_prog_frame_wait.load(std::memory_order_relaxed))
                     g_prog_cv1.wait_for(lk, std::chrono::milliseconds(50));
             } else {
-                g_prog_cv.wait(lk, [] { return !g_prog_queue.empty(); });
+                // log79: while the saved-program reader runs (0x2D, as this worker), only programs the game asked for (they are at the
+                // front), so the reader gets this core whenever the SD card answers. Run 79: sharing it, the reader took 131 s.
+                g_prog_cv.wait(lk, [] {
+                    if (g_prog_queue.empty()) return false;
+                    if (g_prog_reader_done.load(std::memory_order_acquire)) return true;
+                    auto it = g_prog_entries.find(g_prog_queue.front().first);
+                    return it == g_prog_entries.end() || it->second.requested || it->second.state != kProgQueued;
+                });
             }
             job = std::move(g_prog_queue.front());
             g_prog_queue.pop_front();
@@ -1031,7 +1038,11 @@ void program_cache_init() {
         printf("[GLPROG] %u saved programs queued for background compile in %llu ms, %u of them first in the last session's order (%zu keys)\n",
                queued, (unsigned long long)((gp_now() - t0) / 1000000), ordered, g_prog_prev_order.size());
         fflush(stdout);
-        g_prog_reader_done.store(true, std::memory_order_release);
+        {
+            std::lock_guard<std::mutex> lk(g_prog_mtx);
+            g_prog_reader_done.store(true, std::memory_order_release);
+        }
+        g_prog_cv.notify_all();
     };
     for (int i = 0; i < g_num_workers; ++i) std::thread(compile_worker_main, i).detach();
     const bool list = g_num_workers > 0 && prog_list_on();
@@ -1039,15 +1050,17 @@ void program_cache_init() {
         std::thread([read_list] {
             // log71: core 2 beside worker 0, below the audio threads there. On core 0 at 0x3B (log67-70) it competed with the guest
             // threads for 8-15 s of the boot, the logos and menus included.
-            // log78: 0x2C, above worker 0 (0x2D). Run 79: at the same priority as worker 0, which only stops between programs, the
-            // reader took 131 s for 1255 files, and the programs it had not reached yet were missing from the queue's order. It
-            // mostly waits on the SD card, which gives the core back.
+            // log78 ran it at 0x2C, above worker 0: run 80 read the 1255 files in 17 s (run 79: 131 s), but the boot's logo frames
+            // came 270-550 ms apart for those 17 s (run 79: smooth): Mesa's GL thread, which presents, is at 0x2C on this core too.
+            // log79: back to 0x2D, and worker 0 takes only the programs the game asks for until the reader is done (below).
             pin_to_core(2, "saved-program reader");
-            svcSetThreadPriority(CUR_THREAD_HANDLE, 0x2C);
+            svcSetThreadPriority(CUR_THREAD_HANDLE, 0x2D);
             read_list();
         }).detach();
     } else if (list) {
         read_list();
+    } else {
+        g_prog_reader_done.store(true, std::memory_order_release);   // no reader: worker 0 takes everything
     }
     g_prog_cv.notify_all();
     printf("[GLPROG] %d compile workers; saved programs read %s; binary cache %s (%d formats)\n", g_num_workers,
@@ -3428,6 +3441,9 @@ bool texture_prepass_on() {
 // they wait, as at an area entry, where the guest is held behind the render thread). Run 79: decoding (untiling and byte swaps,
 // pure CPU) took 2.2 ms a texture on the render thread, 9 ms for a BC1 1024x1024, and an area entry brings 80-200 textures. The
 // GL calls stay on the render thread, in the old order.
+// log79: each texture is uploaded as soon as it is decoded, while the helpers decode the next ones (log78 decoded all, then uploaded
+// all). Run 80, the hub's arrival (86 textures): decode fell from 278 to 113 ms against run 79, but the uploads took 459 ms instead of
+// 200, 19 of them waiting 13-41 ms (about a display refresh) where run 79 had 6, and the next frame waited 420 ms on one 10 KB upload.
 struct DecodeJob {
     uint32_t f6[6]; uint64_t key; std::vector<FetchKey> fks;
     LswGpuTexDesc d; std::vector<uint8_t> buf; bool ok = false; uint64_t ns = 0;
@@ -3436,6 +3452,7 @@ struct DecodePool {
     std::mutex m;
     std::condition_variable cv, done_cv;
     std::vector<DecodeJob>* jobs = nullptr;
+    uint8_t* ready = nullptr;   // per job: 1 once decoded (atomic access)
     size_t n = 0;
     std::atomic<size_t> next{0}, done{0};
     bool open = false;
@@ -3453,13 +3470,18 @@ void decode_one(DecodeJob& j, const uint8_t* phys) {
     j.ok = lsw_gpu_decode_texture_into(j.f6, phys, &j.d, decode_reserve, &j.buf) && j.d.ok;
     j.ns = gp_now() - t0;
 }
+// Decodes the next job nobody has taken; false when none is left.
+bool decode_take(const uint8_t* phys) {
+    const size_t i = g_dpool.next.fetch_add(1);
+    if (i >= g_dpool.n) return false;
+    decode_one((*g_dpool.jobs)[i], phys);
+    __atomic_store_n(&g_dpool.ready[i], uint8_t(1), __ATOMIC_RELEASE);
+    g_dpool.done.fetch_add(1);
+    g_dpool.done_cv.notify_all();   // without the lock: the render thread's wait also times out every 1 ms
+    return true;
+}
 void decode_drain(const uint8_t* phys) {
-    for (;;) {
-        const size_t i = g_dpool.next.fetch_add(1);
-        if (i >= g_dpool.n) return;
-        decode_one((*g_dpool.jobs)[i], phys);
-        g_dpool.done.fetch_add(1);
-    }
+    while (decode_take(phys)) {}
 }
 void decode_helper(int core, int prio) {
     lsw_prof_register(core == 2 ? "texdec_2" : "texdec_0", -1);
@@ -3481,37 +3503,65 @@ void decode_helper(int core, int prio) {
         g_dpool.done_cv.notify_all();
     }
 }
-void decode_batch(std::vector<DecodeJob>& jobs) {
+// Render thread: decodes the jobs (with the helpers from 3 jobs on) and calls upload(job) for each in order, as soon as it is decoded.
+// While the next job in order is still being decoded by a helper, this thread decodes one not taken yet.
+template <class Upload>
+void decode_and_upload(std::vector<DecodeJob>& jobs, Upload&& upload) {
     const uint8_t* phys = g_base + 0x80000000ull;
     static const bool par = env_on("LSWTCS_TEXPARALLEL", true);
-    const uint64_t t0 = gp_now();
     if (!par || jobs.size() < 3) {
-        for (DecodeJob& j : jobs) decode_one(j, phys);
-    } else {
-        static std::once_flag once;
-        std::call_once(once, [] {
-            std::thread(decode_helper, 2, 0x2C).detach();
-            std::thread(decode_helper, 0, 0x3B).detach();
-        });
-        {
-            std::lock_guard<std::mutex> lk(g_dpool.m);
-            g_dpool.jobs = &jobs;
-            g_dpool.n = jobs.size();
-            g_dpool.next.store(0);
-            g_dpool.done.store(0);
-            g_dpool.open = true;
-            ++g_dpool.gen;
+        for (DecodeJob& j : jobs) {
+            {
+                RpScope rp(RP_DECODE);
+                const uint64_t t0 = gp_now();
+                decode_one(j, phys);
+                g_dec_wall_ns += gp_now() - t0;
+                g_dec_work_ns += j.ns;
+            }
+            upload(j);
         }
-        g_dpool.cv.notify_all();
-        decode_drain(phys);
+        return;
+    }
+    static std::once_flag once;
+    std::call_once(once, [] {
+        std::thread(decode_helper, 2, 0x2C).detach();
+        std::thread(decode_helper, 0, 0x3B).detach();
+    });
+    std::vector<uint8_t> ready(jobs.size(), 0);
+    {
+        std::lock_guard<std::mutex> lk(g_dpool.m);
+        g_dpool.jobs = &jobs;
+        g_dpool.ready = ready.data();
+        g_dpool.n = jobs.size();
+        g_dpool.next.store(0);
+        g_dpool.done.store(0);
+        g_dpool.open = true;
+        ++g_dpool.gen;
+    }
+    g_dpool.cv.notify_all();
+    for (size_t i = 0; i < jobs.size(); ++i) {
+        {
+            RpScope rp(RP_DECODE);
+            const uint64_t t0 = gp_now();
+            while (!__atomic_load_n(&ready[i], __ATOMIC_ACQUIRE)) {
+                if (decode_take(phys)) continue;
+                std::unique_lock<std::mutex> lk(g_dpool.m);
+                g_dpool.done_cv.wait_for(lk, std::chrono::milliseconds(1),
+                                         [&] { return __atomic_load_n(&ready[i], __ATOMIC_ACQUIRE) != 0; });
+            }
+            g_dec_wall_ns += gp_now() - t0;
+        }
+        upload(jobs[i]);
+    }
+    {
         std::unique_lock<std::mutex> lk(g_dpool.m);
         g_dpool.open = false;
-        g_dpool.done_cv.wait(lk, [&] { return g_dpool.active == 0 && g_dpool.done.load() >= g_dpool.n; });
+        g_dpool.done_cv.wait(lk, [&] { return g_dpool.active == 0; });
         g_dpool.jobs = nullptr;
+        g_dpool.ready = nullptr;
         g_dpool.n = 0;
-        ++g_dec_batches;
     }
-    g_dec_wall_ns += gp_now() - t0;
+    ++g_dec_batches;
     for (const DecodeJob& j : jobs) g_dec_work_ns += j.ns;
 }
 
@@ -3563,10 +3613,9 @@ void texture_prepass(const LswGpuFrame& f, bool gpurt) {
         }
     }
     if (jobs.empty()) return;
-    { RpScope rp(RP_DECODE); decode_batch(jobs); }
     // The GL side in order, on this thread, as get_texture does.
     static uint64_t since_flush = 0;
-    for (DecodeJob& j : jobs) {
+    decode_and_upload(jobs, [&](DecodeJob& j) {
         GlTex t;
         if (j.ok) {
             RpScope rp(RP_TEXUP);
@@ -3583,7 +3632,7 @@ void texture_prepass(const LswGpuFrame& f, bool gpurt) {
         // to Mesa's suballocator, which keeps every slab it ever made (mesa_texstage_edits.py).
         since_flush += t.bytes;
         if (since_flush >= (16ull << 20)) { glFlush(); since_flush = 0; }
-    }
+    });
     g_tex_pre_made += g_tex_created - made0;
 }
 

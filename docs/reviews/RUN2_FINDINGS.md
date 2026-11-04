@@ -2425,3 +2425,47 @@ The tester's verdict:
   - logs and settings, monitor and profiler, buffer check;
   - how the user was chosen: preselected, the only user, or the selector (shown, then picked);
   - guest memory mapped and cleared, image read, data and dispatch table, host pointer scan.
+
+## Run 68
+
+The tester: the cantina shop now takes A to select.
+
+**Pad layout:**
+- `[MENUPROBE]` switched to "button prompts" once, in the hub (2 icons, 221 scene draws), and back on leaving.
+- No switch during the two Gungan visits.
+
+**Boot** (`[BOOT]`, `[LONGWAIT]`):
+- The user selector was on screen from 79 ms to 3947 ms: the tester's time.
+- Guest memory took 247 ms.
+- The image read took 1.40 s (21 MB, about 15 MB/s).
+- Data and the dispatch table took 0.29 s.
+- The host pointer scan took 1.96 s.
+- `_xstart` came at 7.9 s, the render thread was ready at 8.2 s, and the first guest frame came at 18.5 s.
+- The main thread waited 10000 ms with a 10000 ms timeout on object F0010010, in `sub_8250D550`, which was called from the host link setup `sub_8250DFF8` (chain up to `_xstart`).
+
+**What the 10 s wait is:**
+- The engine init `sub_82508480` takes tag 65: the host file server mode and a host name.
+- `sub_8229DDB0` passes the mode from 0x82FCD190 (0 in the image).
+- `main.cpp` sets 0x82FCD190 to 1 ("disable logging path"). The flag's other use in `sub_8229DDB0` is the `d:\` base path (`sub_824FDCB0`), not logging.
+- With mode 1, `sub_82509598` creates the host link:
+  - 16 `_event[%d]` and `fileinfo_event[%d]` events, plus "connect";
+  - `sub_8250D550` then waits on "connect" in 10 s tries for a "CONN" reply, parsed by `sub_8250D978`.
+- No PC tool answers. Our `NtWaitForSingleObjectEx` returns success at the timeout, so the loop ended after one try, with the link not connected (+1410 = 0).
+
+**The other waits** over 1 s are the job workers idling with no timeout.
+
+**Loads** (`b`):
+- Hub to Gungan: 13.7 and 6.0 s.
+- Gungan to hub: 13.6 and 12.6 s.
+
+**Frame rate** (handheld):
+- Only 12 s in the heavy band, 24.2 FPS.
+- Paired against run 67: -5.0 % (90 %: -13.2 to +8.4, 4 visits). Inconclusive: the session was about loads.
+
+## Log 69: `0.0.75-log69`
+
+- **No wait for the host link's reply.** `sub_8250D550` is overridden: it marks the link not connected and returns 1, as the original does after the timeout. The game's state is the same, minus the 10 s. `LSWTCS_HOSTWAIT=1` restores the original. The log shows `[HOSTLINK]`.
+- **Host pointer scan:** `getenv("LSWTCS_BROADSCAN_DATA")` is read once, not once per word (about 1 M calls). The same words are zeroed.
+- **Image read:** unbuffered 4 MB reads into a heap buffer, then copied into the guest window. The bytes are the same.
+- **`[LONGWAIT]`** skips waits with no timeout after 30 s from `main`.
+- Expected first guest frame: about 2-3 s plus the user selector's time, against 18.5 s.

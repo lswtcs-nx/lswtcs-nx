@@ -43,6 +43,7 @@
 #define LSW_OVR_sub_82504740 ~, 1
 #define LSW_OVR_sub_82506A38 ~, 1
 #define LSW_OVR_sub_82508C20 ~, 1
+#define LSW_OVR_sub_8250D550 ~, 1
 #define LSW_OVR_sub_8250F0A0 ~, 1
 #define LSW_OVR_sub_8250F2B0 ~, 1
 #define LSW_OVR_sub_8250F7E0 ~, 1

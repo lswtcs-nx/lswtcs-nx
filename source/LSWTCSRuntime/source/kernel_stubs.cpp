@@ -2990,6 +2990,7 @@ struct LswLongWait {
     ~LswLongWait() {
         const long long ms = (long long)std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
         if (ms < 1000) return;
+        if (timeout == -1 && lsw_boot_ms() > 30000) return;   // log69: idle job workers wait without a timeout all the time (run 68)
         static std::atomic<int> lines{0};
         if (lines.fetch_add(1, std::memory_order_relaxed) >= 80) return;
         char chain[128]; int k = 0; chain[0] = 0;
@@ -3006,6 +3007,23 @@ struct LswLongWait {
         fflush(stdout);
     }
 };
+// Host link (log69). The engine init (sub_82508480) takes tag 65, the host file server mode, from the global 0x82FCD190, which
+// main.cpp sets to 1 to skip the d:\ base path in sub_8229DDB0. With mode 1, sub_82509598 creates the host link (sub_8250DFF8:
+// events "connect", "_event[%d]", "fileinfo_event[%d]"), and sub_8250D550 waits on "connect" in 10 s tries for a "CONN" reply from
+// the developers' PC tool (sub_8250D978). Nothing answers that on a console. Run 68: [LONGWAIT] 10000 ms on the main thread with a
+// 10000 ms timeout and the whole guest idle, chain up to _xstart; our wait returns success at the timeout, so the game went on with
+// the link not connected (+1410 = 0). This keeps that outcome without the wait: the original only builds a string on its stack
+// besides. LSWTCS_HOSTWAIT=1 restores the original.
+extern "C" PPC_FUNC(__imp__sub_8250D550);
+PPC_FUNC(sub_8250D550) {
+    static const bool wait = [] { const char* e = getenv("LSWTCS_HOSTWAIT"); return e && e[0] == '1'; }();
+    if (wait) { __imp__sub_8250D550(ctx, base); return; }
+    const uint32_t link = ctx.r3.u32;
+    if (link >= 0x80000000u && link < 0x94000000u) PPC_STORE_U8(link + 1410, 0);   // not connected, as the original sets first
+    printf("[HOSTLINK] link %08X: no 10 s wait for the PC tool's reply (LSWTCS_HOSTWAIT=1 waits)\n", link);
+    fflush(stdout);
+    ctx.r3.u64 = 1;
+}
 PPC_FUNC(__imp__NtWaitForSingleObjectEx) {
     PPC_FUNC_PROLOGUE();
     LswLongWait long_wait("NtWaitForSingleObjectEx", ctx, base, ctx.r3.u32, guest_timeout_ms(base, ctx.r6.u32));

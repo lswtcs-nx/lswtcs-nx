@@ -1317,7 +1317,21 @@ int main() {
         printf("Failed to open image.bin\n");
         return 1;
     }
-    size_t nread = fread(g_base + PPC_IMAGE_BASE, 1, PPC_IMAGE_SIZE, f);
+    // log69: unbuffered 4 MB reads into a heap buffer, copied into the guest window. One fread straight into the window went
+    // through the FILE's small buffer: 21 MB in 1.4 s (run 68, [BOOT] 4208 -> 5606 ms), about 15 MB/s, against 60-69 MB/s for the
+    // 512 KB reads of the loads. The bytes are the same.
+    size_t nread = 0;
+    {
+        setvbuf(f, nullptr, _IONBF, 0);
+        std::vector<uint8_t> chunk(size_t(4) << 20);
+        while (nread < PPC_IMAGE_SIZE) {
+            const size_t want = std::min(chunk.size(), size_t(PPC_IMAGE_SIZE - nread));
+            const size_t got = fread(chunk.data(), 1, want, f);
+            if (got) memcpy(g_base + PPC_IMAGE_BASE + nread, chunk.data(), got);
+            nread += got;
+            if (got < want) break;
+        }
+    }
     fclose(f);
     lsw_boot_mark("image read");
     printf("[INIT] Loaded image.bin: 0x%zX bytes\n", nread);
@@ -1575,6 +1589,9 @@ int main() {
         uint32_t post_start = PPC_CODE_BASE + PPC_CODE_SIZE;
         uint32_t post_end   = PPC_IMAGE_BASE + PPC_IMAGE_SIZE;
         int count = 0, kept = 0;
+        // log69: read once. getenv ran for each of the ~1 M words of the pristine range (a linear search of ~60 settings each):
+        // 2.0 s of the boot in run 68 ([BOOT] 5917 -> 7880 ms). Same words zeroed and kept.
+        const bool broadscan_data = getenv("LSWTCS_BROADSCAN_DATA") != nullptr;
         for (uint32_t addr = post_start; addr < post_end; addr += 4) {
             // Pristine .data has no Xenia host ptrs; scanning it zeroes real float constants
             // (sinf limit 2.2e8 / +-1.0 at 0x82F1FDC0 -> all-NaN sine LUT 0x83239F20 -> NaN camera).
@@ -1582,7 +1599,7 @@ int main() {
             if (!zinit) { zinit = true;
                 const char* a = getenv("LSWTCS_SCANZERO_LO"); const char* b = getenv("LSWTCS_SCANZERO_HI");
                 if (a && b) { zlo = (uint32_t)strtoul(a, nullptr, 0); zhi = (uint32_t)strtoul(b, nullptr, 0); } }
-            if (g_pristine_data && !getenv("LSWTCS_BROADSCAN_DATA") &&
+            if (g_pristine_data && !broadscan_data &&
                 addr >= 0x82E70000u && addr < 0x82E70000u + 0x0041491Cu &&
                 !(addr >= zlo && addr < zhi)) continue;
             uint32_t* p = (uint32_t*)(g_base + addr);

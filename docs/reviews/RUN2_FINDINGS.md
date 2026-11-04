@@ -2514,3 +2514,29 @@ The tester: everything worked, and the game opened faster.
   - `LSWTCS_JOYROT=1` turns a sideways Joy-Con's stick by hand, if the system does not.
   - `[PADS]` logs who is who.
   - Untested: the stick direction of a sideways Joy-Con, the controller screen from hbmenu, and the game's split screen in the GL backend.
+
+## Run 70
+
+The tester, for one session (the first boot of log70, so no program order yet: `0 keys`):
+- Local co-op works. The `[PADS]` lines show handheld plus Pro Controller, Pro Controller plus two Joy-Cons, and two single Joy-Cons, through the controller screen (rc 0).
+- A sideways Joy-Con's stick came out a quarter turned: the system reports it as for an upright Joy-Con. On the right Joy-Con, right moved up and down moved right; on the left one, left moved up and up moved right.
+- Single Joy-Cons stayed by position in menus, so confirm was not on the right button.
+- The hub's audio is still broken when the hub is reached quickly.
+
+**Audio at the hub:**
+- The first arrival came at 40-46 s of frame time, with 18-43 FPS and 0.3-0.6 s of empty audio per second. The render thread built 18 programs on request, with 85 still queued.
+- The second arrival (after the compile ended) had 0.15 s in all.
+- The game's audio feed (`[AUDIOOFF]`) fell to 478-526 calls a second while the saved list compiled, against 750 before and after. This held even at normal frame rates.
+- The cause: compile worker 1 and the list reader ran on core 0, the guest threads' core, at their priority (0x3B). The reader took 15.4 s for 945 files.
+
+**Frame rate:** 1300+ draws, 25.8 FPS over 326 s, much of it with two players.
+
+## Log 71: `0.0.77-log71`
+
+- **Worker 1** (core 0) takes jobs only while the render thread waits for a frame's programs, when the game is held anyway. It waits on its own condition variable. `LSWTCS_GLWORKER1=always` restores the old behaviour.
+- **The saved-list reader** runs on core 2 at 0x2D, beside worker 0 and below the audio threads there.
+- **The program order is saved every 32 programs, up to 2048.** log70 saved at 32, 128, 256, 512 and 1024, and a session asks for about 300-400 programs.
+- **Sideways Joy-Con:**
+  - The stick is turned a quarter by default: left Joy-Con (x, y) -> (-y, x), right Joy-Con -> (y, -x). `LSWTCS_JOYROT=0` passes the stick as the system reports it.
+  - Its face buttons follow the layout. By label, the right button is the 360's A (confirm), bottom is B, top is X, left is Y.
+  - The layout switch also waits for the D-pad to be released.

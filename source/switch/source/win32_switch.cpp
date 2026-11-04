@@ -684,22 +684,37 @@ void show_controller_applet() {
     }).detach();
 }
 
-// A single Joy-Con held sideways, by position: the bottom button is the 360's A. Left Joy-Con: Left, Down, Up, Right are bottom,
-// right, left, top; Minus is Start, L is Back. Right Joy-Con: A, X, B, Y; Plus is Start, R is Back. SL and SR are the bumpers, ZL or
-// ZR the left trigger, the stick is the 360's left stick. LSWTCS_JOYROT=1 turns the stick a quarter by hand, in case the system
-// does not for the horizontal hold.
-void map_single_joycon(const PadState& pad, u32 style, XiState& st) {
-    static const bool rot = [] { const char* e = getenv("LSWTCS_JOYROT"); return e && e[0] == '1'; }();
+// A single Joy-Con held sideways. The face buttons follow the layout like a full controller, by where they sit: by position the
+// bottom button is the 360's A (play); by label the right one is (menus, as A sits on the right of a Switch controller), the
+// bottom one B, the top one X, the left one Y. Sideways, the left Joy-Con's Left, Down, Up, Right sit bottom, right, left, top,
+// and the right Joy-Con's A, X, B, Y. Minus or Plus is Start, L or R Back, SL and SR the bumpers, ZL or ZR the left trigger.
+// The stick is the 360's left stick, turned a quarter: the system reports it as for an upright Joy-Con (run 70, the tester:
+// tilting the right Joy-Con's stick right moved up, down moved right; the left one's left moved up, up moved right).
+// LSWTCS_JOYROT=0 passes it as the system gives it.
+void map_single_joycon(const PadState& pad, u32 style, bool by_label, XiState& st) {
+    static const bool rot = [] { const char* e = getenv("LSWTCS_JOYROT"); return !(e && e[0] == '0'); }();
     struct M { u64 nx; WORD xi; };
-    static const M kLeft[] = {{HidNpadButton_Left, 0x1000}, {HidNpadButton_Down, 0x2000}, {HidNpadButton_Up, 0x4000},
-                              {HidNpadButton_Right, 0x8000}, {HidNpadButton_Minus, 0x0010}, {HidNpadButton_L, 0x0020},
-                              {HidNpadButton_StickL, 0x0040}, {HidNpadButton_LeftSL, 0x0100}, {HidNpadButton_LeftSR, 0x0200}};
-    static const M kRight[] = {{HidNpadButton_A, 0x1000}, {HidNpadButton_X, 0x2000}, {HidNpadButton_B, 0x4000},
-                               {HidNpadButton_Y, 0x8000}, {HidNpadButton_Plus, 0x0010}, {HidNpadButton_R, 0x0020},
-                               {HidNpadButton_StickR, 0x0040}, {HidNpadButton_RightSL, 0x0100}, {HidNpadButton_RightSR, 0x0200}};
+    static const M kLeft[] = {{HidNpadButton_Minus, 0x0010}, {HidNpadButton_L, 0x0020}, {HidNpadButton_StickL, 0x0040},
+                              {HidNpadButton_LeftSL, 0x0100}, {HidNpadButton_LeftSR, 0x0200}};
+    static const M kRight[] = {{HidNpadButton_Plus, 0x0010}, {HidNpadButton_R, 0x0020}, {HidNpadButton_StickR, 0x0040},
+                               {HidNpadButton_RightSL, 0x0100}, {HidNpadButton_RightSR, 0x0200}};
     const bool left = style & HidNpadStyleTag_NpadJoyLeft;
     const u64 b = padGetButtons(&pad);
     for (const M& m : left ? kLeft : kRight) if (b & m.nx) st.buttons |= m.xi;
+    // Sideways positions: bottom, right, left, top.
+    const u64 bottom = left ? HidNpadButton_Left : HidNpadButton_A, right = left ? HidNpadButton_Down : HidNpadButton_X;
+    const u64 lpos = left ? HidNpadButton_Up : HidNpadButton_B, top = left ? HidNpadButton_Right : HidNpadButton_Y;
+    if (by_label) {
+        if (b & right) st.buttons |= 0x1000;
+        if (b & bottom) st.buttons |= 0x2000;
+        if (b & top) st.buttons |= 0x4000;
+        if (b & lpos) st.buttons |= 0x8000;
+    } else {
+        if (b & bottom) st.buttons |= 0x1000;
+        if (b & right) st.buttons |= 0x2000;
+        if (b & lpos) st.buttons |= 0x4000;
+        if (b & top) st.buttons |= 0x8000;
+    }
     st.lt = (b & (left ? HidNpadButton_ZL : HidNpadButton_ZR)) ? 255 : 0;
     const HidAnalogStickState s = padGetStickPos(&pad, left ? 0 : 1);
     int32_t x = s.x, y = s.y;
@@ -759,7 +774,7 @@ DWORD WINAPI nx_xinput_get_state(DWORD slot, void* out) {
     //   auto      label while the frames are light (under 150 draws for 30 frames: title, menus, load and save screens, loading),
     //             position in play. The in-level pause menu draws the level behind it, so it stays by position.
     // The layout changes only while no face button of player 1 is held, so a held button never turns into another. Hold L + R and
-    // press Minus for the next layout ([PADLAYOUT]). Player 2 follows player 1's layout; a single Joy-Con is always by position.
+    // press Minus for the next layout ([PADLAYOUT]). Player 2 follows player 1's layout, single Joy-Cons too (log71).
     if (slot == 0) {
         static int layout = [] {
             const char* e = getenv("LSWTCS_PADLAYOUT");
@@ -778,14 +793,16 @@ DWORD WINAPI nx_xinput_get_state(DWORD slot, void* out) {
             printf("[PADLAYOUT] layout %s (L + R + Minus)\n", kLayoutName[layout]);
             fflush(stdout);
         }
-        const u64 face = HidNpadButton_A | HidNpadButton_B | HidNpadButton_X | HidNpadButton_Y;
+        // The D-pad too: on a sideways left Joy-Con those are the face buttons.
+        const u64 face = HidNpadButton_A | HidNpadButton_B | HidNpadButton_X | HidNpadButton_Y | HidNpadButton_Up | HidNpadButton_Down |
+                         HidNpadButton_Left | HidNpadButton_Right;
         const bool want = layout == 1 || (layout == 2 && g_frame_light.load(std::memory_order_relaxed));
         if (want != g_by_label && !(b & face)) {
             g_by_label = want;
             if (lines++ < 400) { printf("[PADLAYOUT] face buttons by %s (layout %s)\n", g_by_label ? "label" : "position", kLayoutName[layout]); fflush(stdout); }
         }
     }
-    if (g_players > 1 && single_joycon(style)) map_single_joycon(*pad, style, st);
+    if (g_players > 1 && single_joycon(style)) map_single_joycon(*pad, style, g_by_label, st);
     else map_full(*pad, b, st);
     // Controller screen (log70): L + R + Plus on a full controller, SL + SR + Plus or Minus on a single Joy-Con, any player. Plus is
     // also Start, so the game pauses behind it.

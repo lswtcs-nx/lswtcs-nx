@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <condition_variable>
 #include <deque>
@@ -342,6 +343,11 @@ uint32_t g_prog_compiled = 0, g_prog_from_binary = 0, g_prog_cache_written = 0, 
 uint64_t g_prog_compile_ns = 0;
 uint32_t g_prog_pending_draws = 0;   // render thread only: draws skipped this replay (program not ready)
 std::condition_variable g_prog_done_cv;   // a worker published a program (render thread waits on it)
+// Worker 1 (core 0) helps only while the render thread waits for a frame's programs (log71): then the game is held anyway. Run 70:
+// with it compiling the saved list on core 0 at the guest threads' priority, the game's audio feed fell from 750 to 478-526 calls a
+// second and the hub's first seconds had 0.3-0.6 s of empty audio per second, at normal frame rates. LSWTCS_GLWORKER1=always: as before.
+std::condition_variable g_prog_cv1;
+std::atomic<bool> g_prog_frame_wait{false};
 std::vector<uint64_t> g_frame_wait;      // render thread: content keys the current replay waits for
 // LSWTCS_GLWAIT (default 1): a replay whose programs are not built yet waits for them, the render thread
 // building queued programs itself next to the workers (all of a new scene's programs in parallel; the
@@ -473,7 +479,8 @@ void program_order_save(const std::vector<uint64_t>& keys) {
     remove(path);   // the SD card's rename does not replace
     if (rename(tmp, path) != 0) remove(tmp);
 }
-// Render thread: the first request of each program this session. Saved after 32, 128, 256, 512 and 1024 programs, this session's
+// Render thread: the first request of each program this session. Saved every 32 programs up to 2048 (log71; log70 saved at 32, 128,
+// 256, 512 and 1024 only, and a session asks for about 300-400, so the hub's later programs missed the file), this session's
 // order first, then the previous order's keys not asked for yet (a short session keeps the older tail).
 void note_program_use(uint64_t ckey) {
     static std::unordered_set<uint64_t> seen;
@@ -481,7 +488,7 @@ void note_program_use(uint64_t ckey) {
     if (!prog_list_on() || !seen.insert(ckey).second) return;
     order.push_back(ckey);
     const size_t n = order.size();
-    if (n != 32 && n != 128 && n != 256 && n != 512 && n != 1024) return;
+    if (n % 32 != 0 || n > 2048) return;
     auto keys = std::make_shared<std::vector<uint64_t>>(order);
     for (uint64_t k : g_prog_prev_order)
         if (keys->size() < 8192 && !seen.count(k)) keys->push_back(k);
@@ -593,7 +600,7 @@ void pin_to_core(int core, const char* what) {
 void compile_worker_main(int index) {
     lsw_prof_register(index ? "compile_1" : "compile_0", -1);
     // Worker 0 on core 2 (idle). Worker 1 on core 0 at the lowest priority: the guest threads live there
-    // but are held while a new scene's programs build, and any guest thread that runs takes precedence.
+    // but are held while a new scene's programs build. From log71 it takes jobs only then (g_prog_frame_wait).
     if (index == 1) {
         pin_to_core(0, "shader-compile worker 1");
         const Result rc = svcSetThreadPriority(CUR_THREAD_HANDLE, 0x3B);   // lowest application priority
@@ -609,11 +616,18 @@ void compile_worker_main(int index) {
         fflush(stdout);
         return;
     }
+    static const bool helper_only = [] { const char* e = getenv("LSWTCS_GLWORKER1"); return !(e && !strcmp(e, "always")); }();
+    const bool helper = index == 1 && helper_only;
     for (;;) {
         std::pair<uint64_t, ProgSources> job;
         {
             std::unique_lock<std::mutex> lk(g_prog_mtx);
-            g_prog_cv.wait(lk, [] { return !g_prog_queue.empty(); });
+            if (helper) {   // own condition variable: a notify_one for a new job always reaches worker 0
+                while (g_prog_queue.empty() || !g_prog_frame_wait.load(std::memory_order_relaxed))
+                    g_prog_cv1.wait_for(lk, std::chrono::milliseconds(50));
+            } else {
+                g_prog_cv.wait(lk, [] { return !g_prog_queue.empty(); });
+            }
             job = std::move(g_prog_queue.front());
             g_prog_queue.pop_front();
             auto it = g_prog_entries.find(job.first);
@@ -660,7 +674,11 @@ void wait_frame_programs() {
         return false;
     };
     std::unique_lock<std::mutex> lk(g_prog_mtx);
-    if (pending()) host_audio_hold(true);   // the game's audio waits with the picture (audio_switch.cpp)
+    if (pending()) {
+        host_audio_hold(true);   // the game's audio waits with the picture (audio_switch.cpp)
+        g_prog_frame_wait.store(true, std::memory_order_relaxed);
+        g_prog_cv1.notify_all();
+    }
     while (pending()) {
         if (!g_prog_queue.empty()) {
             auto job = std::move(g_prog_queue.front());
@@ -681,6 +699,7 @@ void wait_frame_programs() {
             g_prog_done_cv.wait(lk);   // the rest is being built by workers
         }
     }
+    g_prog_frame_wait.store(false, std::memory_order_relaxed);
     host_audio_hold(false);
     g_frame_wait.clear();
 }
@@ -752,7 +771,10 @@ void program_cache_init() {
     const bool list = g_num_workers > 0 && prog_list_on();
     if (list && env_on("LSWTCS_GLPROGBG", true)) {
         std::thread([read_list] {
-            svcSetThreadPriority(CUR_THREAD_HANDLE, 0x3B);   // lowest application priority: the game's own loading comes first
+            // log71: core 2 beside worker 0, below the audio threads there. On core 0 at 0x3B (log67-70) it competed with the guest
+            // threads for 8-15 s of the boot, the logos and menus included.
+            pin_to_core(2, "saved-program reader");
+            svcSetThreadPriority(CUR_THREAD_HANDLE, 0x2D);
             read_list();
         }).detach();
     } else if (list) {

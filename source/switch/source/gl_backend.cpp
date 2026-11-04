@@ -48,7 +48,8 @@ void host_audio_hold(bool on);   // audio_switch.cpp: pause the device feed whil
 extern std::atomic<uint32_t> g_frame_marks;   // win32_switch.cpp: tester marks (ZL+ZR+left stick)
 extern std::atomic<uint32_t> g_capture_request;   // win32_switch.cpp: capture combos, 1 light, 2 full
 extern std::atomic<uint32_t> g_ab_toggle_request;   // win32_switch.cpp: A/B toggle combo (L + R + left stick)
-extern std::atomic<bool> g_frame_light;   // win32_switch.cpp: pad layout "auto" reads it
+extern std::atomic<bool> g_frame_light;   // win32_switch.cpp: pad layout "auto" reads it (light or frozen frames: a menu)
+extern "C" void lsw_load_light_edge(uint32_t replay);   // kernel_stubs.cpp: a light stretch began, the load mode moves on
 extern "C" void lsw_ft_ring_dump();   // kernel_stubs.cpp: game frame times of the last 120 swaps ([FTRING])
 extern "C" void lsw_sched_ab_set(int audioprio, int walkoff);   // kernel_stubs.cpp: LSWTCS_ABCYCLE
 extern "C" void lsw_shm_frame_hash_set(int on);                 // kernel_stubs.cpp: H
@@ -1647,6 +1648,49 @@ void apply_swizzle(GLenum target, uint32_t swz) {
 }
 uint32_t g_res_tex_binds = 0;
 
+// A cube map sampled while the fetch constant holds a 2D texture (log66, LSWTCS_CUBE2D, default on). The brick and stud shader
+// AB23B41D (runs 17-20 and 65) samples a cube map; the game binds a 1024 x 1024 2D texture there. Xenos addresses a texture by its
+// fetch constant, so the hardware reads the 2D image at the face coordinates. The host bound its black dummy cube instead, so those
+// bricks' sides and studs came out black. A cube map whose six faces are copies of the 2D image (every level) now stands in for it,
+// made once per texture ([CUBE2D]). Only square images; others keep the dummy.
+std::unordered_map<GLuint, GLuint> g_cube2d;   // 2D array texture -> its cube stand-in (0: none possible)
+uint64_t g_cube2d_epoch = 0, g_cube2d_made = 0, g_cube2d_binds = 0;
+GLuint cube_from_2d(GLuint src) {
+    if (g_cube2d_epoch != g_tex_evicted) {   // a texture name may have been deleted and reused: start again
+        for (auto& kv : g_cube2d) if (kv.second) glDeleteTextures(1, &kv.second);
+        g_cube2d.clear();
+        g_cube2d_epoch = g_tex_evicted;
+    }
+    auto it = g_cube2d.find(src);
+    if (it != g_cube2d.end()) return it->second;
+    ++g_gl_epoch;   // binds on the active unit
+    glBindTexture(GL_TEXTURE_2D_ARRAY, src);
+    GLint w = 0, h = 0, ifmt = 0, levels = 0;
+    glGetTexLevelParameteriv(GL_TEXTURE_2D_ARRAY, 0, GL_TEXTURE_WIDTH, &w);
+    glGetTexLevelParameteriv(GL_TEXTURE_2D_ARRAY, 0, GL_TEXTURE_HEIGHT, &h);
+    glGetTexLevelParameteriv(GL_TEXTURE_2D_ARRAY, 0, GL_TEXTURE_INTERNAL_FORMAT, &ifmt);
+    glGetTexParameteriv(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_IMMUTABLE_LEVELS, &levels);
+    if (levels < 1) levels = 1;
+    GLuint cube = 0;
+    if (w > 0 && w == h && ifmt) {
+        glGenTextures(1, &cube);
+        glBindTexture(GL_TEXTURE_CUBE_MAP, cube);
+        glTexStorage2D(GL_TEXTURE_CUBE_MAP, levels, GLenum(ifmt), w, h);
+        for (GLint l = 0; l < levels; ++l) {
+            const GLint lw = std::max(1, w >> l), lh = std::max(1, h >> l);
+            for (GLint face = 0; face < 6; ++face)
+                glCopyImageSubData(src, GL_TEXTURE_2D_ARRAY, l, 0, 0, 0, cube, GL_TEXTURE_CUBE_MAP, l, 0, 0, face, lw, lh, 1);
+        }
+        ++g_cube2d_made;
+        if (g_cube2d_made <= 16) {
+            printf("[CUBE2D] cube stand-in %u for 2D texture %u: %dx%d, %d levels, format 0x%X (err 0x%X)\n", cube, src, w, h, levels, ifmt, glGetError());
+            fflush(stdout);
+        }
+    }
+    g_cube2d.emplace(src, cube);
+    return cube;
+}
+
 // Texture units of a shader: resolved EDRAM data (gl_rt.inc texture_source) when the fetch points at
 // it, else the decoded guest texture. `swz` collects swizzle overrides for resolved sources
 // (fetch -> 12-bit mapping, written into a per-draw copy of the system constants).
@@ -1681,10 +1725,15 @@ void collect_units(const LswGlShader* s, const uint32_t* fetch_all, bool gpurt, 
         }
         if (!tex) {
             GlTex t = notex ? GlTex{} : get_texture(f6);
+            static const bool cube2d = env_on("LSWTCS_CUBE2D", true);
             if (t.target == want) tex = t.tex;
+            else if (cube2d && t.tex && want == GL_TEXTURE_CUBE_MAP && t.target == GL_TEXTURE_2D_ARRAY && (tex = cube_from_2d(t.tex)) != 0) {
+                how = " CUBE-FROM-2D";
+                ++g_cube2d_binds;
+            }
             else how = !info ? " NOT-TEXTURE" : t.tex ? " DIM-MISMATCH" : " DUMMY";
         }
-        inv_note_texture(fmt, u.dimension, w, h, how[1] == 'R' ? 1 : how[0] ? 2 : 0);
+        inv_note_texture(fmt, u.dimension, w, h, how[1] == 'R' ? 1 : how[1] == 'C' ? 0 : how[0] ? 2 : 0);
         if (!tex) tex = g_dummy[want == GL_TEXTURE_CUBE_MAP ? 1 : want == GL_TEXTURE_3D ? 2 : 0];
         if (g_capture_frame) {
             char b[160];
@@ -1761,6 +1810,102 @@ void capture_probe(uint32_t draw_index, const DrawTarget& dt) {
     hex[kW * kH / 4] = 0;
     prev.swap(px);
     if (changed) printf("[GLPROBE] #%u fbo %d: %d cells %s\n", draw_index, cur, changed, hex);
+}
+// LSWTCS_ZPROBE=1 (log66, capture frames only): after each draw into a scene-wide target, colour 0 and depth are sampled on a 160 x 90
+// grid of the target (nearest, row 0 at the top) and read back. The cells that changed since that framebuffer's last probe go to
+// zprobe_<replay>.bin: per draw a header ("ZPRB", draw index, framebuffer, RB_DEPTHCONTROL, blend control, cell count, VS and PS keys)
+// and per cell a u16 index, RGBA8 and a float depth. It tells, per screen cell, which draws wrote colour and depth and at what depth:
+// the studs drawn over the characters (runs 17-20 and 65). One GPU wait per draw. private/session-tools/zprobe.py reads it.
+namespace zp {
+constexpr int kW = 160, kH = 90;
+std::vector<uint8_t> g_buf;
+uint64_t g_replay = ~0ull;
+uint32_t g_draws = 0;
+struct Fbo { GLuint fbo = 0, col = 0, dep = 0; };
+Fbo g_fbo[2];   // probe targets for D24S8 and D32F_S8 sources (a depth blit needs matching formats)
+std::unordered_map<GLint, std::pair<std::vector<float>, std::vector<uint32_t>>> g_last;
+}
+void zprobe(uint32_t draw_index, const DrawTarget& dt, const LswGpuDrawRec& r) {
+    static const bool on = env_on("LSWTCS_ZPROBE", false);
+    if (!on || dt.rt_w < 1280) return;
+    GLint cur = 0;
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &cur);
+    if (!cur) return;
+    GLint type = GL_NONE, ctype = GL_NONE;
+    glGetFramebufferAttachmentParameteriv(GL_DRAW_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE, &type);
+    if (type == GL_NONE) return;
+    glGetFramebufferAttachmentParameteriv(GL_DRAW_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_FRAMEBUFFER_ATTACHMENT_COMPONENT_TYPE, &ctype);
+    const int k = ctype == GL_FLOAT ? 1 : 0;
+    zp::Fbo& p = zp::g_fbo[k];
+    if (!p.fbo) {
+        ++g_gl_epoch;   // binds on the active unit
+        glGenTextures(1, &p.col);
+        glBindTexture(GL_TEXTURE_2D, p.col);
+        glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA8, zp::kW, zp::kH);
+        glGenTextures(1, &p.dep);
+        glBindTexture(GL_TEXTURE_2D, p.dep);
+        glTexStorage2D(GL_TEXTURE_2D, 1, k ? GL_DEPTH32F_STENCIL8 : GL_DEPTH24_STENCIL8, zp::kW, zp::kH);
+        glGenFramebuffers(1, &p.fbo);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, p.fbo);
+        glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, p.col, 0);
+        glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_TEXTURE_2D, p.dep, 0);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, GLuint(cur));
+    }
+    if (zp::g_replay != g_replays) { zp::g_replay = g_replays; zp::g_buf.clear(); zp::g_last.clear(); zp::g_draws = 0; }
+    GLint pack = 0;
+    glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, &pack);
+    if (pack) glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+    glDisable(GL_SCISSOR_TEST);
+    glColorMaski(0, GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glDepthMask(GL_TRUE);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, GLuint(cur));
+    glReadBuffer(GL_COLOR_ATTACHMENT0);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, p.fbo);
+    const GLint sw = GLint(kSceneW * dt.msx), sh = GLint(kSceneH * dt.msy);
+    glBlitFramebuffer(0, 0, sw, sh, 0, 0, zp::kW, zp::kH, GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT, GL_NEAREST);
+    static std::vector<uint32_t> px(zp::kW * zp::kH);
+    static std::vector<float> z(zp::kW * zp::kH);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, p.fbo);
+    glReadBuffer(GL_COLOR_ATTACHMENT0);
+    glReadPixels(0, 0, zp::kW, zp::kH, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
+    glReadPixels(0, 0, zp::kW, zp::kH, GL_DEPTH_COMPONENT, GL_FLOAT, z.data());
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, GLuint(cur));
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, GLuint(cur));
+    if (pack) glBindBuffer(GL_PIXEL_PACK_BUFFER, GLuint(pack));
+    g_sc_invalidate_pending = true;   // scissor, masks and buffers changed behind the state cache
+    auto& last = zp::g_last[cur];
+    if (last.first.size() != z.size()) { last.first.assign(z.size(), -1.0f); last.second.assign(px.size(), 0x01020304u); }
+    struct Hdr { char magic[4]; uint32_t draw, fbo, zctl, blend, cells; uint64_t vs, ps; };
+    Hdr hd{{'Z', 'P', 'R', 'B'}, draw_index, uint32_t(cur), r.depthcontrol, r.blendcontrol, 0, r.vs_key, r.ps_key};
+    const size_t at = zp::g_buf.size();
+    zp::g_buf.resize(at + sizeof hd);
+    for (size_t i = 0; i < z.size(); ++i) {
+        if (z[i] == last.first[i] && px[i] == last.second[i]) continue;
+        last.first[i] = z[i]; last.second[i] = px[i];
+        const uint16_t cell = uint16_t(i);
+        const size_t o = zp::g_buf.size();
+        zp::g_buf.resize(o + 10);
+        memcpy(zp::g_buf.data() + o, &cell, 2);
+        memcpy(zp::g_buf.data() + o + 2, &px[i], 4);
+        memcpy(zp::g_buf.data() + o + 6, &z[i], 4);
+        ++hd.cells;
+    }
+    memcpy(zp::g_buf.data() + at, &hd, sizeof hd);
+    ++zp::g_draws;
+}
+void zprobe_end() {   // from maybe_capture, after the captured replay: the file goes out in the background
+    if (zp::g_buf.empty() || zp::g_replay != g_replays) return;
+    char name[48], path[128];
+    snprintf(name, sizeof name, "zprobe_%llu.bin", (unsigned long long)g_replays);
+    lsw_log_path(path, sizeof path, name);
+    const size_t bytes = zp::g_buf.size();
+    auto job = [p = std::string(path), data = std::make_shared<std::vector<uint8_t>>(std::move(zp::g_buf))] {
+        if (FILE* f = fopen(p.c_str(), "wb")) { fwrite(data->data(), 1, data->size(), f); fclose(f); }
+    };
+    zp::g_buf.clear();
+    if (!lsw_bg_submit(bytes, job)) printf("[ZPROBE] skipped %s: the SD card queue is full\n", path);
+    else printf("[ZPROBE] %s: %u draws, %zu KB\n", path, zp::g_draws, bytes >> 10);
+    fflush(stdout);
 }
 void apply_state(const LswGpuDrawRec& r, const DrawTarget& dt) {
     // Blend and colour mask per render target (RB_BLENDCONTROL0..3, RB_COLOR_MASK nibbles).
@@ -2873,11 +3018,60 @@ PresentSrc replay() {
             next_check = g_replays + 30;
             if (FILE* t = fopen("shot_now", "rb")) { fclose(t); remove("shot_now"); g_capture_frame = true; }
         }
-        {   // Pad layout "auto" (win32_switch.cpp): 30 light replays in a row (title, menus, loading) or 30 heavy ones flip it.
+        if (!g_replay_same) {
+            // Light frames (title, menus, loading): under 150 records. A light stretch after play (4 light replays after 30 heavy
+            // ones) moves the load mode on (kernel_stubs.cpp, lsw_load_light_edge), so each load runs in one mode.
             static uint32_t light_run = 0, heavy_run = 0;
+            static bool in_light = true;
             if (f.draws.size() < 150) { ++light_run; heavy_run = 0; } else { ++heavy_run; light_run = 0; }
-            if (light_run == 30) g_frame_light.store(true, std::memory_order_relaxed);
-            if (heavy_run == 30) g_frame_light.store(false, std::memory_order_relaxed);
+            if (!in_light && light_run >= 4) { in_light = true; lsw_load_light_edge(uint32_t(g_replays)); }
+            if (in_light && heavy_run >= 30) in_light = false;
+            // Frozen scene (log66): the game paused behind a menu, as the hub's character selection (run 65: about 300 records,
+            // constant for seconds, by position because it was not light). Each scene draw (depth tested, not the 720-row HUD
+            // viewport) gives a hash of its shaders and first 512 bytes of vertex constants; a replay where at most 1 % of them are
+            // new to the previous replay is frozen. Animated characters, water and a moving camera change far more than 1 %.
+            static std::vector<uint64_t> prev, now;
+            now.clear();
+            uint32_t ui = 0;
+            for (const LswGpuDrawRec& d : f.draws) {
+                if (d.kind != 0 || is_clear_quad(d)) continue;
+                if (d.viewport[3] >= 719.5f && d.viewport[3] <= 720.5f) { ++ui; continue; }
+                if (!(d.depthcontrol & 2)) continue;
+                uint64_t h = d.vs_key * 0x9E3779B97F4A7C15ull ^ d.ps_key;
+                const uint32_t n = std::min<uint32_t>(d.cb_vsf_size, 512);
+                if (n && size_t(d.cb_vsf_off) + n <= f.arena.size()) h ^= XXH3_64bits(f.arena.data() + d.cb_vsf_off, n);
+                now.push_back(h);
+            }
+            std::sort(now.begin(), now.end());
+            size_t fresh = 0;
+            for (size_t i = 0, j = 0; i < now.size(); ++i) {
+                while (j < prev.size() && prev[j] < now[i]) ++j;
+                if (j < prev.size() && prev[j] == now[i]) ++j; else ++fresh;
+            }
+            const bool frozen = now.size() >= 30 && fresh * 100 <= now.size();
+            static uint32_t frozen_run = 0, live_run = 0;
+            if (frozen) { ++frozen_run; live_run = 0; } else { ++live_run; frozen_run = 0; }
+            static bool menu = false;
+            const bool was = menu;
+            if (light_run >= 30 || frozen_run >= 20) menu = true;
+            else if (heavy_run >= 3 && live_run >= 3) menu = false;
+            if (menu != was) {
+                g_frame_light.store(menu, std::memory_order_relaxed);
+                static uint32_t lines = 0;
+                if (lines++ < 400) {
+                    printf("[MENUPROBE] replay %llu: %s (%zu records, %zu scene draws, %zu new, %u HUD-viewport draws)\n", (unsigned long long)g_replays,
+                           menu ? (light_run >= 30 ? "light, a menu or a loading screen" : "frozen scene, a menu") : "play", f.draws.size(), now.size(), fresh, ui);
+                    fflush(stdout);
+                }
+            }
+            static uint64_t next_line = 0;   // every 10 s: what the test sees, to tune it
+            if (gp_now() >= next_line) {
+                next_line = gp_now() + 10000000000ull;
+                printf("[MENUPROBE] replay %llu: %zu records, %zu scene draws, %zu new to the last replay, %u HUD-viewport draws, frozen run %u, menu %d\n",
+                       (unsigned long long)g_replays, f.draws.size(), now.size(), fresh, ui, frozen_run, int(menu));
+                fflush(stdout);
+            }
+            prev.swap(now);
         }
         // Capture combo: this replay, not the next file check (log6 session: shots came 10-29 replays after the press).
         if (const uint32_t req = g_replay_same ? 0u : g_capture_request.exchange(0, std::memory_order_relaxed)) {
@@ -3327,15 +3521,24 @@ PresentSrc replay() {
                     puts(vb);
                 }
             }
+            // sys (log66): the vertex system constants that place depth after the shader: flags (bit 3 x/y divided by w, 4 z
+            // divided by w, 5 w is 1/w), ndc_scale and ndc_offset (XeSystemConstants_vs offsets 0, 16 and 32).
+            uint32_t sflags = 0; float nsc[3] = {}, nof[3] = {};
+            if (r.cb_sys_size >= 48 && size_t(r.cb_sys_off) + 48 <= f.arena.size()) {
+                const uint8_t* sb = f.arena.data() + r.cb_sys_off;
+                memcpy(&sflags, sb, 4); memcpy(nsc, sb + 16, 12); memcpy(nof, sb + 32, 12);
+            }
             printf("[GLDRAWCAP] #%u prim %u gs %u n=%u ib=%u mode=%u pitch=%u msaa=%u col=%u/%u dep=%u nrt=%u blend=%08X cmask=%X "
-                   "zctl=%08X cull=%u vp=%.0f,%.0f,%.0fx%.0f sc=%u,%u..%u,%u ps=%s vs=%016llX ps=%016llX gs=%016llX prog=%u scm=%08X po=%g/%g z=%.4f..%.4f c03=%016llX |%s\n", draw_i - 1,
+                   "zctl=%08X cull=%u vp=%.0f,%.0f,%.0fx%.0f sc=%u,%u..%u,%u ps=%s vs=%016llX ps=%016llX gs=%016llX prog=%u scm=%08X po=%g/%g z=%.4f..%.4f c03=%016llX "
+                   "sys=%X ndc=%g,%g,%g/%g,%g,%g |%s\n", draw_i - 1,
                    r.topology, r.gs_type, r.vertex_count,
                    r.ib_count, r.edram_mode, r.surf_info & 0x3FFF, (r.surf_info >> 16) & 3, r.color_info & 0xFFF,
                    (r.color_info >> 16) & 0xF, r.depth_info & 0xFFF, dt.nrt, r.blendcontrol, r.color_mask, r.depthcontrol,
                    r.sc_mode_cntl & 7, r.viewport[0], r.viewport[1], r.viewport[2], r.viewport[3],
                    r.scissor[0], r.scissor[1], r.scissor[2], r.scissor[3], ps ? "y" : "n",
                    (unsigned long long)vs->key, (unsigned long long)(ps ? ps->key : 0), (unsigned long long)(gs ? gs->key : 0), prog,
-                   r.sc_mode_cntl, r.poly_scale, r.poly_offset, r.viewport[4], r.viewport[5], (unsigned long long)c03, g_unit_log.c_str());
+                   r.sc_mode_cntl, r.poly_scale, r.poly_offset, r.viewport[4], r.viewport[5], (unsigned long long)c03,
+                   sflags, nsc[0], nsc[1], nsc[2], nof[0], nof[1], nof[2], g_unit_log.c_str());
             dump_capture_glsl(vs);
             dump_capture_glsl(ps);
             dump_capture_glsl(gs);
@@ -3391,7 +3594,7 @@ PresentSrc replay() {
             }
             draw_pixels = gpu_pixels_end();
         }
-        if (g_capture_frame) capture_probe(draw_i - 1, dt);
+        if (g_capture_frame) { capture_probe(draw_i - 1, dt); zprobe(draw_i - 1, dt, r); }
         if (first_use) {
             glFinish();
             printf("[GLPROGT] program %u first draw: %llu ms (VS %zu KB, PS %zu KB)\n", prog,
@@ -3551,6 +3754,7 @@ void save_png(const char* path, std::vector<uint8_t>&& rgba, int w, int h) {
 }
 void maybe_capture(const PresentSrc& src) {
     if (!g_capture_frame) return;
+    zprobe_end();
     const uint32_t w = src.w, h = src.h;
     std::vector<uint8_t> px;
     try { px.resize(size_t(w) * h * 4); }

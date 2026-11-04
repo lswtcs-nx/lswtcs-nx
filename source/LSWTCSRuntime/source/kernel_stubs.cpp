@@ -633,6 +633,7 @@ LoadEp g_load_ep;
 uint64_t g_load_episodes = 0;
 uint64_t g_load_mode_idx = 0;
 bool g_load_advance = false;   // a big episode ended: next entry once the quiet time has passed
+bool g_load_edges_seen = false;   // lsw_load_light_edge has run: light-frame edges move the mode, not the quiet time
 uint64_t load_now_ns() { return uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count()); }
 const std::vector<uint32_t>& load_modes() {
     static const std::vector<uint32_t> modes = [] {
@@ -680,7 +681,7 @@ void load_note_start(uint64_t now) {
     if (e.open && now - e.last_ns > load_gap_ns()) load_ep_report_locked();
     if (!e.open) {
         const auto& modes = load_modes();
-        if (g_load_advance && now - e.last_ns >= load_quiet_ns()) { ++g_load_mode_idx; g_load_advance = false; }
+        if (!g_load_edges_seen && g_load_advance && now - e.last_ns >= load_quiet_ns()) { ++g_load_mode_idx; g_load_advance = false; }
         e = LoadEp{};
         e.open = true;
         e.mode = modes.empty() ? 0u : modes[g_load_mode_idx % modes.size()];
@@ -707,6 +708,22 @@ static void load_ep_poll(uint32_t swap) {
     const uint64_t now = load_now_ns();
     std::lock_guard<std::mutex> lk(g_load_mtx);
     if (g_load_ep.open && now - g_load_ep.last_ns > load_gap_ns()) load_ep_report_locked();
+}
+// Light-frame edges (gl_backend.cpp, log66): a stretch of light frames (a loading screen or a menu) began after play. The mode moves
+// to the next entry here, so each load runs in one mode, and the open episode is reported first, so no episode mixes two modes.
+// Run 65 never left mode "-": the quiet rule above (a 4 MB episode, then 10 s without file calls) never met its quiet time, because
+// the music streams a refill every 2-4 s. Without these edges (a build without the GL backend) the quiet rule still applies.
+extern "C" void lsw_load_light_edge(uint32_t replay) {
+    const auto& modes = load_modes();
+    std::lock_guard<std::mutex> lk(g_load_mtx);
+    g_load_edges_seen = true;
+    if (modes.empty()) return;
+    load_ep_report_locked();
+    ++g_load_mode_idx;
+    const uint32_t m = modes[g_load_mode_idx % modes.size()];
+    g_load_mode.store(m);
+    printf("[LOADMODE] mode %s from replay %u (light frames began)\n", load_mode_name(m).c_str(), replay);
+    fflush(stdout);
 }
 static void gil_release_run(void (*fn)(void*), void* arg);   // after GilYield below
 // A host file-system call during a load: counted for [LOADEP], and run off the guest turn in mode o.

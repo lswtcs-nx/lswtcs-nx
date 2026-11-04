@@ -2810,3 +2810,18 @@ Route 2 item 3 (CPU_ROADMAP.md), the technique from the mk9-nx study (masseffect
 - **SD:** `switch/lswtcs.nro` = A (227095b3...), `switch/lswtcs-nv.nro` = B (9aaad4f7..., 1 MB smaller NRO). Both validated.
 - **Test:** docked, where the guest CPU is the limit. The same route on A then B (hub, then `Gungan_B`'s heavy part), one session each. Compare FPS by place, the heavy part, and CPU per guest call (`private/session-tools/guest_call_cost.py`).
 - **Risk:** a hang in a loop whose wait the barrier does not cover. B is then dropped.
+
+## Run 77: `0.0.81-log75` handheld (meant to be log77 B)
+
+One session meant as log77 B in handheld: the hub, `Gungan_A`, `Gungan_B` (91 s of the heavy part), the hub. No crash.
+
+**It was not B.**
+- The log has no `[NX] guest code` line, which both log77 builds print.
+- The profiler's code range (81,408,000 bytes) matches log75 and log76, not B (80,425,760).
+- Render-thread samples only resolve to a coherent texture-upload path with log75's ELF (`nvc0_miptree_transfer_map` > `nouveau_bo_new` > `nvMapCreate`), so it was log75.
+- The console's SD likely still had an older NRO.
+
+**As a baseline for normal code in handheld:**
+- CPU per guest call 162 ns (90 % 161-164). Runs 72 and 76 had 159 and 157.
+- `Gungan_B`: 27.9 FPS, heavy part 26.3 (run 72: 29.4 and 27.4).
+- Texture upload 7.4 ms per texture (run 76: 8.0).

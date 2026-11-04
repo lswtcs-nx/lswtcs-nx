@@ -2740,3 +2740,55 @@ Same route as run 74: the hub, `PalaceRescue` (`Rescue_A` to `e`), the hub, `Pod
   - A texture whose memory overlaps one of this frame's resolve destinations (8 bytes a pixel, an upper bound), or a kept resolve result, is left to the draw loop. It is never made from guest memory before a resolve's copy lands there.
   - `[TEXCOST]` adds the session's made-before and left-to-the-loop counts.
 - **Risk:** the allocator change touches every allocation in the process. A boot hang or crash in free means reverting it with `LSWTCS_BIGALLOC=0`.
+
+## Run 76: `0.0.81-log75` handheld, no crash
+
+One session of about 870 s: the hub, `PalaceRescue` (`Rescue_A` to `e`), the hub, all of `PodSprint_A` (298 s), the hub, `RetakePalace` (`Retake_A`, `Retake_B`), the hub. No crash. The tester still feels stutters and is not sure about the frame rate.
+
+**Heap:**
+- Peak 2719 MB in use. All 1255 saved programs compiled (none held back for memory).
+- Evicting textures now lowers the heap: 2719 to 2533 MB at replay 25200.
+- 324-574 MB free over the session. Big blocks from newlib at the end: 2159 MB in 1283 blocks.
+
+**FPS by place** (same filter as run 72): no change from runs 73-75. Handheld is GPU-bound at the stock clock.
+
+| Place | FPS | p95 frame |
+| --- | --- | --- |
+| Hub | 41.8 | 37 ms |
+| `Rescue_A` | 28.9 | 43 ms |
+| `Rescue_b` | 26.5 | 51 ms |
+| `Rescue_c` | 25.5 | 53 ms |
+| `Rescue_e` | 30.1 | 43 ms |
+| `PodSprint_A` | 25.4 | 55 ms |
+| `Retake_A` | 27.6 | 41 ms |
+| `Retake_B` | 28.2 | 46 ms |
+
+**Textures:**
+- The pre-pass made all 3005 new textures before the draws.
+- Upload still averaged 8.0 ms per texture (24.1 s in total), and decode 3.0 ms (8.9 s).
+- So glthread's finish was not the cost.
+- The cost follows the number of mip levels:
+  - BC1 512x512, 10 mips: 13.2 ms.
+  - BC1 1024x1024, 1 mip: 3.2 ms.
+  - BC1 256x256, 9 mips: 16.8 ms.
+- `nvc0_miptree_transfer_map` makes a new buffer object for every call, i.e. every mip level. On the Switch that is a memalign, a memset, `nvMapCreate` and `nvAddressSpaceMap`, and then `nvAddressSpaceUnmap`, `nvMapClose` and free after the copy's fence.
+
+**Programs** (`[GLSTEP]`, 1235 worker builds):
+
+| GLSL size | Median build |
+| --- | --- |
+| Under 30 KB | 95 ms |
+| 30-60 KB | 157 ms |
+| 60-100 KB | 271 ms |
+| Over 100 KB (9 programs) | 1424 ms |
+
+- The long waits in new levels are single programs built on the render thread, 0.6-2.6 s each (`PodSprint` and `RetakePalace` entries).
+- They happen once per program: it is saved for later boots.
+
+## Log 76: `0.0.82-log76`
+
+- **Texture staging from Mesa's GART suballocator.**
+  - `switch/mesa/mesa_texstage_edits.py` (`NVC0_TEX_STAGE_MM=1`, set by the port; `LSWTCS_GLTEXSTAGE=0` = off): nvc0 texture uploads take their staging range from `screen->mm_GART`, as buffer uploads do. They release it with `nouveau_mm_free_work` on the copies' fence.
+  - Requests over 2 MB still get their own buffer object inside `nouveau_mm_allocate`.
+  - The edit script is idempotent by its tag and runs last in `tools/build_mesa.sh`.
+- **Pre-pass flush:** the texture pre-pass calls `glFlush` every 16 MB of new textures, so fences pass and staging ranges return to the suballocator. It keeps every slab it ever made, so the flush bounds that.

@@ -172,6 +172,9 @@ bool egl_init() {
     // Console 2026-10-11 (Negotiations start, 921 MHz): frame p50 34.2 -> 27.9 ms, GPU 33.4 -> ~25.7 ms per frame,
     // picture and audio fine. LSWTCS_GLCBFLUSH=0 (or NVC0_CB_FLUSH_ON_WRITE=0 in env.txt) restores the old flushes.
     if (env_on("LSWTCS_GLCBFLUSH", true)) setenv("NVC0_CB_FLUSH_ON_WRITE", "1", 0);
+    // Texture upload staging from Mesa's GART suballocator instead of a new buffer object per mip level
+    // (switch/mesa/mesa_texstage_edits.py; run 76: ~8 ms per new texture whatever its size). LSWTCS_GLTEXSTAGE=0 restores it.
+    if (env_on("LSWTCS_GLTEXSTAGE", true)) setenv("NVC0_TEX_STAGE_MM", "1", 0);
     printf("[GL] eglGetDisplay...\n"); fflush(stdout);
     g_display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
     if (g_display == EGL_NO_DISPLAY) { printf("[GL] eglGetDisplay failed\n"); return false; }
@@ -3292,7 +3295,13 @@ void texture_prepass(const LswGpuFrame& f, bool gpurt) {
                 if (!covered && gpurt)
                     for (const auto& kv : g_resolved) if (kv.first >= b && kv.first < end) { covered = true; break; }
                 if (covered) { ++g_tex_pre_skipped; continue; }
+                const uint64_t before = g_tex_bytes;
                 get_texture(f6);
+                // log76: a flush every 16 MB of new textures lets the copies' fences pass and their staging ranges return
+                // to Mesa's suballocator, which keeps every slab it ever made (mesa_texstage_edits.py).
+                static uint64_t since_flush = 0;
+                since_flush += g_tex_bytes - before;
+                if (since_flush >= (16ull << 20)) { glFlush(); since_flush = 0; }
             }
         }
     }

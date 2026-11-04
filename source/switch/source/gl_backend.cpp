@@ -142,7 +142,13 @@ extern "C" uint32_t lsw_heap_free_mb();                                         
 extern "C" void lsw_bridge_counts(uint32_t* shaders, uint32_t* translations, uint32_t* memo, uint32_t* memo_clears);   // gl_bridge.cc
 extern "C" void lsw_big_alloc_stats(size_t* bytes, size_t* count) __attribute__((weak));   // rpmalloc_switch.c (LSW_RPMALLOC)
 extern "C" void lsw_bo_pool_stats(uint64_t* hits, uint64_t* misses, uint64_t* kept, uint64_t* dropped, uint64_t* bytes,
-                                  int* state) __attribute__((weak));   // bo_check.cpp (log78)
+                                  int* state, uint64_t* made) __attribute__((weak));   // bo_check.cpp (log78)
+// log81 (bo_check.cpp): the pool's demand by storage kind (saved in bopool.bin), the per-replay refill, GPU submit times.
+struct LswBoPoolDemand { uint64_t size; uint32_t flags, align, memtype, tile_mode, peak, pad; };
+extern "C" size_t lsw_bo_pool_demand(LswBoPoolDemand* out, size_t max) __attribute__((weak));
+extern "C" void lsw_bo_pool_seed(const LswBoPoolDemand* in, size_t n) __attribute__((weak));
+extern "C" void lsw_bo_pool_frame(int light) __attribute__((weak));
+extern "C" void lsw_gpu_kick_stats(uint64_t* n, uint64_t* ns, uint64_t* slow, uint64_t* max_ns) __attribute__((weak));
 
 bool env_on(const char* name, bool def) {
     const char* e = getenv(name);
@@ -640,8 +646,43 @@ void prog_queue_level_first(const char* why) {
     fflush(stdout);
     if (moved) g_prog_cv.notify_one();
 }
+// log81: the texture storage pool's demand (bo_check.cpp), kept over sessions in bopool.bin: magic, count, entries.
+constexpr uint32_t kBoPoolMagic = 0x4257534Cu;   // "LSWB"
+void bopool_read() {
+    if (!lsw_bo_pool_seed) return;
+    std::vector<LswBoPoolDemand> v;
+    if (FILE* f = fopen("bopool.bin", "rb")) {
+        uint32_t hdr[2] = {};
+        if (fread(hdr, sizeof hdr, 1, f) == 1 && hdr[0] == kBoPoolMagic && hdr[1] <= 1024) {
+            v.resize(hdr[1]);
+            if (hdr[1] && fread(v.data(), sizeof(LswBoPoolDemand), hdr[1], f) != hdr[1]) v.clear();
+        }
+        fclose(f);
+    }
+    if (!v.empty()) lsw_bo_pool_seed(v.data(), v.size());
+    printf("[BOPOOL] %zu storage kinds remembered from earlier sessions\n", v.size());
+}
+void bopool_save() {
+    if (!lsw_bo_pool_demand) return;
+    auto v = std::make_shared<std::vector<LswBoPoolDemand>>(1024);
+    v->resize(lsw_bo_pool_demand(v->data(), v->size()));
+    if (v->empty()) return;
+    lsw_bg_submit_other(v->size() * sizeof(LswBoPoolDemand), [v] {
+        FILE* f = fopen("bopool.tmp", "wb");
+        if (!f) return;
+        const uint32_t hdr[2] = {kBoPoolMagic, uint32_t(v->size())};
+        const bool ok = fwrite(hdr, sizeof hdr, 1, f) == 1 && fwrite(v->data(), sizeof(LswBoPoolDemand), v->size(), f) == v->size();
+        fclose(f);
+        if (!ok) { remove("bopool.tmp"); return; }
+        remove("bopool.bin");   // the SD card's rename does not replace
+        if (rename("bopool.tmp", "bopool.bin") != 0) remove("bopool.tmp");
+    });
+}
+
 // Render thread, once per replay.
 void level_watch() {
+    static uint32_t bopool_seq = 0;   // log81: the pool's demand is saved at each level change
+    if (const uint32_t s = lsw_level_seq(); s != bopool_seq) { bopool_seq = s; bopool_save(); }
     if (!prog_list_on() || !prog_level_on() || g_num_workers == 0) return;
     static bool reader_seen = false;
     const uint32_t seq = lsw_level_seq();
@@ -987,6 +1028,7 @@ void program_cache_init() {
     // idle meanwhile (run 66). Now a reader thread queues them while the game boots (log67, LSWTCS_GLPROGBG, default on). A program
     // the game asks for before the reader gets to it is built on request as before; the reader then skips its key.
     if (prog_list_on() && env_on("LSWTCS_GLPROGORDER", true)) g_prog_prev_order = program_order_read();
+    bopool_read();
     if (prog_list_on() && prog_level_on()) {
         g_level_prev = program_levels_read();
         size_t n = 0;
@@ -4349,6 +4391,8 @@ PresentSrc replay() {
     }
     {   // DIAG: replays that stall, and draws skipped because their program is still compiling
         const uint64_t ms = (gp_now() - replay_t0) / 1000000;
+        // log81: the pool's demand per replay, and storage made ahead in light replays (no new textures, no program wait).
+        if (lsw_bo_pool_frame) lsw_bo_pool_frame(ms < 12 && g_tex_created == tex0 && !g_prog_pending_draws);
         // A captured replay is slow because of the capture (per-draw log): it must not re-arm the
         // post-stall captures (that looped: one 5 s capture every 60 replays on the Switch, 2026-10-08).
         if (ms >= 1000 && !g_capture_frame) g_stall_replay = g_replays;
@@ -4400,16 +4444,20 @@ PresentSrc replay() {
             std::lock_guard<std::mutex> lk(g_stage_mtx);
             size_t big_bytes = 0, big_count = 0;
             if (lsw_big_alloc_stats) lsw_big_alloc_stats(&big_bytes, &big_count);
-            uint64_t ph = 0, pm = 0, pk = 0, pd = 0, pb = 0; int ps = -1;
-            if (lsw_bo_pool_stats) lsw_bo_pool_stats(&ph, &pm, &pk, &pd, &pb, &ps);
+            uint64_t ph = 0, pm = 0, pk = 0, pd = 0, pb = 0, pmade = 0; int ps = -1;
+            if (lsw_bo_pool_stats) lsw_bo_pool_stats(&ph, &pm, &pk, &pd, &pb, &ps, &pmade);
+            uint64_t kn = 0, kns = 0, kslow = 0, kmax = 0;
+            if (lsw_gpu_kick_stats) lsw_gpu_kick_stats(&kn, &kns, &kslow, &kmax);
             printf("[HEAPGL] replay %llu: stages cached %zu (limit %zu, %u evicted, %u reused) | heap kept per stage compile %lld KB (%u), "
                    "per link %lld KB (%u) | big blocks from newlib %zu MB (%zu) | texture storage pool %s: reused %llu, new %llu, "
-                   "kept %llu, freed %llu, %llu MB kept now\n", (unsigned long long)g_replays, g_stages.size(), stage_max(),
+                   "kept %llu, freed %llu, %llu MB kept now, made ahead %llu | GPU submits %llu, %llu ms, %llu over 16 ms, longest %llu ms\n",
+                   (unsigned long long)g_replays, g_stages.size(), stage_max(),
                    g_stage_evicted, g_stage_reused,
                    g_kept_compile_n ? (long long)(g_kept_compile / g_kept_compile_n / 1024) : 0LL, g_kept_compile_n,
                    g_kept_link_n ? (long long)(g_kept_link / g_kept_link_n / 1024) : 0LL, g_kept_link_n, big_bytes >> 20, big_count,
                    ps == 1 ? "on" : ps == 0 ? "OFF" : "unused", (unsigned long long)ph, (unsigned long long)pm, (unsigned long long)pk,
-                   (unsigned long long)pd, (unsigned long long)(pb >> 20));
+                   (unsigned long long)pd, (unsigned long long)(pb >> 20), (unsigned long long)pmade, (unsigned long long)kn,
+                   (unsigned long long)(kns / 1000000), (unsigned long long)kslow, (unsigned long long)(kmax / 1000000));
         }
         printf("[HEAP] replay %llu: heap %llu MB, in use %llu MB, free %llu MB (inside %llu, top %llu) | programs %u compiled, %zu known, "
                "%zu queued, %u not compiled (low memory), %zu in use, %zu stages | textures %zu (%llu MB), memo %zu, samplers %zu, fbos %zu, "

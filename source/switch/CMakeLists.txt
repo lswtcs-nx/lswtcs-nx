@@ -266,7 +266,8 @@ else()
         target_compile_definitions(lswtcs PRIVATE LSW_BUILD_GUEST_NV=1)   # the log line only; the runtime stays volatile
     endif()
     target_link_options(lswtcs PRIVATE -Wl,--wrap=nouveau_bo_new -Wl,--wrap=nouveau_bo_name_ref
-        -Wl,--wrap=nouveau_bo_ref -Wl,--wrap=nouveau_bo_map -Wl,--wrap=nouveau_bo_wait)
+        -Wl,--wrap=nouveau_bo_ref -Wl,--wrap=nouveau_bo_map -Wl,--wrap=nouveau_bo_wait
+        -Wl,--wrap=nvGpuChannelKickoff)   # log81: GPU submit times (bo_check.cpp)
 endif()
 target_link_options(lswtcs PRIVATE
     -Wl,--gc-sections
@@ -299,9 +300,9 @@ if(LSW_DEKO_BACKEND)
     nx_generate_nacp(lswtcs.nacp NAME "TCS Deko Live" AUTHOR "LSWTCS port" VERSION "0.0.7")
 else()
     if(LSW_GUEST_NONVOLATILE)
-        set(LSW_NACP_VERSION "0.0.86-log80nv")
+        set(LSW_NACP_VERSION "0.0.87-log81nv")
     else()
-        set(LSW_NACP_VERSION "0.0.86-log80")
+        set(LSW_NACP_VERSION "0.0.87-log81")
     endif()
     nx_generate_nacp(lswtcs.nacp NAME "LSWTCS" AUTHOR "LSWTCS port" VERSION "${LSW_NACP_VERSION}")
 endif()

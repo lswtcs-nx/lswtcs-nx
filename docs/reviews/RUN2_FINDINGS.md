@@ -3055,3 +3055,57 @@ Diagnostics only. Behaviour is log79's.
   - in `[TEXSLOW]`, whether the 13-41 ms uploads are GL-thread waits or driver time;
   - which calls `[GLSTALL]` lists;
   - `[GLSYNCLONG]` against any long freeze.
+
+
+## Run 83: `0.0.86-log80` handheld
+
+305 s on run 80's route: the hub, `Gungan_A`, `Gungan_B`, the hub, `Rescue_A`, `Rescue_b`, the hub, `PodSprint_A`, the hub. No crash.
+
+**Where uploads wait:**
+- New textures' uploads took 3002 ms over 1655 textures, 1.81 ms each (run 82: 2.20).
+- 2636 ms of that (88 %) was inside glthread's finish. In Mesa 20.1, finish waits for the GL thread's queued batches, then runs the batch not yet queued on the calling (render) thread.
+- In `[GLSTALL]`, few single waits reach 5 ms. Most of the time is many short waits, about 1.5-2 ms per texture.
+- Render-thread profile:
+  - 356 samples inside `nouveau_bo_new`, which is the texture's storage (`TexStorage3D`) made there by finish;
+  - 74 % of those samples are calls to the GPU service: `nvMapCreate` (Create 27.5 %, Alloc 11.5 %, GetId 8.1 %) and `nvAddressSpaceMap` (27 %);
+  - about 0.8 ms per new texture.
+- The pool kept nothing until replay 8781 (`Rescue_A`), when the texture cache first evicted. Until then every storage was new.
+  - At the end: 253 reused, 1546 new, 423 kept, 787 freed.
+- Two long single waits:
+  - `GenTextures` 311 ms in replay 2958, the frame after the hub arrival;
+  - `ClientWaitSync` 269 ms at the `PodSprint_A` entry.
+
+**A 3.6 s freeze at the start of `Gungan_B`** (replay 4142, of which 3604 ms in its resolve stage; the wait for the GL thread was 1 ms):
+- In over-1-s freezes, Mesa's GL thread was 88 % in `nvGpuChannelKickoff` (`KickoffPb`, the GPU submit). The render thread waited for room in glthread's queue (`util_queue_add_job`).
+- The `[CLOCK]` line next to it read `gpu_load=0.0%`: the GPU was not busy. The submit itself stopped.
+- Same pattern as run 82's 1.9 s freeze. Both came before the pool kept anything.
+
+**`PodSprint_A` entry:** 2148 ms.
+- 1314 ms of it was a program built on the render thread: one the game had not asked for in any earlier session.
+- The rest went to its 259 new textures.
+
+**Other figures:**
+- Decode: 4675 ms of work in 921 ms on the render thread.
+- Heap: at least 316 MB free.
+- FPS (time in each level, loading included):
+  - hub 44.5;
+  - `Gungan_A` 37.0, `Gungan_B` 31.8;
+  - `Rescue_A` 28.3, `Rescue_b` 37.1;
+  - `PodSprint_A` 30.6.
+
+## Log 81: `0.0.87-log81`
+
+- **Storage made ahead** (`bo_check.cpp`):
+  - Each storage kind (size, alignment, flags, memory kind, tile mode) remembers the most made in one replay, up to 16, over sessions (`bopool.bin`, written at each level change).
+  - Light replays are under 12 ms, with no new texture and no program wait. Every second one queues one buffer to make on Mesa's GL thread (`lsw_glthread_call`), smallest kinds first, until the pool holds that many of each.
+  - Limits: 48 MB in all (the pool's cap, was 32), and only while the heap has 384 MB free.
+  - `LSWTCS_BOPOOLFILL=0` turns it off.
+  - Logs: `[BOPOOL] N storage kinds remembered` at boot, `first texture storage made ahead`, and `made ahead` in `[HEAPGL]`.
+- **GPU submit times** (`--wrap=nvGpuChannelKickoff`):
+  - `[HEAPGL]` adds the submit count, their total ms, how many took over 16 ms, and the longest.
+  - A submit of 100 ms or more prints `[GPUSUBMIT]` with the channel's error notification and error info. These tell whether the GPU faulted.
+- **Test:** handheld, the same route.
+  - The first session learns from its first area entries and fills the pool in later light frames.
+  - A second session starts with the file.
+  - Read: `made ahead` against `reused` and `new`, upload per texture and its waiting share in `[TEXCOST]`, and `[GPUSUBMIT]` at any freeze.
+- **Risk:** up to 48 MB held. Each buffer made ahead costs the GL thread about 1 ms in a light frame.

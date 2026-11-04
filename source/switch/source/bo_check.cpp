@@ -18,6 +18,8 @@ int __real_nouveau_bo_wait(nouveau_bo*, uint32_t, nouveau_client*);
 #include <cstddef>
 #include <mutex>
 #include <unordered_map>
+#include <vector>
+#include <algorithm>
 
 namespace {
 using namespace lsw_bo_check;
@@ -180,6 +182,7 @@ extern "C" void lsw_bo_check_finish() {
 }
 extern "C" volatile int lsw_nvc0_rt_compress;   // mesa_compress_edits.py
 extern "C" uint32_t lsw_heap_free_mb();          // platform_switch.cpp
+extern "C" int lsw_glthread_call(void (*fn)(void*), void* arg);   // mesa_glthread_edits.py: fn on Mesa's GL thread, in order
 
 // ---- log78: a pool of freed texture storage ----
 // Run 79: every new texture's storage was a new buffer object, and on the Switch nouveau_bo_new is a memalign, a memset and two
@@ -210,8 +213,22 @@ std::unordered_map<nouveau_bo*, PoolKey> g_pool_owned;   // buffers made through
 std::unordered_multimap<PoolKey, nouveau_bo*, PoolKeyHash> g_pool_free;
 uint64_t g_pool_bytes = 0, g_pool_hits = 0, g_pool_misses = 0, g_pool_kept = 0, g_pool_dropped = 0;
 int g_pool_state = -1;   // -1: not checked yet, 0: off, 1: on
-constexpr uint64_t kPoolMaxBo = 4ull << 20, kPoolCap = 32ull << 20;
+constexpr uint64_t kPoolMaxBo = 4ull << 20, kPoolCap = 48ull << 20;   // log81: 48 MB (was 32)
 constexpr uint32_t kPoolMinFreeMb = 256;
+// log81: storage made ahead. Run 83 (log80): a new texture's upload was 85-95 % "waiting for Mesa's GL thread", and that wait is
+// mostly the GL thread's work run on the render thread by glthread's finish: the texture's storage (nouveau_bo_new), of which 75 %
+// is the GPU service calls (nvMapCreate, nvAddressSpaceMap), about 0.8 ms a texture. The pool only had storage once textures were
+// evicted (run 83: first keep at Rescue_A, 7 minutes in). Now each storage kind (size, alignment, flags, memory kind, tile mode)
+// remembers the most made in one replay (up to 16), over sessions (bopool.bin, gl_backend.cpp), and in light replays the GL thread
+// makes one such buffer ahead (lsw_glthread_call), smallest kinds first, until the pool holds that many of each, within its 48 MB
+// and while the heap has 384 MB free. LSWTCS_BOPOOLFILL=0 turns that off.
+struct Demand { uint32_t frame = 0, peak = 0; };
+std::unordered_map<PoolKey, Demand, PoolKeyHash> g_pool_demand;   // under g_pool_mtx
+nouveau_device* g_pool_dev = nullptr;                              // under g_pool_mtx: the device textures are made on
+uint64_t g_pool_made = 0;                                          // made ahead
+bool g_refill_busy = false;                                        // a refill job is queued (render thread sets, job clears)
+PoolKey g_refill_key{};
+constexpr uint32_t kPeakMax = 16, kRefillMinFreeMb = 384;
 bool pool_wanted() {
     static const bool on = [] { const char* e = getenv("LSWTCS_BOPOOL"); return !(e && e[0] == '0'); }();
     return on && g_pool_state != 0 && !g_ledger.enabled.load(std::memory_order_relaxed);
@@ -249,10 +266,136 @@ void pool_release(nouveau_bo* bo, const PoolKey& k) {
 }
 } // namespace
 
-// [HEAPGL] (gl_backend.cpp): buffers handed out from the pool, made new, kept, too many to keep, MB kept now.
-extern "C" void lsw_bo_pool_stats(uint64_t* hits, uint64_t* misses, uint64_t* kept, uint64_t* dropped, uint64_t* bytes, int* state) {
+// [HEAPGL] (gl_backend.cpp): buffers handed out from the pool, made new, kept, too many to keep, MB kept now, made ahead.
+extern "C" void lsw_bo_pool_stats(uint64_t* hits, uint64_t* misses, uint64_t* kept, uint64_t* dropped, uint64_t* bytes, int* state,
+                                  uint64_t* made) {
     std::lock_guard<std::mutex> lk(g_pool_mtx);
     *hits = g_pool_hits; *misses = g_pool_misses; *kept = g_pool_kept; *dropped = g_pool_dropped; *bytes = g_pool_bytes; *state = g_pool_state;
+    *made = g_pool_made;
+}
+
+// log81: the demand, saved and read by gl_backend.cpp (bopool.bin).
+struct LswBoPoolDemand { uint64_t size; uint32_t flags, align, memtype, tile_mode, peak, pad; };
+extern "C" size_t lsw_bo_pool_demand(LswBoPoolDemand* out, size_t max) {
+    std::lock_guard<std::mutex> lk(g_pool_mtx);
+    size_t n = 0;
+    for (const auto& kv : g_pool_demand) {
+        if (n >= max) break;
+        if (!kv.second.peak) continue;
+        const PoolKey& k = kv.first;
+        out[n++] = {k.size, k.flags, k.align, k.memtype, k.tile_mode, kv.second.peak, 0};
+    }
+    return n;
+}
+extern "C" void lsw_bo_pool_seed(const LswBoPoolDemand* in, size_t n) {
+    std::lock_guard<std::mutex> lk(g_pool_mtx);
+    for (size_t i = 0; i < n; ++i) {
+        if (!in[i].size || in[i].size > kPoolMaxBo || !in[i].memtype) continue;
+        Demand& d = g_pool_demand[PoolKey{in[i].size, in[i].flags, in[i].align, in[i].memtype, in[i].tile_mode}];
+        d.peak = std::max(d.peak, std::min(in[i].peak, kPeakMax));
+    }
+}
+namespace {
+// On Mesa's GL thread (lsw_glthread_call), in order with the GL commands: one buffer of g_refill_key, into the pool.
+void refill_job(void*) {
+    const PoolKey k = g_refill_key;
+    nouveau_device* dev;
+    { std::lock_guard<std::mutex> lk(g_pool_mtx); dev = g_pool_dev; }
+    nouveau_bo* bo = nullptr;
+    int rc = -1;
+    if (dev) {
+        nouveau_bo_config cfg{};
+        cfg.nvc0.memtype = k.memtype;
+        cfg.nvc0.tile_mode = k.tile_mode;
+        rc = __real_nouveau_bo_new(dev, k.flags, k.align, k.size, &cfg, &bo);
+    }
+    bool keep = false;
+    {
+        std::lock_guard<std::mutex> lk(g_pool_mtx);
+        if (!rc && bo) {
+            keep = g_pool_bytes + k.size <= kPoolCap;
+            if (keep) { g_pool_owned[bo] = k; g_pool_free.emplace(k, bo); g_pool_bytes += k.size; ++g_pool_made; }
+            else g_pool_owned.erase(bo);
+        }
+        g_refill_busy = false;
+    }
+    if (!rc && bo && !keep) { nouveau_bo* q = bo; __real_nouveau_bo_ref(nullptr, &q); }
+    static bool first = true;
+    if (keep && first) { first = false; std::printf("[BOPOOL] first texture storage made ahead (%llu KB)\n", (unsigned long long)(k.size >> 10)); }
+}
+} // namespace
+
+// Render thread, once per replay: closes the replay's demand count; in a light replay, may queue one buffer to make ahead.
+extern "C" void lsw_bo_pool_frame(int light) {
+    static const bool fill = [] { const char* e = getenv("LSWTCS_BOPOOLFILL"); return !(e && e[0] == '0'); }();
+    static uint32_t tick = 0;
+    bool queue = false;
+    {
+        std::lock_guard<std::mutex> lk(g_pool_mtx);
+        for (auto& kv : g_pool_demand) {
+            kv.second.peak = std::max(kv.second.peak, std::min(kv.second.frame, kPeakMax));
+            kv.second.frame = 0;
+        }
+        if (!fill || !light || g_refill_busy || g_pool_state != 1 || !g_pool_dev || (++tick & 1)) return;
+        // The kinds within the budget, smallest first; the first one short of its peak.
+        std::vector<std::pair<PoolKey, uint32_t>> order;
+        order.reserve(g_pool_demand.size());
+        for (const auto& kv : g_pool_demand) if (kv.second.peak) order.emplace_back(kv.first, kv.second.peak);
+        std::sort(order.begin(), order.end(), [](const auto& a, const auto& b) { return a.first.size < b.first.size; });
+        uint64_t budget = 0;
+        for (const auto& [k, peak] : order) {
+            budget += k.size * peak;
+            if (budget > kPoolCap) break;
+            if (g_pool_free.count(k) < peak) {
+                if (g_pool_bytes + k.size > kPoolCap) break;
+                g_refill_key = k;
+                queue = true;
+                break;
+            }
+        }
+        if (queue) g_refill_busy = true;
+    }
+    if (!queue) return;
+    if (lsw_heap_free_mb() < kRefillMinFreeMb) {
+        std::lock_guard<std::mutex> lk(g_pool_mtx);
+        g_refill_busy = false;
+        return;
+    }
+    lsw_glthread_call(refill_job, nullptr);
+}
+
+// log81: GPU submits. Runs 82-83: freezes of 1.9 and 3.6 s with Mesa's GL thread blocked in nvGpuChannelKickoff (88 % of its samples)
+// and the GPU load reading 0 %. Counts every submit and its time; one of 100 ms or more prints [GPUSUBMIT] with the channel's
+// error notification and error info, which say whether the GPU faulted (a fault would point at a buffer freed too early).
+uint64_t g_kick_n = 0, g_kick_ns = 0, g_kick_slow = 0, g_kick_max = 0;   // GL thread (one channel per pushbuf; benign races)
+extern "C" Result __real_nvGpuChannelKickoff(NvGpuChannel* c);
+extern "C" Result __wrap_nvGpuChannelKickoff(NvGpuChannel* c) {
+    const uint32_t entries = c ? c->num_entries : 0;
+    const uint64_t t0 = armTicksToNs(armGetSystemTick());
+    const Result rc = __real_nvGpuChannelKickoff(c);
+    const uint64_t ns = armTicksToNs(armGetSystemTick()) - t0;
+    ++g_kick_n;
+    g_kick_ns += ns;
+    if (ns >= 16000000) ++g_kick_slow;
+    if (ns > g_kick_max) g_kick_max = ns;
+    if (ns >= 100000000) {
+        static uint32_t logged = 0;
+        if (logged++ < 50) {
+            NvNotification note{};
+            NvError err{};
+            const Result rn = nvGpuChannelGetErrorNotification(c, &note);
+            const Result re = nvGpuChannelGetErrorInfo(c, &err);
+            std::printf("[GPUSUBMIT] kickoff took %.1f ms (rc 0x%X, %u entries, syncpoint %u value %u+%u) | error notification rc 0x%X "
+                        "type %u info16 %u status 0x%X | error info rc 0x%X type %u info %08X %08X %08X %08X\n",
+                        ns / 1e6, rc, entries, c->fence.id, c->fence.value, c->fence_incr, rn, note.info32, note.info16, note.status,
+                        re, err.type, err.info[0], err.info[1], err.info[2], err.info[3]);
+            std::fflush(stdout);
+        }
+    }
+    return rc;
+}
+extern "C" void lsw_gpu_kick_stats(uint64_t* n, uint64_t* ns, uint64_t* slow, uint64_t* max_ns) {
+    *n = g_kick_n; *ns = g_kick_ns; *slow = g_kick_slow; *max_ns = g_kick_max;
 }
 
 extern "C" int __wrap_nouveau_bo_new(nouveau_device* d, uint32_t flags, uint32_t align, uint64_t size,
@@ -264,6 +407,8 @@ extern "C" int __wrap_nouveau_bo_new(nouveau_device* d, uint32_t flags, uint32_t
         nouveau_bo* got = nullptr;
         {
             std::lock_guard<std::mutex> lk(g_pool_mtx);
+            ++g_pool_demand[key].frame;
+            if (!g_pool_dev) g_pool_dev = d;
             auto it = g_pool_free.find(key);
             if (it != g_pool_free.end()) { got = it->second; g_pool_free.erase(it); g_pool_bytes -= key.size; ++g_pool_hits; }
             else ++g_pool_misses;

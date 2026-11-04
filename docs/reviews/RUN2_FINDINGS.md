@@ -2179,3 +2179,39 @@ Handheld, stock clocks, states `MAPXSHNLUBIkhwregd` and `MAPXSHNLUBIkhwregdq`, a
 - **What is left that is exact:**
   - **The resolve texture hand-over, at most about 2 ms.** It needs a coordinate scale and edge clamping per fetch.
   - **The full-screen passes.** The costliest (`91834C0972EDD8A1`, about 3 ms) is a single loop of the translator's skip-flag control flow with 4 texture fetches. A hand-cleaned version is unmeasured.
+
+## Log 64 (docked, two sessions): guest calls that can inline
+
+**Why:** docked heavy frames are limited by the main guest thread, about 24 ms of CPU, 85 % of it guest code at about 155 k guest calls per frame. Handheld is about 4 ms of GPU from the same wall. No guest call is ever inlined today:
+- Every generated function is a weak, noinline alias (`PPC_WEAK_FUNC`) so the runtime can replace it.
+- GameCode builds with -fPIC, so GCC treats every global function as replaceable. A test file showed that -fPIC alone blocks inlining even of a strong alias.
+- Units were alphabetical batches of 5 files: only 19 % of the hot functions' call sites land in the caller's unit.
+
+**What changes** (CMake option `LSW_GAME_INLINE`, on):
+- **Grouping:** `tools/make_game_units.py` writes `game_units.txt`, 176 units of at most 20 files grouped greedily along the hot functions' call sites (`hot_order.ld`). 5195 of 10501 hot call sites now fall in the caller's unit (49 %).
+- **Overrides:** the same tool writes `include/lsw_guest_overrides.h`, the 80 guest functions the runtime defines strongly, read from the log63 ELF.
+- **Linkage:** each unit includes `include/lsw_guest_linkage.h` after `ppc_recomp_shared.h`. It keeps weak, noinline linkage only for those 80 and makes the rest strong aliases, so the generated output stays as checked. A new override missing from the list fails the link with a multiple definition.
+- **Flags:** GameCode adds `-fno-semantic-interposition` and the -O3 automatic inlining limit (`max-inline-insns-auto=30`).
+- **First unit:** 5304 call relocations remained of 6989 call sites in its sources.
+
+**Test:**
+- One docked session with log63 and one with log64, same state `MAPXSHNLUBIkhwregdq` and the same heavy stretch.
+- The bench and the pixel check are off for both, so no hold adds noise.
+- Compared with `private/session-tools/run_pair.py`: load-matched, 90 % interval. Runs 58 and 59 in the same state differed by +0.1 % (-5.2 to +5.5).
+- `[THREADCPU]` gives the main thread's CPU per replay in each.
+
+**Risk:** inlining keeps C++ semantics. It can expose undefined behaviour in the generated code that separate functions hid, such as strict aliasing (GameCode does not build with -fno-strict-aliasing). The signs would be a crash or a visual difference.
+
+**The build:**
+- **Size:** code text fell from 101.6 to 95.4 MB, and the NRO from 115.0 to 108.8 MB. Fewer prologues, spills and GOT loads.
+- **Checks:**
+  - The validator passed.
+  - All 80 overrides still replace the generated body.
+  - Every other `sub_X` is a strong alias at its body's address.
+  - `_start` is at 0, and the hottest guest function follows `.crt0` (hot order kept).
+- **Build time:** a full GameCode build with 2 jobs took about 25 minutes (177 units).
+
+**On the SD:**
+- `switch/lswtcs/lswtcs.nro` is log64.
+- `switch/lswtcs-log63/lswtcs-log63.nro` is log63, the reference.
+- One `env.txt` serves both.

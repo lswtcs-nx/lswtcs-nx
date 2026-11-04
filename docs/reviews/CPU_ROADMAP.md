@@ -378,3 +378,5 @@ The measurements below are from heavy frames (1300+ draws, the start of `Gungan_
 | Full-screen passes | the costliest is about 3 ms | Gain unmeasured. |
 | CPU wall (docked, and handheld once the GPU drops) | inlining or LTO estimated at 5-10 %; PGO unmeasured | Compared across two sessions with `run_pair.py`. |
 | Author's levers | larger | Handheld resolution and GPU clock. |
+
+**log64 (CPU wall, first step):** guest calls made inlinable (`LSW_GAME_INLINE`: units along hot calls, weak linkage only for the 80 runtime overrides, `-fno-semantic-interposition`). Code text 6 % smaller. Measured over two docked sessions (log63 against log64). If it pays, the next steps are larger units or LTO over the hot units, then PGO.

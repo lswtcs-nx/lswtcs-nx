@@ -2635,3 +2635,7 @@ One session: the hub, then Episode I `PalaceRescue` (`Rescue_A`, `b`, `c`, `b` a
 - **Saved programs not asked for stop compiling when the heap has less than `LSWTCS_GLKEEPMB` free** (default 384 MB). One `[HEAP]` line says when this starts. Such a program is built if the game asks for it.
 - **Worker 0 at 0x2A while a replay waits for its programs** (`LSWTCS_GLWAITBOOST`, 0 = off), back to 0x2D after. The audio is already held during the wait.
 - **`[GLWAIT]` for waits of 100 ms or more:** programs waited for, built on the render thread (ms, longest), built by the workers meanwhile, and whether worker 0 was raised.
+- **Texture cost:**
+  - `[TEXSLOW]` logs each new texture whose decode and upload take 8 ms or more (the first 300): size, layers, mips, DXGI format, KB, decode ms and upload ms.
+  - `[TEXCOST]`, with each `[HEAP]` line, gives the new textures since the last report by DXGI format: count, MB, decode ms and upload ms.
+- **Profile:** `LSWTCS_GLSTEPS=1`, so each worker build logs its GLSL sizes and time (`[GLSTEP]`).

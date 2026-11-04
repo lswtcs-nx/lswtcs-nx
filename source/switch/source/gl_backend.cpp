@@ -1678,6 +1678,40 @@ GlTex create_texture(const LswGpuTexDesc& d) {
     return t;
 }
 
+// log73: what new textures cost. Run 73: entering an area decoded and uploaded 100-160 textures in one frame, 0.3-0.6 s decoding
+// and 0.7-1.1 s uploading, about 7 ms a texture, with nothing saying which ones. [TEXSLOW]: each texture over 8 ms (first 300);
+// [TEXCOST] (with [HEAP]): new textures since the last report by format (DXGI number): count, MB, decode ms, upload ms.
+struct TexCost { uint32_t n = 0; uint64_t bytes = 0, dec_ns = 0, up_ns = 0; };
+std::map<uint32_t, TexCost> g_tex_cost;
+void note_texture_cost(const LswGpuTexDesc& d, uint64_t dec_ns, uint64_t up_ns) {
+    TexCost& c = g_tex_cost[d.dxgi];
+    ++c.n; c.bytes += uint64_t(d.layer_bytes) * d.layers; c.dec_ns += dec_ns; c.up_ns += up_ns;
+    static uint32_t logged = 0;
+    if (dec_ns + up_ns >= 8000000 && logged < 300) {
+        ++logged;
+        printf("[TEXSLOW] replay %llu: %ux%u x%u %s, mips %u, dxgi %u, %u KB: decode %.1f ms, upload %.1f ms\n",
+               (unsigned long long)g_replays, d.width, d.height, d.layers, d.dim == 2 && d.layers == 6 ? "cube" : "2d-array", d.mips,
+               d.dxgi, (d.layer_bytes * d.layers) >> 10, dec_ns / 1e6, up_ns / 1e6);
+    }
+}
+void report_texture_cost() {
+    if (g_tex_cost.empty()) return;
+    std::string s;
+    uint32_t n = 0; uint64_t bytes = 0, dec = 0, up = 0;
+    for (const auto& kv : g_tex_cost) {
+        const TexCost& c = kv.second;
+        n += c.n; bytes += c.bytes; dec += c.dec_ns; up += c.up_ns;
+        char b[96];
+        snprintf(b, sizeof b, " %u:%u/%lluMB/%llu+%llums", kv.first, c.n, (unsigned long long)(c.bytes >> 20),
+                 (unsigned long long)(c.dec_ns / 1000000), (unsigned long long)(c.up_ns / 1000000));
+        s += b;
+    }
+    printf("[TEXCOST] replay %llu: %u new textures, %llu MB, decode %llu ms, upload %llu ms | by dxgi count/MB/decode+upload:%s\n",
+           (unsigned long long)g_replays, n, (unsigned long long)(bytes >> 20), (unsigned long long)(dec / 1000000),
+           (unsigned long long)(up / 1000000), s.c_str());
+    g_tex_cost.clear();
+}
+
 // Fetch constant -> texture; memoised per replay (lsw_gpu_texture_key probes texture memory).
 struct FetchKey { uint32_t w[6]; bool operator==(const FetchKey& o) const { return !memcmp(w, o.w, sizeof w); } };
 struct FetchKeyHash {
@@ -1704,8 +1738,11 @@ GlTex get_texture(const uint32_t* fetch6) {
     } else {
         LswGpuTexDesc d;
         bool ok;
+        const uint64_t td0 = gp_now();
         { RpScope rp(RP_DECODE); ok = lsw_gpu_decode_texture(fetch6, phys, &d) && d.ok; }
+        const uint64_t td1 = gp_now();
         if (ok) { RpScope rp(RP_TEXUP); t = create_texture(d); }
+        if (ok) note_texture_cost(d, td1 - td0, gp_now() - td1);
         t.last_used = g_replays;
         g_tex_bytes += t.bytes;
         g_textures.emplace(key, t);
@@ -3875,6 +3912,7 @@ PresentSrc replay() {
                compiled, entries, queued, dropped, g_programs.size(), g_stages.size(), g_textures.size(),
                (unsigned long long)(g_tex_bytes >> 20), g_tex_memo.size(), g_samplers.size(), g_draw_fbos.size(),
                (unsigned long long)(g_rt_bytes >> 20), bs, bt, bm, bc);
+        report_texture_cost();
         fflush(stdout);
     }
     if (gldiag_on() && (g_replays <= 5 || (g_replays % 120) == 0)) {

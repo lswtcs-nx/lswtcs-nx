@@ -140,6 +140,7 @@ extern "C" void lsw_malloc_lock_stats(uint64_t* wait_ns, uint64_t* contended, ui
 extern "C" void lsw_heap_stats(uint64_t* size, uint64_t* in_use, uint64_t* free_inside, uint64_t* untouched);   // platform_switch.cpp
 extern "C" uint32_t lsw_heap_free_mb();                                                                         // platform_switch.cpp
 extern "C" void lsw_bridge_counts(uint32_t* shaders, uint32_t* translations, uint32_t* memo, uint32_t* memo_clears);   // gl_bridge.cc
+extern "C" void lsw_big_alloc_stats(size_t* bytes, size_t* count) __attribute__((weak));   // rpmalloc_switch.c (LSW_RPMALLOC)
 
 bool env_on(const char* name, bool def) {
     const char* e = getenv(name);
@@ -1746,6 +1747,7 @@ GlTex create_texture(const LswGpuTexDesc& d) {
 // [TEXCOST] (with [HEAP]): new textures since the last report by format (DXGI number): count, MB, decode ms, upload ms.
 struct TexCost { uint32_t n = 0; uint64_t bytes = 0, dec_ns = 0, up_ns = 0; };
 std::map<uint32_t, TexCost> g_tex_cost;
+uint64_t g_tex_pre_made = 0, g_tex_pre_skipped = 0;   // log75 texture_prepass
 void note_texture_cost(const LswGpuTexDesc& d, uint64_t dec_ns, uint64_t up_ns) {
     TexCost& c = g_tex_cost[d.dxgi];
     ++c.n; c.bytes += uint64_t(d.layer_bytes) * d.layers; c.dec_ns += dec_ns; c.up_ns += up_ns;
@@ -1769,9 +1771,10 @@ void report_texture_cost() {
                  (unsigned long long)(c.dec_ns / 1000000), (unsigned long long)(c.up_ns / 1000000));
         s += b;
     }
-    printf("[TEXCOST] replay %llu: %u new textures, %llu MB, decode %llu ms, upload %llu ms | by dxgi count/MB/decode+upload:%s\n",
+    printf("[TEXCOST] replay %llu: %u new textures, %llu MB, decode %llu ms, upload %llu ms | by dxgi count/MB/decode+upload:%s | "
+           "session: made before the draws %llu, left to the draw loop (resolve memory) %llu\n",
            (unsigned long long)g_replays, n, (unsigned long long)(bytes >> 20), (unsigned long long)(dec / 1000000),
-           (unsigned long long)(up / 1000000), s.c_str());
+           (unsigned long long)(up / 1000000), s.c_str(), (unsigned long long)g_tex_pre_made, (unsigned long long)g_tex_pre_skipped);
     g_tex_cost.clear();
 }
 
@@ -3244,6 +3247,58 @@ void frame_log(const LswGpuFrame& f, uint64_t replay_ns) {
     if ((++lines % 30) == 0 || g_cam_auto_capture) fflush(fl);
 }
 
+// log75: the frame's new textures are made before its draws (LSWTCS_TEXPREPASS, default on). Mesa 20.1's glthread runs every
+// glTexSubImage / glCompressedTexSubImage with _mesa_glthread_finish_before: the render thread waits until the GL thread has
+// executed everything queued so far. Made inside the draw loop, each new texture (and each of its mips) waited for the draws
+// queued before it: run 75's [TEXSLOW] had 5 KB textures taking 19 ms and a 2 MB one 9 ms, the cost per call, not per byte.
+// Before the draws the queue holds little. A texture whose memory a resolve of this frame (or an earlier one still kept) may
+// cover is left to the draw loop, so it is never made from guest memory before the resolve's copy lands there.
+bool texture_prepass_on() {
+    static const bool on = env_on("LSWTCS_TEXPREPASS", true);
+    return on;
+}
+void texture_prepass(const LswGpuFrame& f, bool gpurt) {
+    std::vector<std::pair<uint32_t, uint32_t>> dst;   // this frame's resolve destinations, bytes (8 a pixel: an upper bound)
+    for (const LswGpuDrawRec& r : f.draws)
+        if (r.kind == 1) {
+            const uint32_t b = r.rs_dest & 0x1FFFFFFFu;
+            dst.emplace_back(b, b + std::max(1u, r.rs_dest_pitch) * std::max(1u, r.rs_dest_height) * 8u);
+        }
+    const uint8_t* phys = g_base + 0x80000000ull;
+    const uint32_t made0 = g_tex_created;
+    for (const LswGpuDrawRec& r : f.draws) {
+        if (r.kind == 1) continue;
+        const uint32_t* fetch_all = reinterpret_cast<const uint32_t*>(f.arena.data() + r.cb_fetch_off);
+        for (const void* sp : {r.ps_dxbc, r.vs_dxbc}) {
+            const auto* s = static_cast<const LswGlShader*>(sp);
+            if (!s) continue;
+            for (const LswGlShaderUnit& u : s->units) {
+                const uint32_t* f6 = fetch_all + (u.fetch_constant & 31) * 6;
+                FetchKey fk; memcpy(fk.w, f6, sizeof fk.w);
+                if (g_tex_memo.count(fk)) continue;
+                uint32_t base = 0, fmt = 0, gswz = 0, w = 0, h = 0, dim = 0;
+                if (!lsw_gpu_texture_info(f6, &base, &fmt, &gswz, &w, &h, &dim)) continue;
+                uint64_t key;
+                { RpScope rp(RP_TEXKEY); key = lsw_gpu_texture_key(f6, phys); }
+                auto it = g_textures.find(key);
+                if (it != g_textures.end()) {   // known: memoise it as get_texture would
+                    it->second.last_used = g_replays;
+                    g_tex_memo.emplace(fk, it->second);
+                    continue;
+                }
+                const uint32_t b = base & 0x1FFFFFFFu, end = b + std::max(1u, w) * std::max(1u, h) * 8u;
+                bool covered = false;
+                for (const auto& d : dst) if (b < d.second && d.first < end) { covered = true; break; }
+                if (!covered && gpurt)
+                    for (const auto& kv : g_resolved) if (kv.first >= b && kv.first < end) { covered = true; break; }
+                if (covered) { ++g_tex_pre_skipped; continue; }
+                get_texture(f6);
+            }
+        }
+    }
+    g_tex_pre_made += g_tex_created - made0;
+}
+
 PresentSrc replay() {
     g_inputcheck_rendered=false;
     if (!g_replay_same) { RpScope rp(RP_TAKE); gpu_frame_take(); }
@@ -3543,6 +3598,7 @@ PresentSrc replay() {
     GLuint ebo_bound = g_arena;   // arena_upload bound the arena as the index buffer
     const uint64_t t_loop = gp_now(), t_loop_in = g_rp_scoped;
     LswGpuDrawRec rmod;   // a record with the untiling changes (scissor extended / resolve rows shifted)
+    if (texture_prepass_on()) { RpScope rp(RP_UNITS); texture_prepass(f, gpurt); }
     for (const uint32_t rec_order : ut.order) {
         const size_t rec_i = rec_order;
         const LswGpuDrawRec& r_orig = f.draws[rec_i];
@@ -3969,10 +4025,13 @@ PresentSrc replay() {
         }
         {
             std::lock_guard<std::mutex> lk(g_stage_mtx);
+            size_t big_bytes = 0, big_count = 0;
+            if (lsw_big_alloc_stats) lsw_big_alloc_stats(&big_bytes, &big_count);
             printf("[HEAPGL] replay %llu: stages cached %zu (limit %zu, %u evicted, %u reused) | heap kept per stage compile %lld KB (%u), "
-                   "per link %lld KB (%u)\n", (unsigned long long)g_replays, g_stages.size(), stage_max(), g_stage_evicted, g_stage_reused,
+                   "per link %lld KB (%u) | big blocks from newlib %zu MB (%zu)\n", (unsigned long long)g_replays, g_stages.size(), stage_max(),
+                   g_stage_evicted, g_stage_reused,
                    g_kept_compile_n ? (long long)(g_kept_compile / g_kept_compile_n / 1024) : 0LL, g_kept_compile_n,
-                   g_kept_link_n ? (long long)(g_kept_link / g_kept_link_n / 1024) : 0LL, g_kept_link_n);
+                   g_kept_link_n ? (long long)(g_kept_link / g_kept_link_n / 1024) : 0LL, g_kept_link_n, big_bytes >> 20, big_count);
         }
         printf("[HEAP] replay %llu: heap %llu MB, in use %llu MB, free %llu MB (inside %llu, top %llu) | programs %u compiled, %zu known, "
                "%zu queued, %u not compiled (low memory), %zu in use, %zu stages | textures %zu (%llu MB), memo %zu, samplers %zu, fbos %zu, "

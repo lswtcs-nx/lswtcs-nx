@@ -399,3 +399,18 @@ mk9-nx (Thorhax, Mortal Kombat Komplete Edition, ReXGlue recompilation on deko3d
 | Switch button icons drawn over the Xbox icon atlas at texture upload (known atlas by hash, re-encode touched blocks) | all prompts right | Cosmetic; the tester's and the author's call. |
 
 **Already here or not useful:** registers as locals (`lswtcs_locals.toml`); `skip_msr`, their largest gain (11 -> 47 FPS), removed a global lock our `mtmsrd` never had (it only stores `ctx.msr`); native sound mixer (our guest audio thread is 2 % of the turn and the reverb is already native); physical allocation scan (ours is a bump allocator); critical section spin (one core under the turn); store cards instead of render-thread hashing (render thread is not the limit, and every guest store pays for them); drawing nothing while a pipeline compiles (they turned it off: coloured triangles; we wait, as they now do); LTO (run 64, no gain).
+
+## Deko3D for memory and stutters (after run 75, 4 November 2026)
+
+Runs 73-75 crashed from host memory, and the remaining stutters are texture uploads. Would deko3d fix them?
+
+| Problem | In the Mesa path | With deko3d |
+| --- | --- | --- |
+| Heap filling up | Mostly rpmalloc keeping freed buffer memory (log75 sends 64 KB+ blocks to newlib); programs about 0.85 MB each | Programs as DKSH binaries, tens of KB; no Mesa program objects; we free GPU memory ourselves. Likely the 512 MB GL copy of guest memory could become a direct mapping (untested) |
+| Upload stutter | glthread syncs on every `TexSubImage` (log75 makes new textures before the draws); untiling at 5 ms/MB on the render thread | Copy straight into GPU memory from any thread, no glthread |
+| Shader stutter | Compile time is Mesa's nv50 codegen | `uam` is the same codegen: similar per shader; no link or glthread costs |
+| FPS | Handheld GPU bound, docked guest CPU bound | At most about +20 % handheld (Deko3D study above) |
+
+**Cost:** the live renderer is about 6,700 lines of GL path with months of fixes (tiles, resolves, untiling, EDRAM, ZCULL). `deko_backend.cpp` is 835 lines from the 1 November baseline. A switch is a rewrite, and the author's call ("not now").
+
+**Recommendation:** fix the two causes found in the Mesa path first (log75), measure, and bring deko3d to the author only if memory or upload costs remain. The case for it would be memory (programs, the 512 MB copy) and upload cost, not FPS.

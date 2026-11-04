@@ -2681,3 +2681,62 @@ One session: the hub, `PalaceRescue` again (`Rescue_A` to `e`), the hub, then `P
 - **Reserve for saved programs not asked for:** 512 MB (`LSWTCS_GLKEEPMB`).
 - **The crash handler logs the heap's untouched top** (no malloc lock taken).
 - Still in from log73's second build: `[TEXSLOW]`, `[TEXCOST]`, and `LSWTCS_GLSTEPS=1` in the profile.
+
+## Run 75: `0.0.80-log74` handheld, crash entering `PodSprint` again
+
+Same route as run 74: the hub, `PalaceRescue` (`Rescue_A` to `e`), the hub, `PodSprint_A`. The SD had log74 and the new `env.txt` (`GLSTEPS` on). The game aborted entering `PodSprint`, 483 s in: `[HEAP] C++ allocation failed`, 3013 of 3043 MB in use, 25 MB free inside, 3 MB at the top. The GL error 0x505 (out of memory) appeared just before.
+
+**What holds the heap:**
+- **Stages are cheap.** `[HEAPGL]`: about 25 KB kept per stage compile. Capping the cache at 96 did not help, so the IR was not the cause.
+- **Programs cost about 0.35 MB at link and about 0.5 MB more at their first draw.**
+  - Replays 600-4200: 504 programs linked, none drawn, +174 MB.
+  - Replays 4200-6000: 267 more drawn, +442 MB, of which 174 MB were textures and render targets.
+  - Total about 1 GB for 989 programs.
+- **Entering `PodSprint`** (replays 15900-16050):
+  - 207 new textures (139 MB) arrived in one frame, and about 750 old ones (about 180 MB) were evicted.
+  - Yet the heap grew 193 MB.
+  - Deleted textures did not give their memory back.
+- **Why:** the process allocator is rpmalloc (`LSW_RPMALLOC`, on). Freed blocks of up to about 4 MB stay in its per-thread and global caches, one list per size class, and never return to the heap.
+  - Per thread: up to 400 single 64 KB spans, and up to about 100 blocks in each larger class.
+  - The global cache holds 8 times that.
+  - Mesa's buffer objects (textures, staging copies) are `memalign` calls that land there.
+  - `mallinfo` counts these cached blocks as in use, which also inflates the "kept per link" figure.
+
+**Texture upload cost is per call, not per byte** (`[TEXSLOW]`, upload ms each):
+
+| Texture | Count | Upload |
+| --- | --- | --- |
+| BC3 64x64, 7 mips, 5 KB | 43 | 19.5 ms |
+| BC1 32x32, 6 mips | 5 | 37.5 ms |
+| BC1 128x128, 8 mips, 10 KB | 13 | 16.1 ms |
+| BC1 1024x1024, 1 mip, 512 KB | 32 | 3.4 ms |
+| BC1 2048x2048, 1 mip, 2 MB | 18 | 8.9 ms |
+
+- In Mesa 20.1, glthread runs `glTexSubImage3D` and `glCompressedTexSubImage3D` with `_mesa_glthread_finish_before`. Each call, once per mip, waits until the GL thread has executed everything queued.
+- Textures are made inside the draw loop, so each waits for the draws queued before it.
+- Decoding (untiling) costs about 5 ms per MB: 49 ms for one 2048x2048 BC1.
+
+**Other figures:**
+- Waits for one program built by a worker: 107-229 ms. One wait, after the heap filled: 1076 ms.
+
+| Place | FPS | p95 frame |
+| --- | --- | --- |
+| Hub | 31.1 | 48 ms |
+| `Rescue_A` | 29.5 | 41 ms |
+| `Rescue_b` | 26.8 | 47 ms |
+| `Rescue_c` | 26.6 | 49 ms |
+| `Rescue_e` | 30.1 | 41 ms |
+| `PodSprint_A` | 26.0 | 49 ms |
+
+## Log 75: `0.0.81-log75`
+
+- **Big blocks from newlib, small ones from rpmalloc.**
+  - Blocks of 64 KB or more (`LSWTCS_BIGALLOC`, in KB; 0 = all rpmalloc) come from newlib's allocator, which merges freed blocks.
+  - Each big block has a 32-byte header (raw pointer, size, check word, magic) just before it, so `free`, `realloc` and `usable_size` route it whatever the setting was at allocation. The header is zeroed on free.
+  - Small blocks, the reason rpmalloc is used (parallel shader builds), stay in rpmalloc.
+  - `[HEAPGL]` adds the live big-block MB and count.
+- **New textures before the draws** (`LSWTCS_TEXPREPASS`, default on).
+  - Before the draw loop, every texture the frame's draws fetch that is not in the cache is made while the GL thread's queue is nearly empty.
+  - A texture whose memory overlaps one of this frame's resolve destinations (8 bytes a pixel, an upper bound), or a kept resolve result, is left to the draw loop. It is never made from guest memory before a resolve's copy lands there.
+  - `[TEXCOST]` adds the session's made-before and left-to-the-loop counts.
+- **Risk:** the allocator change touches every allocation in the process. A boot hang or crash in free means reverting it with `LSWTCS_BIGALLOC=0`.

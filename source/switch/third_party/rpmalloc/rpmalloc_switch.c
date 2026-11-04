@@ -64,9 +64,107 @@ extern void lsw_bo_check_before_realloc(void*, uintptr_t);
 #define BO_FREE(p) ((void)0)
 #define BO_REALLOC(p) ((void)0)
 #endif
-void* __wrap__malloc_r(struct _reent* r, size_t n) { (void)r; lsw_rp_ensure(); void* p = rpmalloc(n); BO_ALLOCATED(p); return p; }
-void __wrap__free_r(struct _reent* r, void* p) { (void)r; if (p) { BO_FREE(p); lsw_rp_ensure(); rpfree(p); } }
-void* __wrap__realloc_r(struct _reent* r, void* p, size_t n) { (void)r; BO_REALLOC(p); lsw_rp_ensure(); void* q = rprealloc(p, n); BO_ALLOCATED(q); return q; }
-void* __wrap__calloc_r(struct _reent* r, size_t a, size_t b) { (void)r; lsw_rp_ensure(); void* p = rpcalloc(a, b); BO_ALLOCATED(p); return p; }
-void* __wrap__memalign_r(struct _reent* r, size_t align, size_t n) { (void)r; lsw_rp_ensure(); void* p = rpaligned_alloc(align, n); BO_ALLOCATED(p); return p; }
-size_t __wrap__malloc_usable_size_r(struct _reent* r, void* p) { (void)r; return rpmalloc_usable_size(p); }
+/* Big blocks straight from newlib (log75). rpmalloc keeps freed blocks of up to ~4 MB in per-thread and global caches, one list
+ * per size class, and never hands them back: per thread up to 400 single spans and up to ~100 blocks in each larger class, the
+ * global cache 8 times that. Run 75: entering a level deleted ~180 MB of textures (Mesa's buffer objects are memalign'd here) and
+ * loaded 139 MB of new ones, and the heap grew 193 MB instead of shrinking, then std::bad_alloc; runs 73-74 ended the same way.
+ * Blocks of lsw_big_alloc_min bytes or more (64 KB by default; 0 = off, platform_switch.cpp sets it from LSWTCS_BIGALLOC) now come
+ * from newlib's allocator, which merges freed blocks. They are rare (buffer objects, staging copies, big arrays), so newlib's one
+ * lock stays cold; the small blocks Mesa's compiler makes by the million stay in rpmalloc. Each big block carries a header just
+ * before the pointer, so free / realloc / usable_size can tell the two apart whatever the setting was when it was allocated. */
+size_t lsw_big_alloc_min = (size_t)64 * 1024;
+#define LSW_BIG_MAGIC ((uint64_t)0x4C5357424947414CULL)   /* "LSWBIGAL" */
+typedef struct { uint64_t raw; uint64_t size; uint64_t check; uint64_t magic; } lsw_big_hdr;   /* 32 bytes, just before the block */
+static volatile size_t lsw_big_live_bytes = 0, lsw_big_live_count = 0;
+static lsw_big_hdr* lsw_big_header(void* p) {
+    if (!p || ((uintptr_t)p & 15)) return 0;
+    lsw_big_hdr* h = (lsw_big_hdr*)p - 1;
+    return (h->magic == LSW_BIG_MAGIC && h->check == (h->raw ^ h->size ^ LSW_BIG_MAGIC)) ? h : 0;
+}
+static void* lsw_big_alloc(size_t align, size_t n) {
+    if (align < 16) align = 16;
+    const size_t extra = sizeof(lsw_big_hdr) + align;
+    if (n > (size_t)-1 - extra) return 0;
+    char* raw = (char*)__real__malloc_r(_REENT, n + extra);
+    if (!raw) return 0;
+    char* p = (char*)(((uintptr_t)raw + sizeof(lsw_big_hdr) + align - 1) & ~(uintptr_t)(align - 1));
+    lsw_big_hdr* h = (lsw_big_hdr*)p - 1;
+    h->raw = (uint64_t)(uintptr_t)raw; h->size = n; h->magic = LSW_BIG_MAGIC; h->check = h->raw ^ h->size ^ LSW_BIG_MAGIC;
+    __atomic_add_fetch(&lsw_big_live_bytes, n, __ATOMIC_RELAXED);
+    __atomic_add_fetch(&lsw_big_live_count, 1, __ATOMIC_RELAXED);
+    return p;
+}
+static void lsw_big_free(lsw_big_hdr* h) {
+    void* raw = (void*)(uintptr_t)h->raw;
+    __atomic_sub_fetch(&lsw_big_live_bytes, h->size, __ATOMIC_RELAXED);
+    __atomic_sub_fetch(&lsw_big_live_count, 1, __ATOMIC_RELAXED);
+    h->magic = 0; h->check = 0;
+    __real__free_r(_REENT, raw);
+}
+/* [HEAP] (platform_switch.cpp): big blocks alive now. */
+void lsw_big_alloc_stats(size_t* bytes, size_t* count) { *bytes = lsw_big_live_bytes; *count = lsw_big_live_count; }
+static int lsw_is_big(size_t n) { const size_t m = lsw_big_alloc_min; return m && n >= m; }
+
+void* __wrap__malloc_r(struct _reent* r, size_t n) {
+    (void)r;
+    void* p;
+    if (lsw_is_big(n)) p = lsw_big_alloc(16, n);
+    else { lsw_rp_ensure(); p = rpmalloc(n); }
+    BO_ALLOCATED(p);
+    return p;
+}
+void __wrap__free_r(struct _reent* r, void* p) {
+    (void)r;
+    if (!p) return;
+    BO_FREE(p);
+    lsw_big_hdr* h = lsw_big_header(p);
+    if (h) { lsw_big_free(h); return; }
+    lsw_rp_ensure();
+    rpfree(p);
+}
+void* __wrap__realloc_r(struct _reent* r, void* p, size_t n) {
+    (void)r;
+    BO_REALLOC(p);
+    lsw_big_hdr* h = lsw_big_header(p);
+    if (!h && !lsw_is_big(n)) {   /* small to small: rpmalloc's own realloc */
+        lsw_rp_ensure();
+        void* q = rprealloc(p, n);
+        BO_ALLOCATED(q);
+        return q;
+    }
+    if (n == 0) { __wrap__free_r(r, p); return 0; }
+    void* q;
+    if (lsw_is_big(n)) q = lsw_big_alloc(16, n);
+    else { lsw_rp_ensure(); q = rpmalloc(n); }
+    if (!q) return 0;   /* the old block stays valid */
+    if (p) {
+        const size_t old = h ? (size_t)h->size : rpmalloc_usable_size(p);
+        memcpy(q, p, old < n ? old : n);
+        if (h) lsw_big_free(h); else rpfree(p);
+    }
+    BO_ALLOCATED(q);
+    return q;
+}
+void* __wrap__calloc_r(struct _reent* r, size_t a, size_t b) {
+    (void)r;
+    if (b && a > (size_t)-1 / b) return 0;
+    const size_t n = a * b;
+    void* p;
+    if (lsw_is_big(n)) { p = lsw_big_alloc(16, n); if (p) memset(p, 0, n); }
+    else { lsw_rp_ensure(); p = rpcalloc(a, b); }
+    BO_ALLOCATED(p);
+    return p;
+}
+void* __wrap__memalign_r(struct _reent* r, size_t align, size_t n) {
+    (void)r;
+    void* p;
+    if (lsw_is_big(n) && align <= (size_t)64 * 1024 && (align & (align - 1)) == 0) p = lsw_big_alloc(align, n);
+    else { lsw_rp_ensure(); p = rpaligned_alloc(align, n); }
+    BO_ALLOCATED(p);
+    return p;
+}
+size_t __wrap__malloc_usable_size_r(struct _reent* r, void* p) {
+    (void)r;
+    lsw_big_hdr* h = lsw_big_header(p);
+    return h ? (size_t)h->size : rpmalloc_usable_size(p);
+}

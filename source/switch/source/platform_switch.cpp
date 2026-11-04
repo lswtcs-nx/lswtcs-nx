@@ -358,6 +358,7 @@ extern "C" void lsw_log_path(char* out, size_t capacity, const char* name) {
 }
 
 extern "C" char* fake_heap_end;   // libnx: the end of newlib's heap range (see lsw_heap_stats)
+extern "C" size_t lsw_big_alloc_min __attribute__((weak));   // third_party/rpmalloc/rpmalloc_switch.c (LSW_RPMALLOC)
 alignas(16) u8 __nx_exception_stack[0x10000];
 u64 __nx_exception_stack_size = sizeof(__nx_exception_stack);
 extern "C" void __libnx_exception_handler(ThreadExceptionDump* ctx) {
@@ -562,6 +563,10 @@ extern "C" bool lsw_switch_init() {
                (unsigned long long)(used >> 20), (unsigned long long)(top >> 20));
     }
     load_env_file(LSW_DATA_DIR "/env.txt");
+    if (&lsw_big_alloc_min) {   // log75: blocks of this many KB or more from newlib, not rpmalloc's caches (0 = all rpmalloc)
+        if (const char* e = getenv("LSWTCS_BIGALLOC")) lsw_big_alloc_min = size_t(atoi(e)) * 1024;
+        printf("[HEAP] blocks of %zu KB or more from newlib's allocator (LSWTCS_BIGALLOC, 0 = all in rpmalloc)\n", lsw_big_alloc_min / 1024);
+    }
     lsw_boot_mark("logs open, settings read");   // (log68) the steps of the 8.4 s before the save storage was up in run 67
     lsw_hw_monitor_start();
     lsw_hw_profiler_start();

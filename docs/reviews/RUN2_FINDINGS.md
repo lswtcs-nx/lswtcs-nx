@@ -3109,3 +3109,43 @@ Diagnostics only. Behaviour is log79's.
   - A second session starts with the file.
   - Read: `made ahead` against `reused` and `new`, upload per texture and its waiting share in `[TEXCOST]`, and `[GPUSUBMIT]` at any freeze.
 - **Risk:** up to 48 MB held. Each buffer made ahead costs the GL thread about 1 ms in a light frame.
+
+
+## Run 84: `0.0.87-log81` handheld
+
+298 s on run 80's route. No crash. The tester heard audio that was choppy and blown out in heavy areas at high volume, and a pop at the start of each opening crawl.
+
+**Storage made ahead:**
+- 578 buffers made ahead, 609 reuses against 1204 new storages.
+- No gain: upload per new texture 2.23 ms (run 83: 1.81), 77 % of it in glthread's finish.
+- Render-thread samples in `nouveau_bo_new` rose from 356 to 461.
+- The pool, full of made-ahead buffers (47 MB), freed 1083 evicted buffers it could have kept.
+- Area entries are within noise of run 83: hub returns 284 and 362 ms, `Rescue_A` 296 ms, `PodSprint_A` 925 then 485 ms.
+- Log82 turns it off by default.
+
+**GPU submits:**
+- 35,546 in the session, 11.2 s in all (0.31 ms each). 16 took over 16 ms; the longest took 415 ms. Six of the long ones came during the boot.
+- `[GPUSUBMIT]` could not read the channel's error state: the notification call returned 0xEA01 and the info call 0x275C. Whether the GPU faulted is still unknown.
+- `PodSprint_A`'s next-frame stall fits a submit: a 410 ms upload with only 47 ms of GL-thread wait, next to a 397 ms kickoff.
+
+**Audio, from the log:**
+- **Clipping.**
+  - The stereo mix's peak exceeded full scale in 6 of 28 ten-second windows (p90 1.96, max 3.27), in loud moments: the first level entry and `Gungan_B`'s heavy part.
+  - `fill_slot` sums the 5.1 channels (FL + 0.71 C + 0.5 LFE + 0.71 BL, up to 2.9x) and clamps at ±1. That is a hard clip.
+  - The crawl theme opens on a loud chord, which matches the pop the tester heard.
+- **Underruns.**
+  - In `Gungan_B`'s heavy part (25 FPS), 20-160 ms of each second was silence: 90-130 times per 10 s the 6 device buffers (32 ms) ran dry.
+  - The game's frames came up to 45 ms apart. They come from guest code, which waits on the main thread in heavy frames.
+- Only 10 A/V holds, all early in the session, so the holds are not the source of the pops.
+
+## Log 82: `0.0.88-log82`, audio
+
+- **Look-ahead limiter on the stereo mix** (`audio_switch.cpp`, `LSWTCS_AUDIOLIMIT=0` = the old clamp).
+  - Each mixed block waits one block (5.33 ms). The block before it is output with its gain ramped to what the waiting block needs (ceiling 0.97).
+  - The gain recovers by 3 % a block, about 0.2 s from -10 dB.
+  - When the device is about to run dry, or an A/V hold starts, the waiting block fades to silence, and the block after the gap fades in.
+  - A PC simulation (a silent start, then a peak-3.0 tone, a 4-block gap, then a quiet tone) gave no clipped samples, a maximum of 0.97, and no gain steps.
+  - `[AUDIO]` adds the limiter's lowest gain, the blocks turned down, and the fades at gaps.
+- **12 device buffers** (64 ms; was 6, 32 ms). `LSWTCS_AUDIOBUFS` sets 4-16. This adds about 32 ms of audio latency.
+- **Storage made ahead off by default** (`LSWTCS_BOPOOLFILL=1` turns it on). The demand is still learned and saved.
+- **Test:** handheld, `Gungan_B`'s heavy part and an opening crawl, at high volume. Ask whether the audio still crackles or pops, and whether lip sync in cutscenes feels late. Read `[AUDIO]` limiter lines and `[AUDIOQ]` empties against run 84.

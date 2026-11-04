@@ -27,7 +27,11 @@ namespace {
 constexpr int kMaxClients = 8;
 constexpr int kChannels = 6, kSamples = 256;
 constexpr uint32_t kFrameFloats = kChannels * kSamples;
-constexpr int kBuffers = 6;                        // ~32 ms queued on the device
+// log82: buffers queued on the device, LSWTCS_AUDIOBUFS (4-16, default 12, ~64 ms; was 6, ~32 ms). Run 84: in Gungan_B's heavy
+// part the game's frames came up to 45 ms apart, the 6 buffers ran dry 90-130 times per 10 s and 20-160 ms of every second was
+// silence (heard as choppy audio). Costs ~32 ms more audio latency.
+constexpr int kMaxBuffers = 16;
+int g_nbuf = 12;
 constexpr uint32_t kBufferBytes = 0x1000;          // audout needs 0x1000-aligned buffers
 constexpr uint32_t kDataBytes = kSamples * 2 * sizeof(int16_t);
 constexpr size_t kMaxQueued = 32;                  // per client (the game keeps <= 8 in flight)
@@ -52,7 +56,7 @@ Client g_clients[kMaxClients];
 // Played frames are recycled (under g_mx) instead of freed: one 6 KB vector per 5.33 ms frame per client was
 // ~190 allocator round trips a second on the audio threads.
 std::vector<std::vector<float>> g_spare;
-Slot g_slots[kBuffers];
+Slot g_slots[kMaxBuffers];
 int g_state = -1;                                  // -1 untried, 0 failed/disabled, 1 running
 // A/V hold (LSWTCS_AVHOLD, default on): while the render thread holds the picture to build shader
 // programs (gl_backend wait_frame_programs), no new buffers go to the device. No buffer released = no
@@ -61,12 +65,30 @@ int g_state = -1;                                  // -1 untried, 0 failed/disab
 std::atomic<bool> g_hold{false};
 std::atomic<uint64_t> g_hold_ns{0};
 uint64_t g_hold_count = 0;
-float g_peak = 0;   // largest |sample| sent to the device since the last [AUDIO] line (output thread only)
+float g_peak = 0;   // largest |sample| of the stereo mix, before the limiter, since the last [AUDIO] line (output thread only)
+// log82: a look-ahead peak limiter on the stereo mix (LSWTCS_AUDIOLIMIT=0: the old hard clamp). The 5.1 downmix adds up to
+// 2.9x full scale (FL + 0.71 C + 0.5 LFE + 0.71 BL) and the old code clipped it at +-1: run 84's peaks reached 3.27, 6 of 28
+// ten-second windows over 1.0, in loud moments (heard as blown-out audio, and a pop on the opening crawl's first chord). Each
+// mixed block waits one block (5.33 ms); the block before it is output with its gain ramped to what the waiting block needs, so a
+// loud onset is turned down before it plays; the gain recovers by 3 % a block (~0.2 s from -10 dB). When the device is about to
+// run dry, or an A/V hold starts, the waiting block is output fading to silence, and the block after a gap fades in: an
+// underrun becomes a short gap instead of a click.
+struct Limiter {
+    float l[kSamples] = {}, r[kSamples] = {};   // the waiting block
+    uint8_t who = 0;                            // its clients
+    bool have = false;
+    float need = 1.0f;                          // the gain it needs (<= 1)
+    float gain = 1.0f;                          // gain at the start of the next block output (0 after a fade-out)
+    float gain_min = 1.0f;                      // since the last [AUDIO] line
+    uint32_t limited = 0, fades = 0;
+};
+Limiter g_lim;
+constexpr float kCeiling = 0.97f, kRelease = 1.03f;
 // [AUDIOQ] window stats, for audible jitter that [AUDIO] idle waits cannot show. Output thread only, except the
 // submit fields (under g_mx). "Empty" = nothing queued on the device while not holding: an audible gap.
 struct AudioWindow {
     uint64_t start_ns = 0, empty_since_ns = 0, empty_ns = 0, empty_max_ns = 0;
-    uint32_t empties = 0, min_queued = kBuffers;
+    uint32_t empties = 0, min_queued = kMaxBuffers;
 };
 AudioWindow g_aw;
 // Totals for the per-frame columns of frames.log (lsw_audio_stats): audio speed over any stretch of frames.
@@ -74,9 +96,8 @@ std::atomic<uint64_t> g_total_played{0}, g_total_empty_ns{0};
 uint64_t g_last_submit_ns = 0, g_submit_gap_max_ns = 0;
 uint32_t g_client_depth_max = 0;
 
-// Mixes one frame from every client that has one into slot s; returns false if no client had a frame.
-bool fill_slot(Slot& s) {
-    float l[kSamples] = {}, r[kSamples] = {};
+// Mixes one frame from every client that has one into l / r; returns the clients (0 if none had a frame).
+uint8_t mix_next(float* l, float* r) {
     uint8_t who = 0;
     {
         std::lock_guard<std::mutex> lk(g_mx);
@@ -97,15 +118,80 @@ bool fill_slot(Slot& s) {
             who |= uint8_t(1u << i);
         }
     }
-    if (!who) return false;
+    return who;
+}
+
+bool limiter_on() {
+    static const bool on = [] { const char* e = getenv("LSWTCS_AUDIOLIMIT"); return !(e && e[0] == '0'); }();
+    return on;
+}
+
+// The waiting block into slot s, its gain ramped from g_lim.gain to g_end.
+void emit_waiting(Slot& s, float g_end) {
     int16_t* out = static_cast<int16_t*>(s.buf.buffer);
+    const float step = (g_end - g_lim.gain) / float(kSamples);
+    float g = g_lim.gain;
     for (int n = 0; n < kSamples; ++n) {
-        g_peak = std::max(g_peak, std::max(std::fabs(l[n]), std::fabs(r[n])));
-        out[2 * n] =int16_t(std::clamp(l[n], -1.0f, 1.0f) * 32767.0f);
-        out[2 * n + 1] = int16_t(std::clamp(r[n], -1.0f, 1.0f) * 32767.0f);
+        g += step;
+        out[2 * n] = int16_t(std::clamp(g_lim.l[n] * g, -1.0f, 1.0f) * 32767.0f);
+        out[2 * n + 1] = int16_t(std::clamp(g_lim.r[n] * g, -1.0f, 1.0f) * 32767.0f);
     }
+    if (std::min(g_lim.gain, g_end) < 0.999f && g_end > 0.0f) ++g_lim.limited;
+    if (g_end > 0.0f) g_lim.gain_min = std::min(g_lim.gain_min, std::min(g_lim.gain, g_end));
+    g_lim.gain = g_end;
     s.buf.data_size = kDataBytes;
-    s.clients = who;
+    s.clients = g_lim.who;
+    g_lim.have = false;
+}
+
+// Fills slot s; returns false if there is nothing to output yet. dry: the device is about to run out (output the waiting block,
+// fading out, rather than wait for the next frame). fade: an A/V hold starts (only the waiting block, fading out).
+bool fill_slot(Slot& s, bool dry, bool fade) {
+    float l[kSamples] = {}, r[kSamples] = {};
+    const uint8_t who = fade ? 0 : mix_next(l, r);
+    float peak = 0;
+    for (int n = 0; n < kSamples && who; ++n) peak = std::max(peak, std::max(std::fabs(l[n]), std::fabs(r[n])));
+    g_peak = std::max(g_peak, peak);
+    if (!limiter_on()) {
+        if (!who) return false;
+        int16_t* out = static_cast<int16_t*>(s.buf.buffer);
+        for (int n = 0; n < kSamples; ++n) {
+            out[2 * n] = int16_t(std::clamp(l[n], -1.0f, 1.0f) * 32767.0f);
+            out[2 * n + 1] = int16_t(std::clamp(r[n], -1.0f, 1.0f) * 32767.0f);
+        }
+        s.buf.data_size = kDataBytes;
+        s.clients = who;
+        return true;
+    }
+    const float need_in = peak > kCeiling ? kCeiling / peak : 1.0f;
+    if (!g_lim.have) {
+        if (!who) return false;
+        memcpy(g_lim.l, l, sizeof l);   // wait one block
+        memcpy(g_lim.r, r, sizeof r);
+        g_lim.who = who;
+        g_lim.need = need_in;
+        g_lim.have = true;
+        if (!dry) return false;
+        // The device is about to run dry and nothing else is coming: play this one now, as after a gap.
+        const float g_end = std::min(g_lim.need, g_lim.gain > 0.0f ? g_lim.gain * kRelease : g_lim.need);
+        emit_waiting(s, std::min(g_end, 1.0f));
+        return true;
+    }
+    if (!who) {
+        if (!dry && !fade) return false;   // the device still has audio: wait for the next frame
+        ++g_lim.fades;
+        emit_waiting(s, 0.0f);            // nothing follows: fade out instead of stopping mid-wave
+        return true;
+    }
+    // After a fade-out (gain 0) the waiting block fades in to what it needs; otherwise the gain recovers at most kRelease a block.
+    float g_end = g_lim.gain > 0.0f ? g_lim.gain * kRelease : 1.0f;
+    g_end = std::min(std::min(g_end, 1.0f), std::min(g_lim.need, need_in));
+    emit_waiting(s, g_end);
+    memcpy(g_lim.l, l, sizeof l);
+    memcpy(g_lim.r, r, sizeof r);
+    g_lim.who = who;
+    g_lim.need = need_in;
+    g_lim.have = true;
     return true;
 }
 
@@ -143,18 +229,27 @@ void output_thread() {
         }
         // Queue every free slot we have data for.
         const bool hold = g_hold.load(std::memory_order_relaxed);
-        for (Slot& s : g_slots) {
+        static bool was_hold = false;
+        const bool hold_start = hold && !was_hold;
+        was_hold = hold;
+        for (int i = 0; i < g_nbuf; ++i) {
+            Slot& s = g_slots[i];
             if (s.queued) continue;
-            if (hold || !fill_slot(s)) break;
+            const uint32_t on_device = uint32_t(std::count_if(g_slots, g_slots + g_nbuf, [](const Slot& t) { return t.queued; }));
+            if (hold) {   // an A/V hold: no new frames; the waiting block goes out fading, once
+                if (!(hold_start && g_lim.have && fill_slot(s, true, true))) break;
+            } else if (!fill_slot(s, on_device <= 1, false)) {
+                break;
+            }
             if (R_SUCCEEDED(audoutAppendAudioOutBuffer(&s.buf))) s.queued = true;
             else released(&s.buf);   // keep the client's credit chain alive
         }
         // Filling may stop at an empty slot before later slots still playing.
-        const bool any_queued = std::any_of(g_slots, g_slots + kBuffers,
+        const bool any_queued = std::any_of(g_slots, g_slots + g_nbuf,
                                           [](const Slot& s) { return s.queued; });
         {
             const uint64_t now = armTicksToNs(armGetSystemTick());
-            const uint32_t queued = uint32_t(std::count_if(g_slots, g_slots + kBuffers,
+            const uint32_t queued = uint32_t(std::count_if(g_slots, g_slots + g_nbuf,
                                                            [](const Slot& s) { return s.queued; }));
             g_aw.min_queued = std::min(g_aw.min_queued, queued);
             if (!any_queued && !hold) {
@@ -179,8 +274,8 @@ void output_thread() {
             std::unique_lock<std::mutex> lk(g_mx);
             const auto ready = [] {
                 return !g_hold.load(std::memory_order_relaxed) &&
-                    std::any_of(g_clients, g_clients + kMaxClients,
-                                [](const Client& c) { return c.open && !c.frames.empty(); });
+                    (g_lim.have || std::any_of(g_clients, g_clients + kMaxClients,
+                                               [](const Client& c) { return c.open && !c.frames.empty(); }));
             };
             if (!ready()) {
                 if (!g_hold.load(std::memory_order_relaxed)) ++underruns;
@@ -191,10 +286,14 @@ void output_thread() {
         static uint64_t next_log = 1875;   // ~10 s of buffers
         if (played >= next_log) {
             next_log = played + 1875;
-            printf("[AUDIO] %llu buffers played, %llu idle waits, A/V holds %llu (%llu ms), peak %.4f\n", (unsigned long long)played,
+            printf("[AUDIO] %llu buffers played, %llu idle waits, A/V holds %llu (%llu ms), peak %.4f | limiter %s: lowest gain %.3f, "
+                   "%u blocks turned down, %u fades at a gap\n", (unsigned long long)played,
                    (unsigned long long)underruns, (unsigned long long)g_hold_count,
-                   (unsigned long long)(g_hold_ns.load() / 1000000ull), double(g_peak));
+                   (unsigned long long)(g_hold_ns.load() / 1000000ull), double(g_peak), limiter_on() ? "on" : "off",
+                   double(g_lim.gain_min), g_lim.limited, g_lim.fades);
             g_peak = 0;
+            g_lim.gain_min = 1.0f;
+            g_lim.limited = g_lim.fades = 0;
             uint64_t submit_gap_ns;
             uint32_t depth_max;
             {
@@ -208,7 +307,7 @@ void output_thread() {
                    (unsigned long long)(now / 1000000ull),
                    (unsigned long long)(g_aw.start_ns ? (now - g_aw.start_ns) / 1000000ull : 0ull), g_aw.empties,
                    (unsigned long long)(g_aw.empty_ns / 1000000ull), (unsigned long long)(g_aw.empty_max_ns / 1000000ull),
-                   g_aw.min_queued, kBuffers, submit_gap_ns / 1e6, depth_max);
+                   g_aw.min_queued, g_nbuf, submit_gap_ns / 1e6, depth_max);
             g_aw = AudioWindow{};
             g_aw.start_ns = now;
             fflush(stdout);
@@ -221,11 +320,13 @@ bool engine_up() {
     g_state = 0;
     const char* e = getenv("LSWTCS_AUDIO_OUT");
     if (e && e[0] == '0') { printf("[AUDIO] host output disabled (LSWTCS_AUDIO_OUT=0)\n"); return false; }
+    if (const char* b = getenv("LSWTCS_AUDIOBUFS")) g_nbuf = std::clamp(atoi(b), 4, kMaxBuffers);
     Result rc = audoutInitialize();
     if (R_FAILED(rc)) { printf("[AUDIO] audoutInitialize failed 0x%X\n", rc); fflush(stdout); return false; }
     rc = audoutStartAudioOut();
     if (R_FAILED(rc)) { printf("[AUDIO] audoutStartAudioOut failed 0x%X\n", rc); fflush(stdout); audoutExit(); return false; }
-    for (Slot& s : g_slots) {
+    for (int i = 0; i < g_nbuf; ++i) {
+        Slot& s = g_slots[i];
         s.buf.buffer = aligned_alloc(kBufferBytes, kBufferBytes);
         if (!s.buf.buffer) { printf("[AUDIO] buffer alloc failed\n"); return false; }
         memset(s.buf.buffer, 0, kBufferBytes);
@@ -235,8 +336,9 @@ bool engine_up() {
     }
     std::thread(output_thread).detach();
     g_state = 1;
-    printf("[AUDIO] audout ready: %u Hz, %u channels, format %d (5.1 float frames downmixed to stereo s16)\n",
-           audoutGetSampleRate(), audoutGetChannelCount(), int(audoutGetPcmFormat()));
+    printf("[AUDIO] audout ready: %u Hz, %u channels, format %d (5.1 float frames downmixed to stereo s16), %d buffers queued (%.0f ms), "
+           "limiter %s\n", audoutGetSampleRate(), audoutGetChannelCount(), int(audoutGetPcmFormat()), g_nbuf, g_nbuf * 256 * 1000.0 / 48000.0,
+           limiter_on() ? "on" : "off");
     fflush(stdout);
     return true;
 }

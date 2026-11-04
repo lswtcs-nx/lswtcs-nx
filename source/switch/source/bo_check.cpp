@@ -221,7 +221,9 @@ constexpr uint32_t kPoolMinFreeMb = 256;
 // evicted (run 83: first keep at Rescue_A, 7 minutes in). Now each storage kind (size, alignment, flags, memory kind, tile mode)
 // remembers the most made in one replay (up to 16), over sessions (bopool.bin, gl_backend.cpp), and in light replays the GL thread
 // makes one such buffer ahead (lsw_glthread_call), smallest kinds first, until the pool holds that many of each, within its 48 MB
-// and while the heap has 384 MB free. LSWTCS_BOPOOLFILL=0 turns that off.
+// and while the heap has 384 MB free. log82: off by default (LSWTCS_BOPOOLFILL=1 turns it on). Run 84: 578 made ahead and 609
+// reuses, but upload per new texture 2.23 ms (run 83: 1.81), the render thread's samples in nouveau_bo_new rose 356 -> 461, and
+// the pool, full of made-ahead buffers, freed 1083 evicted ones it could have kept. The demand is still learned and saved.
 struct Demand { uint32_t frame = 0, peak = 0; };
 std::unordered_map<PoolKey, Demand, PoolKeyHash> g_pool_demand;   // under g_pool_mtx
 nouveau_device* g_pool_dev = nullptr;                              // under g_pool_mtx: the device textures are made on
@@ -327,7 +329,7 @@ void refill_job(void*) {
 
 // Render thread, once per replay: closes the replay's demand count; in a light replay, may queue one buffer to make ahead.
 extern "C" void lsw_bo_pool_frame(int light) {
-    static const bool fill = [] { const char* e = getenv("LSWTCS_BOPOOLFILL"); return !(e && e[0] == '0'); }();
+    static const bool fill = [] { const char* e = getenv("LSWTCS_BOPOOLFILL"); return e && e[0] == '1'; }();
     static uint32_t tick = 0;
     bool queue = false;
     {

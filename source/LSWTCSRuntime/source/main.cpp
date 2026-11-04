@@ -1160,10 +1160,12 @@ extern "C" uint8_t* lsw_switch_guest_window(size_t size);   // reserves + backs 
 
 // [BOOT] (log67): milliseconds since main() began, at the steps of the boot (here, the render thread in gl_backend.cpp, the first
 // guest frame in VdSwap), to see where the time before the first frame goes (run 66: about 16 s, the guest 94-99 % idle).
-extern "C" void lsw_boot_mark(const char* what) {
+extern "C" long long lsw_boot_ms() {
     static const auto t0 = std::chrono::steady_clock::now();
-    const long long ms = (long long)std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
-    printf("[BOOT] %lld ms %s\n", ms, what);
+    return (long long)std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
+}
+extern "C" void lsw_boot_mark(const char* what) {
+    printf("[BOOT] %lld ms %s\n", lsw_boot_ms(), what);
     fflush(stdout);
 }
 int main() {
@@ -1197,6 +1199,7 @@ int main() {
     // the runtime and game use are backed (switch/source/platform_switch.cpp).
     g_base = lsw_switch_guest_window(alloc_size);
     if (!g_base) { printf("[INIT] guest window failed\n"); return 1; }
+    lsw_boot_mark("guest memory mapped and cleared");
 #ifdef LSW_DEKO_BACKEND
     lsw_deko_resources_prepare(g_base + 0x80000000ull, 0x20000000u);
 #endif
@@ -1316,6 +1319,7 @@ int main() {
     }
     size_t nread = fread(g_base + PPC_IMAGE_BASE, 1, PPC_IMAGE_SIZE, f);
     fclose(f);
+    lsw_boot_mark("image read");
     printf("[INIT] Loaded image.bin: 0x%zX bytes\n", nread);
     lsw_text_patch_image(g_base + PPC_IMAGE_BASE, nread);   // log65: the console's name in the save messages (kernel_stubs.cpp)
     lsw_boot_mark("image loaded");
@@ -1516,6 +1520,7 @@ int main() {
         }
         printf("[INIT] Dispatch table built: %d entries\n", count);
     }
+    lsw_boot_mark("data restored and dispatch table built");
 
     // LSWTCS_CMDLOG=1: wrap the six script native-command veneer ladders with
     // logging thunks (kernel_stubs.cpp) — traces every GSC native command the
@@ -1605,6 +1610,7 @@ int main() {
             }
         }
         printf("[PATCH] Broad-scan zeroed %d host ptrs; kept %d guest-heap ptrs (0x84-0x94M)\n", count, kept);
+        lsw_boot_mark("host pointer scan");
     }
 
     // Patch global at 0x83290B90: the VdSwap worker (sub_822D2AB0) reads the D3D device via

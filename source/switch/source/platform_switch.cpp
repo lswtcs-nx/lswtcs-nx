@@ -478,6 +478,7 @@ extern "C" void lsw_malloc_lock_stats(uint64_t* wait_ns, uint64_t* contended, ui
 }
 
 // ---- init -----------------------------------------------------------------------------------
+extern "C" void lsw_boot_mark(const char* what);   // main.cpp: [BOOT] milliseconds since the process started
 extern "C" bool lsw_switch_init() {
     mkdir(LSW_DATA_DIR, 0777);
     chdir(LSW_DATA_DIR);
@@ -513,10 +514,13 @@ extern "C" bool lsw_switch_init() {
            (unsigned long long)(info_u64(InfoType_TotalMemorySize) >> 20),
            (unsigned long long)(info_u64(InfoType_UsedMemorySize) >> 20));
     load_env_file(LSW_DATA_DIR "/env.txt");
+    lsw_boot_mark("logs open, settings read");   // (log68) the steps of the 8.4 s before the save storage was up in run 67
     lsw_hw_monitor_start();
     lsw_hw_profiler_start();
+    lsw_boot_mark("hardware monitor and profiler started");
 #ifndef LSW_DEKO_BACKEND
     lsw_bo_check_init(g_run_id);
+    lsw_boot_mark("buffer check ready");
 #endif
     if (!lsw_save_init()) {
         // Never select a different user or silently save to SD after a native-storage error.

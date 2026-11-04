@@ -3058,10 +3058,20 @@ PresentSrc replay() {
             // new to the previous replay is frozen. Animated characters, water and a moving camera change far more than 1 %.
             static std::vector<uint64_t> prev, now;
             now.clear();
-            uint32_t ui = 0;
+            uint32_t ui = 0, icons = 0;
             for (const LswGpuDrawRec& d : f.draws) {
                 if (d.kind != 0 || is_clear_quad(d)) continue;
-                if (d.viewport[3] >= 719.5f && d.viewport[3] <= 720.5f) { ++ui; continue; }
+                if (d.viewport[3] >= 719.5f && d.viewport[3] <= 720.5f) {
+                    ++ui;
+                    // A button icon (log68): one quad (quad list, 4 vertices) of the 256x128 DXT5 icon sheet. In the cantina shop the text
+                    // shader draws "B" and "A" this way before "Exit" and "Select" (run 67, replay 2768: draws 313 and 311, by the depth probe).
+                    if (d.gs_type == 3 && d.vertex_count == 4 && d.ib_count == 0 && d.ps_tex_count >= 1 && size_t(d.cb_fetch_off) + 768 <= f.arena.size()) {
+                        const uint32_t* f6 = reinterpret_cast<const uint32_t*>(f.arena.data() + d.cb_fetch_off) + (d.ps_tex_fetch[0] & 31) * 6;
+                        uint32_t tbase = 0, tfmt = 0, tswz = 0, tw = 0, th = 0, tdim = 0;
+                        if (lsw_gpu_texture_info(f6, &tbase, &tfmt, &tswz, &tw, &th, &tdim) && tfmt == 20 && tw == 256 && th == 128) ++icons;
+                    }
+                    continue;
+                }
                 if (!(d.depthcontrol & 2)) continue;
                 uint64_t h = d.vs_key * 0x9E3779B97F4A7C15ull ^ d.ps_key;
                 const uint32_t n = std::min<uint32_t>(d.cb_vsf_size, 512);
@@ -3081,25 +3091,35 @@ PresentSrc replay() {
             // and no scene draw, so it was neither light nor frozen (run 66). Play always has hundreds of scene draws.
             static uint32_t noscene_run = 0;
             if (now.size() < 30 && f.draws.size() >= 150) ++noscene_run; else noscene_run = 0;
-            static bool menu = false;
-            const bool was = menu;
+            // Button prompts (log68): the cantina shop is a live scene (196-317 scene draws, all of them new each replay, run 67) with
+            // "B Exit" and "A Select" over it, so none of the rules above saw a menu. Play's HUD drew no icon in any capture (runs 64-67);
+            // a menu shows two prompts or more, a hint during play would show one.
+            static uint32_t icon_run = 0, no_icon_run = 0;
+            if (icons >= 2) { ++icon_run; no_icon_run = 0; } else { ++no_icon_run; icon_run = 0; }
+            static bool menu = false, prompts = false, shown = false;
             if (light_run >= 30 || frozen_run >= 20 || noscene_run >= 10) menu = true;
             else if (heavy_run >= 3 && live_run >= 3 && now.size() >= 30) menu = false;
-            if (menu != was) {
-                g_frame_light.store(menu, std::memory_order_relaxed);
+            if (icon_run >= 10) prompts = true;
+            else if (no_icon_run >= 10) prompts = false;
+            if ((menu || prompts) != shown) {
+                shown = menu || prompts;
+                g_frame_light.store(shown, std::memory_order_relaxed);
                 static uint32_t lines = 0;
                 if (lines++ < 400) {
-                    printf("[MENUPROBE] replay %llu: %s (%zu records, %zu scene draws, %zu new, %u HUD-viewport draws)\n", (unsigned long long)g_replays,
-                           menu ? (light_run >= 30 ? "light, a menu or a loading screen" : noscene_run >= 10 ? "no scene, a menu" : "frozen scene, a menu") : "play",
-                           f.draws.size(), now.size(), fresh, ui);
+                    printf("[MENUPROBE] replay %llu: %s (%zu records, %zu scene draws, %zu new, %u HUD-viewport draws, %u button icons)\n",
+                           (unsigned long long)g_replays,
+                           !shown ? "play"
+                           : menu ? (light_run >= 30 ? "light, a menu or a loading screen" : noscene_run >= 10 ? "no scene, a menu" : "frozen scene, a menu")
+                                  : "button prompts, a menu over a live scene",
+                           f.draws.size(), now.size(), fresh, ui, icons);
                     fflush(stdout);
                 }
             }
             static uint64_t next_line = 0;   // every 10 s: what the test sees, to tune it
             if (gp_now() >= next_line) {
                 next_line = gp_now() + 10000000000ull;
-                printf("[MENUPROBE] replay %llu: %zu records, %zu scene draws, %zu new to the last replay, %u HUD-viewport draws, frozen run %u, menu %d\n",
-                       (unsigned long long)g_replays, f.draws.size(), now.size(), fresh, ui, frozen_run, int(menu));
+                printf("[MENUPROBE] replay %llu: %zu records, %zu scene draws, %zu new to the last replay, %u HUD-viewport draws, %u button icons, "
+                       "frozen run %u, menu %d\n", (unsigned long long)g_replays, f.draws.size(), now.size(), fresh, ui, icons, frozen_run, int(shown));
                 fflush(stdout);
             }
             prev.swap(now);

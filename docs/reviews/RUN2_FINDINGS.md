@@ -2374,3 +2374,54 @@ One session, three full captures, then a hang and a crash when the tester quit t
   - platform up, image loaded, patches done;
   - the render thread's EGL/Mesa, GL resources, program cache and ready;
   - guest frames 1 and 300.
+
+## Run 67
+
+The tester's verdict:
+- The black parts and the studs over the characters are gone.
+- The character selection takes A to select.
+- Quitting to the menu works: no black screen, no crash, with `o` off.
+- The cantina shop still uses the Xbox positions.
+- The boot feels as long as before.
+
+**Loads** (`b` only, `load_episodes.py`):
+- Hub to Gungan: 11.8 and 5.7 s.
+- Gungan to hub: 23.3 s (after the level's end) and 12.4 s (quit).
+- The card read 55-69 MB/s.
+
+**Boot:**
+- `[BOOT]`:
+  - platform and save storage up at 8.4 s;
+  - image loaded at 10.1 s;
+  - `_xstart` at 12.3 s;
+  - render thread ready at 12.6 s;
+  - first guest frame at 23.0 s, frame 300 at 29.1 s.
+- Reading the saved programs in the background (8.0 s, done at 20.6 s) did not move the first frame.
+- The guest waits about 10 s after `_xstart` in every run back to run 7 (269 saved programs, against 941 now). In each run, `[SCHEDPROF]` shows the same pattern:
+  - one 5 s window with the main thread at about 5.5 %;
+  - one window 98.7 % idle;
+  - then play.
+- hwprof, first window: the main thread's top stack off the turn is a host `WaitForSingleObject` (1222 samples at 8 ms, about 9.8 s). The guest caller lies beyond the 8 sampled frames.
+- Offline: the guest's `WaitForSingleObject` (`sub_8229F3D0`) has 27 callers. Among them is `XGetOverlappedResult` (`sub_8229E890`), which waits with no timeout on the XOVERLAPPED's event. It is a candidate, not confirmed.
+- The 8.4 s before the save storage is up may include the user selector (run 66: under 5 s by the clock lines).
+
+**Cantina shop:**
+- The shop is a live scene: 196-317 scene draws, all new each replay, with 14-16 HUD draws. No menu rule fired.
+- In capture 2768, the text shader draws the "B" and "A" icons before "Exit" and "Select", each as one quad of a 256x128 DXT5 sheet (draws 313 and 311). The depth probe puts draw 313 on the B icon.
+- The play captures (6020, 7332 and those of runs 64-66) draw no such quad.
+
+## Log 68: `0.0.74-log68`
+
+- **Button prompts count as a menu:**
+  - two or more icon quads in the HUD viewport for 10 replays switch to the label layout;
+  - fewer than two for 10 replays switch back;
+  - the log shows `[MENUPROBE] ... button prompts, a menu over a live scene`, and the 10 s line counts the icons.
+  - Risk: a hint during play that shows two icons switches the layout while it is on screen.
+- **`[LONGWAIT]`** logs any guest wait on a host object (`NtWaitForSingleObjectEx`, `NtWaitForMultipleObjectsEx`, `NtSignalAndWaitForSingleObjectEx`) that lasts 1 s or more, with:
+  - the wait's length, its timeout and its object;
+  - the thread's PCR;
+  - the guest LR and the return chain (the saved LR of each frame up the back chain).
+- **More `[BOOT]` marks:**
+  - logs and settings, monitor and profiler, buffer check;
+  - how the user was chosen: preselected, the only user, or the selector (shown, then picked);
+  - guest memory mapped and cleared, image read, data and dispatch table, host pointer scan.

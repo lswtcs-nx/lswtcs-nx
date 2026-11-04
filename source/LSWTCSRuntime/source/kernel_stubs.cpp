@@ -2973,8 +2973,42 @@ PPC_FUNC(__imp__NtClearEvent) {
     if (h) ResetEvent(h);
     ctx.r3.u32 = 0;
 }
+// [LONGWAIT] (log68): a guest wait on a host object that lasted a second or more, with the object, the timeout and the guest's
+// return chain (the saved LR of each frame up the back chain). Runs 7-67: about 0.3 s after _xstart the main thread blocks in one
+// such wait (hwprof: host WaitForSingleObject, off the turn, 1222 samples in run 67) and the whole guest idles about 9 s before the
+// first frame, however many saved programs there are (269 in run 7, 941 in run 67).
+extern "C" long long lsw_boot_ms();   // main.cpp: milliseconds since the process started
+static long long guest_timeout_ms(uint8_t* base, uint32_t p) {
+    if (p < 0x80000000u || p >= 0x94000000u) return -1;   // no timeout: infinite
+    const int64_t t = (int64_t)PPC_LOAD_U64(p);
+    return t == 0 ? 0 : t < 0 ? (long long)((uint64_t)(-t) / 10000u) : -2;   // -2: an absolute time
+}
+struct LswLongWait {
+    const char* what; uint8_t* base; uint32_t obj, lr, sp, r13; long long timeout; std::chrono::steady_clock::time_point t0;
+    LswLongWait(const char* w, PPCContext& ctx, uint8_t* b, uint32_t o, long long t)
+        : what(w), base(b), obj(o), lr(uint32_t(ctx.lr)), sp(ctx.r1.u32), r13(ctx.r13.u32), timeout(t), t0(std::chrono::steady_clock::now()) {}
+    ~LswLongWait() {
+        const long long ms = (long long)std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
+        if (ms < 1000) return;
+        static std::atomic<int> lines{0};
+        if (lines.fetch_add(1, std::memory_order_relaxed) >= 80) return;
+        char chain[128]; int k = 0; chain[0] = 0;
+        uint32_t s = sp;
+        for (int i = 0; i < 8 && k < 110; ++i) {   // guest stacks live in the 0x80000000 range: nothing else is read
+            if (s < 0x80000000u || s >= 0x9FFF0000u) break;
+            const uint32_t bc = PPC_LOAD_U32(s);
+            if (bc <= s || bc - s > 0x20000u || bc >= 0x9FFF0000u) break;
+            k += snprintf(chain + k, sizeof chain - k, " %08X", PPC_LOAD_U32(bc - 8));
+            s = bc;
+        }
+        printf("[LONGWAIT] %s waited %lld ms (until %lld ms since main), timeout %lld ms, object %08X, thread PCR %08X, lr %08X, chain%s\n",
+               what, ms, lsw_boot_ms(), timeout, obj, r13, lr, chain);
+        fflush(stdout);
+    }
+};
 PPC_FUNC(__imp__NtWaitForSingleObjectEx) {
     PPC_FUNC_PROLOGUE();
+    LswLongWait long_wait("NtWaitForSingleObjectEx", ctx, base, ctx.r3.u32, guest_timeout_ms(base, ctx.r6.u32));
     // r3=handle, r6=*timeout (int64 100ns; negative=relative from now)
     // Switch: replace with nn::os::WaitEvent / svcWaitSynchronization
     HANDLE h = kobj_get(ctx.r3.u32);
@@ -3008,6 +3042,7 @@ PPC_FUNC(__imp__NtWaitForSingleObjectEx) {
 }
 PPC_FUNC(__imp__NtWaitForMultipleObjectsEx) {
     PPC_FUNC_PROLOGUE();
+    LswLongWait long_wait("NtWaitForMultipleObjectsEx", ctx, base, ctx.r4.u32, guest_timeout_ms(base, ctx.r8.u32));
     // r3=count, r4=*handles_array, r5=wait_type(0=all,1=any), r8=*timeout
     // Switch: replace with svcWaitSynchronizationN
     uint32_t count = ctx.r3.u32;
@@ -8714,6 +8749,7 @@ PPC_FUNC(__imp__NtPulseEvent) {
 }
 PPC_FUNC(__imp__NtSignalAndWaitForSingleObjectEx) {
     PPC_FUNC_PROLOGUE();
+    LswLongWait long_wait("NtSignalAndWaitForSingleObjectEx", ctx, base, ctx.r4.u32, guest_timeout_ms(base, ctx.r7.u32));
     // r3=signal_handle, r4=wait_handle, r7=*timeout
     // Switch: atomically signal + wait is nn::os::SignalEvent + WaitEvent
     HANDLE sh = kobj_get(ctx.r3.u32);

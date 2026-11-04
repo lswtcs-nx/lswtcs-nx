@@ -18,21 +18,29 @@ bool fail(const char* where, Result rc) {
 }
 }
 
+extern "C" void lsw_boot_mark(const char* what);   // main.cpp: [BOOT] milliseconds since the process started
 extern "C" bool lsw_save_init() {
     if (mounted) return true;
     user = {};
     nickname[0] = 0;
     Result rc = accountInitialize(AccountServiceType_Application);
     if (R_FAILED(rc)) return fail("account service", rc);
+    // [BOOT] (log68): which way the user came, so the boot's time is not mistaken for the runtime's when the selector was on screen.
+    const char* how = "user preselected by the system";
     bool selected = R_SUCCEEDED(accountGetPreselectedUser(&user)) && accountUidIsValid(&user);
-    if (!selected)
-        selected = R_SUCCEEDED(accountTrySelectUserWithoutInteraction(&user, false)) && accountUidIsValid(&user);
     if (!selected) {
+        how = "the only user, without the selector";
+        selected = R_SUCCEEDED(accountTrySelectUserWithoutInteraction(&user, false)) && accountUidIsValid(&user);
+    }
+    if (!selected) {
+        lsw_boot_mark("user selector shown");
+        how = "user picked in the selector";
         PselUserSelectionSettings settings{};
         settings.is_unqualified_user_selectable = 1; // Local users need no linked Nintendo Account.
         rc = pselShowUserSelector(&user, &settings);
         selected = R_SUCCEEDED(rc) && accountUidIsValid(&user);
     }
+    if (selected) lsw_boot_mark(how);
     if (!selected) {
         accountExit();
         return fail("user selection (cancelled or unavailable)", R_FAILED(rc) ? rc : MAKERESULT(Module_Libnx, LibnxError_NotFound));

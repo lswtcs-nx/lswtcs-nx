@@ -344,7 +344,7 @@ else()
     else()
         set(LSW_NACP_VERSION "0.0.99-log93")
         if(LSW_PGO STREQUAL "generate")
-            set(LSW_NACP_VERSION "0.0.99-log93-pgogen")   # the instrumented NRO
+            set(LSW_NACP_VERSION "0.0.99-log94pgo")   # the instrumented NRO (log94: snapshot thread fixed)
         endif()
     endif()
     nx_generate_nacp(lswtcs.nacp NAME "LSWTCS" AUTHOR "LSWTCS port" VERSION "${LSW_NACP_VERSION}")

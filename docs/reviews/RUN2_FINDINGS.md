@@ -3483,3 +3483,18 @@ One launch, the usual route (the hub, `Gungan_A`, `Gungan_B`'s heavy part, the h
   About 160 MB more of the heap goes to the image, and the last run ended with 672 MB free. The build took about 50 minutes (2 jobs, new folder).
 - **Test (handheld or docked; FPS does not count):** play the usual route plus anything else normally played, about 10 minutes. Quit through the game's menu, not HOME, so the exit snapshot is written. Bring back `lswtcs/pgo/` with the logs.
 - **Not yet verified on the console:** that the snapshot writes. The `[PGO]` lines show it, or the error.
+
+## Run 95: log93 instrumented NRO, 31 minutes in handheld; no counts written
+
+- **No `.stream` reached the card.** The log has `[PGO] instrumented build: 657 objects registered` and no `[PGO] snapshot` line at all, in 31 minutes.
+- **Cause:** the snapshot thread asked for priority 0x3F. hbloader's NPDM allows this process 0x1C to 0x3B (the monitor thread uses 0x3A and runs), so the thread was most likely refused, and its result was not logged. Not confirmed on the console; log94 logs it.
+- **The exit snapshot never ran either:** the log has no `[NX] runtime main returned` line, so the game was closed from HOME (or ended otherwise), where nothing at exit runs. The game has no option that ends the process, so the periodic snapshots are the only path to the card.
+- **460.8 MHz for 31 minutes:** GPU 460.8 and memory 1331.2 MHz in every one of 373 `[CLOCK]` samples; the memory check never reverted. SoC 33.0 to 46.2 °C, PCB up to 44.0 °C; battery 92 to 82 %. Not comparable with earlier runs' FPS: the instrumented build is slower.
+- **Capture at replay 61211 (end of a level, during a transition):** stars over most of the screen and the previous scene on the right with a soft edge, drawn as 16 star draws and a full-screen quad that samples the resolved scene. The tester reports a visual defect in that cutscene that this frame may not show in full. One frame is not enough to tell the defect from the game's own wipe; their description is needed. The 40 history frames are identical and the memory dump of the sampled target is not the GL copy the draw uses, so neither helps.
+
+## Log 94: `0.0.99-log94pgo`, the counting NRO again with the snapshot thread fixed
+
+- Priority 0x3B (the lowest allowed), and `[PGO] snapshot thread rc=0x...` is logged.
+- First snapshot after 1 minute, then every 2 minutes (was 3). Closing from HOME loses at most the last 2 minutes.
+- Only `lsw_pgo.cpp` and the NACP version changed; the game code and the rest of the runtime are the same objects, so the counts fit the `use` build of the same folder.
+- **Test:** play as in run 95, at least 10 minutes; closing from HOME is fine. Bring back `lswtcs/pgo/` with the logs. The log should show `rc=0x0` and `[PGO] snapshot 1 (periodic): 657 objects, ...` about a minute in.

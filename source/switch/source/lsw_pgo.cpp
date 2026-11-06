@@ -7,8 +7,8 @@
 // no code taken). `tools/pgo_merge.py` turns the streams into .gcda files on the PC (gcov-tool merge-stream).
 //
 // Each launch keeps one file, sdmc:/lswtcs/pgo/lswtcs_<run id>.stream, replaced by every new snapshot (counts only grow, so the
-// latest holds everything; merging several snapshots of one launch would count it twice). Snapshots: every 3 minutes on a
-// background thread, and at exit. Different launches make different files, and the merge adds them.
+// latest holds everything; merging several snapshots of one launch would count it twice). Snapshots: after 1 minute and then
+// every 2 minutes on a background thread, and at exit (rarely reached: the game is closed from HOME). Different launches make different files, and the merge adds them.
 #include <switch.h>
 extern "C" {   // GCC's gcov.h has no extern "C" of its own; libgcov's functions are C symbols
 #include <gcov.h>
@@ -60,9 +60,12 @@ void snapshot(const char* why) {
 }
 
 void pgo_thread(void*) {
+    // The game has no quit option, so it is almost always closed from HOME, where nothing at exit runs: these snapshots are
+    // what reaches the card. The first comes after one minute so a short launch shows whether writing works.
+    svcSleepThread(60ll * 1000000000ll);
     for (;;) {
-        svcSleepThread(180ll * 1000000000ll);
-        snapshot("every 3 minutes");
+        snapshot("periodic");
+        svcSleepThread(120ll * 1000000000ll);
     }
 }
 }  // namespace
@@ -74,8 +77,11 @@ extern "C" void lsw_pgo_start(unsigned long long run_id) {
     const long n = (__start_gcov_info && __stop_gcov_info) ? long(__stop_gcov_info - __start_gcov_info) : -1;
     printf("[PGO] instrumented build: %ld objects registered; counts to sdmc:/lswtcs/pgo/lswtcs_%016llX.stream\n", n, run_id);
     static Thread t;
-    // Lowest application priority, core 2 (the audio/log core has the most room); the write is a few seconds a snapshot.
-    if (R_SUCCEEDED(threadCreate(&t, pgo_thread, nullptr, nullptr, 0x10000, 0x3F, 2))) threadStart(&t);
+    // Core 2 (the audio/log core has the most room); the write is a few seconds a snapshot. Priority 0x3B, the lowest this
+    // process may use (hbloader's NPDM allows 0x1C..0x3B): log93 asked for 0x3F, the thread was refused and run 95 wrote nothing.
+    Result rc = threadCreate(&t, pgo_thread, nullptr, nullptr, 0x10000, 0x3B, 2);
+    if (R_SUCCEEDED(rc)) rc = threadStart(&t);
+    printf("[PGO] snapshot thread rc=0x%X (first snapshot after 1 minute, then every 2 minutes)\n", rc);
 }
 
 extern "C" void lsw_pgo_exit() { snapshot("exit"); }

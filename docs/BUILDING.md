@@ -136,17 +136,18 @@ precompiled header, so every game unit recompiles (about 25 minutes with 2 jobs)
 python workspace-tools/tune_tcs360_context.py
 ```
 
-The log91 B build (guest addresses without the region table) uses a copy of the
-output, `output_fold`, and its own build folder, `build-fold`. It is configured
-like `build-mesa`, plus `-DRECOMP_OUTPUT=<path>/output_fold`:
+Since run 93, guest addresses are also computed without the region table (152 ns
+per guest call against 158). It changes the header the same way, so run it in the
+same step:
 
 ```sh
-cp -r "source/Convert 360/LSWTCS/output" "source/Convert 360/LSWTCS/output_fold"
-python workspace-tools/tune_tcs360_context.py --output-dir "source/Convert 360/LSWTCS/output_fold" --fold-fast
+python workspace-tools/tune_tcs360_context.py --fold-fast
 ```
 
-B refuses to start with `LSWTCS_HEAPBYPASS` on: its fold is exact only while
-guest region 0xE0000000 is unmapped.
+Such a build refuses to start with `LSWTCS_HEAPBYPASS` on: the fold is exact only
+while guest region 0xE0000000 is unmapped. The bypass has been off in the
+hardware profile since before this change. The log91 B copy (`output_fold`,
+`build-fold`) is no longer needed.
 
 Then, from `source/`, run `python tools/gen_native_reverb.py` to generate the
 excluded game-derived reverb include from your local patched output. Generated

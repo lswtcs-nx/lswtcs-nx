@@ -531,3 +531,37 @@ Runs 73-75 crashed from host memory, and the remaining stutters are texture uplo
   - a flush-mode flow proof (renut's `flush_mode_flow`: drop switches the control flow proves unneeded; up to about 2 %);
   - PGO (the owner's call);
   - katamari's hand track on functions whose samples show a removable cost. None stands out now.
+- **Done (same day):** the fast fold is the default. `tune_tcs360_context.py --fold-fast` is applied to the main output, so `build-mesa` builds what log91 B was. Every hardware profile already had `LSWTCS_HEAPBYPASS=0`. A build with the bypass on refuses to start.
+- **Not yet compared from renut-nx's codegen list,** checked so far only as "registers are locals":
+  - vector byte reversal (here `shuffle_epi8` with a mask loaded from memory, `tbl`, at 29,618 guest vector loads and stores; renut used `REV64` + `EXT`);
+  - guest register writes no instruction reads (`dead_ctx_defs`, `leaf_dead_stores`; stores into `ctx` show in the profile);
+  - read-only image constants folded into the code (`ro_constants`);
+  - single-precision arithmetic kept in `float` (`single_floats`);
+  - the flush-mode flow proof.
+
+  Each needs the same check: count the sites in our output, then look at the console samples.
+
+## rc-guide material study (6 November 2026)
+
+**Sources:**
+- nfsmw-nx `docs/` (GPL-3), including the deko3d branch's HowToDeko3d and devlog;
+- sa2-nx `porting-guide.md`, `porting-a-360-game-prompt.md`, `deko3d-renderer-guide.md` (GPL-3);
+- bejeweled3-nx `optimising-functions.md` (GPL-3);
+- SwitchWakerHD `debug-server.md` (MPL-2.0).
+
+Techniques only, no code taken. Checked against this port:
+
+| Item | Their result | Here | Verdict |
+| --- | --- | --- | --- |
+| Official handheld performance configuration `0x92220008` (GPU 460.8 MHz, memory 1331.2 MHz) via `apmSetPerformanceConfiguration`. Homebrew starts at 307.2 MHz; nfsmw-nx notes this is not an overclock. Pitfalls: the call returns before the clocks change; IDs are opaque (0x92220007 is memory 1600). | Their largest handheld GPU step (scene 22.3 to about 12 ms, with the sky moved) | Handheld is GPU-bound (about 38 ms GPU per heavy frame). At 1.5x the GPU clock, heavy frames would reach the CPU wall (docked figures: `Gungan_B` heavy about 30-31, hub 55) | **Largest item by far; the tester's and author's decision** (battery and heat) |
+| PGO with one console session; counts streamed to a file every 2 minutes, on HOME and at exit; `-fprofile-correction`, `-fprofile-partial-training` | SA2 about +15 %; nfsmw-nx part of 30.3 to 34 FPS | `gcov-tool` is in devkitA64. The streaming code must be written here. Do it after the last codegen change | **Next CPU step;** costs one extra session on a slower NRO |
+| `-O3` on game code (sa2-nx) | not isolated | GameCode is `-O2` | Cheap to try with the next codegen batch |
+| FFmpeg's WMV3 decoder instead of the game's recompiled one, fed through the game's own data callbacks, planes written where the game expects them | 98 % of a core and 22 FPS, to 7-15 ms a frame; bit-identical in shadow mode | ISSUES #3: about 280 ms a frame here. `vc1dec.c` is in our FFmpeg tree but not compiled | **The concrete route for the movie,** if the tester reopens it |
+| Constants through a uniform buffer; 1/size instead of size queries; merged predicate blocks; `max(a, a)` copies; shadow passes without a pixel shader | +18-23 % (constants), smaller for the rest | Saved programs (run 73's 1,288): 0 `textureSize`, 0 `max(a, a)`, 262 predicate `if`s only (Xenia's translator merges them); constants are already UBOs | Already fine here |
+| ZCULL in the driver | about 2 ms | run 62: exact, no gain (every depth draw has a real alpha test) | Done |
+| Resolves without copies | 2.36 ms | open: resolve hand-over, about 2 ms handheld | Still open, medium-hard |
+| Busy-waits in the D3D layer replaced by real waits | two threads from 100 % to 25 % / 17 % | `LSWTCS_SPINGUARD`, `SPINREAL` exist | Done earlier |
+| FPCR switches only where needed | 20-26 % of SA2's samples | 2.4 % here (the mode is cached) | Small |
+| Localized copies with changed-only write-backs, inlined callees, direct dispatch (bejeweled3-nx's machine track) | main thread 21-25 to 16-18.5 ms (part of it the scene) | Our inlining try (run 64) gained nothing. A copy mainly wins where it swallows calls | Large tool work; after PGO |
+| Sampling profiler by flag file (`perfil_pilas.flag`) | | `LSWTCS_HWPROF=2` does this | Have it |
+| SaltyNX overlay compatibility, sys-botbase, debug server, Ryujinx fork, controller applet | tooling | Controller applet exists (L+R+Plus). The others are installs on the tester's console or PC: their call | Not ours to install |

@@ -454,3 +454,27 @@ Runs 73-75 crashed from host memory, and the remaining stutters are texture uplo
 **Recommendation:**
 - Bring the handheld GPU profile to the author first: it is the only lever that moves handheld FPS by more than noise.
 - On our side, finish the stutter work (texture decode, small textures, saved-list order). The port is stable now, and stutters are what the tester notices most.
+
+## torchlight-nx study (6 November 2026)
+
+**Source:** `switch/patches/nfsmw-sdk.patch` in liartes/torchlight-nx (GPL-3, like bo2-360-nx: techniques only, no code taken). It is a patch to the ReXGlue SDK used by the nfsmw-nx/sa2-nx family of 360 ports. Each item below was checked against this port.
+
+| Item in the patch | This port | Verdict |
+| --- | --- | --- |
+| Guest memory window 2 MB aligned, and backings committed in 2 MB-aligned blocks, so the kernel maps guest memory with 2 MB block descriptors. They measured a TLB miss in 4 KB pages at 100-170 ns on the console. | `lsw_switch_guest_window` reserved with `virtmemFindAslr(size, 0x10000)` (a guard size, not an alignment) and backed each range with `aligned_alloc(0x1000)`. Run 90's window started at `0xeb5e75000`, so the 512 MB guest physical range and the 64 MB dispatch table were 4 KB pages. | **Applied in log89.** `LSWTCS_GUEST2MB=0` restores the old layout. |
+| Physical view placed in the same 4 KB phase as the `0xE0000000` mirror | Single view: only `+0x80000000` (512 MB) is mapped. The `0xE0000000` pool is not mapped (`LSWTCS_HEAPBYPASS`). | Not applicable. |
+| Commits rounded to 2 MB to avoid running out of kernel memory blocks (0xCE01) | Five fixed ranges mapped once at boot, with no per-allocation commits. | Not applicable. |
+| Codegen: r0/r2/r11/r12/f0/v32-v63 as locals (`non_argument_as_local`, with a keep list) | Already the case: no `ctx.r0/r2/r11/r12/f0` and no `ctx.v32`-`v63` in the generated output. | Already done. |
+| `KeTlsGetValue` without a host-thread lookup (about 1 % of their main thread) | Already a direct table read. | Already done. |
+| Guest heap `AllocRange` skipping full 64-page groups | `g_phys_alloc` never appears in our profiles. | Not worth it. |
+| File block cache with 64 KB blocks, an LRU and one-block read-ahead | Related to our load-time work (`LSWTCS_LOADMODES`). Run 71: refill size traded load time against loading-screen audio gaps. | A candidate for load times, not FPS. Not done. |
+| Ring reset race between the game and the GPU thread, ghost key repeats, native-render EDRAM skip | Different GPU front end (our walker) and input path (HID). | Not applicable. |
+
+**log89 (`0.0.95-log89`).**
+- The window reservation asks for 2 MB more and rounds the base up.
+- Each range whose offset and size are multiples of 2 MB gets a backing taken with `malloc(size + 2 MB)` and rounded up. Big blocks go to newlib, not rpmalloc, which may not honour such an alignment. The backings are never freed.
+- The 1 MB stray pages keep 4 KB backings.
+- `[NX] guest window` and each range line now print the alignment.
+- Whether the kernel really uses block descriptors for code-memory `MapOwner` mappings is not proven. Torchlight's backings are mapped the same way (heap backing plus code alias) and they measured the gain.
+- **Expected:** fewer TLB misses on guest loads and stores. Most visible docked (CPU-bound), where the main thread is about 95 % busy.
+- **Measure:** docked, `Gungan_B`'s heavy part, against run 71's 30.0 FPS (CPU wall) and `guest_call_cost.py`. The cross-session spread is about 3 %.

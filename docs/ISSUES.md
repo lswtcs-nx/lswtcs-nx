@@ -43,6 +43,20 @@ scene exceptions and asking the owner to press capture faster than a single fram
 
 ## 3. Title-idle movie corruption and completion hang
 
+**Status (2026-11-06, runs 85-90): open, set aside.** Run by run detail is
+below and in RUN2_FINDINGS.md "Run 85" to "Log 88".
+- **Established:**
+  - With A/B state I the walker dropped the surface-retire interrupt (callback 0x82815910), which caused the black screen. Fixed in log83.
+  - About 1,650 VMX operations the movie decoder runs were left empty by XenonRecomp. log84 fills them (`workspace-tools/fill_tcs360_movie_ops.py`, PC check `tests/fill_ops_check.py`). The fill must stay applied.
+  - The decoder takes about 280 ms of guest work per frame, so the movie runs at about 3 frames a second. Real time needs a native decoder or a much faster path, which is the owner's decision.
+  - The skip cannot work while the main thread waits inside the player, because nothing polls the pad.
+- **Tried and rejected:**
+  - Delaying the interrupts until the replay (log85/86, `LSWTCS_AWDEFER=1`) deadlocks the player after three frames. The decoder waits on the player's event 1 and the main thread on event 3.
+  - Kernel wake-up semantics (log87, `LSWTCS_KEWAKE=1`) released nothing.
+- **Untested:** log88+ copies texture bytes at each interrupt (`LSWTCS_TEXSNAP`), so the renderer does not read a surface the decoder is already rewriting.
+- **Open:** whether the remaining picture damage is timing or decoding.
+- **Next evidence:** run a log88+ build on the movie, then read `[TEXSNAP]` and a capture.
+
 The natural title-idle DEMOINTRO.WMV route produced moving corrupt pixels, audio
 continued, inputs did not recover, and playback end froze. Chapter cutscenes
 reported working are a separate path. Omitted PowerPC CR/VMX decoder operations

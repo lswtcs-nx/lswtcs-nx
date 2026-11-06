@@ -606,25 +606,46 @@ extern "C" bool lsw_switch_init() {
 namespace {
 }
 
+// log89: 2 MB pages for guest memory. The kernel maps a range with 2 MB block descriptors only where its virtual address and
+// the backing's physical address are 2 MB aligned alike; anything else gets 4 KB pages. virtmemFindAslr's second argument is a
+// guard size, not an alignment, and the backings came from aligned_alloc(0x1000): run 90's window started at 0xeb5e75000, so the
+// 512 MB guest physical range (nearly every guest load and store) and the 64 MB dispatch table were all 4 KB pages, and the
+// A57's TLB (about 1024 entries, 4 MB at 4 KB a page) misses constantly over them. Technique from torchlight-nx's
+// nfsmw-sdk.patch (GPL-3, technique only, no code taken), where a TLB miss there measured 100-170 ns on the console.
+// Now the window is rounded up to 2 MB, and every range whose offset and size are multiples of 2 MB gets a 2 MB-aligned backing
+// (2 MB more is asked for and the pointer rounded up; the backings are never freed). LSWTCS_GUEST2MB=0 = the old layout.
 extern "C" uint8_t* lsw_switch_guest_window(size_t size) {
+    constexpr size_t kBlock = 0x200000;
+    const char* g2 = getenv("LSWTCS_GUEST2MB");
+    const bool big = !(g2 && g2[0] == '0');
     virtmemLock();
-    uint8_t* w = (uint8_t*)virtmemFindAslr(size, 0x10000);
+    uint8_t* hole = (uint8_t*)virtmemFindAslr(size + (big ? kBlock : 0), 0x10000);
+    uint8_t* w = hole && big ? (uint8_t*)(((uintptr_t)hole + kBlock - 1) & ~(uintptr_t)(kBlock - 1)) : hole;
     VirtmemReservation* res = w ? virtmemAddReservation(w, size) : nullptr;
     virtmemUnlock();
     if (!res) { printf("[NX] cannot reserve 0x%zX-byte guest window\n", size); return nullptr; }
-    printf("[NX] guest window %p (0x%zX bytes)\n", (void*)w, size);
+    printf("[NX] guest window %p (0x%zX bytes, %s)\n", (void*)w, size,
+           ((uintptr_t)w & (kBlock - 1)) == 0 ? "2 MB aligned" : "not 2 MB aligned: 4 KB pages");
     const char* hb = getenv("LSWTCS_HEAPBYPASS");
     const bool bypass = !(hb && hb[0] == '0');   // same default as main.cpp lswtcs_bypass_on(): ON unless "0"
     for (const LswGuestRange& r : lsw_guest_ranges) {
         if (r.off + r.size > size || (r.bypass_only && !bypass)) continue;
-        void* src = aligned_alloc(0x1000, r.size);
+        const bool block = big && (r.off % kBlock) == 0 && (r.size % kBlock) == 0;
+        void* src = nullptr;
+        if (block) {
+            void* raw = malloc(r.size + kBlock);
+            if (raw) src = (void*)(((uintptr_t)raw + kBlock - 1) & ~(uintptr_t)(kBlock - 1));
+        } else {
+            src = aligned_alloc(0x1000, r.size);
+        }
         if (!src) { printf("[NX]   %-40s alloc 0x%llX FAILED\n", r.what, (unsigned long long)r.size); return nullptr; }
         Handle h;
         Result rc = svcCreateCodeMemory(&h, src, r.size);
         if (R_SUCCEEDED(rc)) rc = svcControlCodeMemory(h, CodeMapOperation_MapOwner, w + r.off, r.size, Perm_Rw);
         if (R_FAILED(rc)) { printf("[NX]   %-40s map FAILED rc=0x%X\n", r.what, rc); return nullptr; }
         memset(w + r.off, 0, r.size);
-        printf("[NX]   +0x%09llX %-40s %4llu MB\n", (unsigned long long)r.off, r.what, (unsigned long long)(r.size >> 20));
+        printf("[NX]   +0x%09llX %-40s %4llu MB, backing %p%s\n", (unsigned long long)r.off, r.what, (unsigned long long)(r.size >> 20),
+               src, block ? " (2 MB aligned)" : "");
     }
     printf("[NX] UsedMemory after window: %llu MB\n", (unsigned long long)(info_u64(InfoType_UsedMemorySize) >> 20));
     return w;

@@ -97,6 +97,9 @@ struct LswGpuSamplerDesc {
 // swizzle (3 bits per output), size, dimension (xenos::DataDimension). Returns 0 if not a texture.
 int lsw_gpu_texture_info(const uint32_t* fetch6, uint32_t* base, uint32_t* format, uint32_t* swizzle,
                          uint32_t* width, uint32_t* height, uint32_t* dimension);
+// log88: the guest physical bytes [lo, hi) that lsw_gpu_texture_key and lsw_gpu_decode_texture read for this fetch constant
+// (every block the decode visits, word-aligned, and the key's content probe). Returns 0 if not a texture or wider than 64 MB.
+int lsw_gpu_texture_extent(const uint32_t* fetch6, uint32_t* lo, uint32_t* hi);
 // Cheap identity key for caching (fetch constant + a content probe).
 uint64_t lsw_gpu_texture_key(const uint32_t* fetch6, const uint8_t* phys_membase);
 // Decodes the base level (untile + endian swap). Returns 1 on success.

@@ -3302,3 +3302,35 @@ Diagnostics only. Behaviour is log79's.
   - If the movie stops again, this names the event each thread waits on.
 - `KeWaitForMultipleObjects` keeps the old polling.
 - **Test:** handheld. Let the movie play, say whether the picture is whole and whether it keeps going, then press a button to skip. Then start a level and play a little: the wake-up change also affects gameplay.
+
+
+## Run 90 (log87, handheld, 2026-11-06): the same stop after three frames; it is a wait, not a lost wake-up
+
+**Report:** nothing changed.
+
+**From the log:**
+- `[AWDEFER]` is as in run 89: 4 interrupts, all run after their replay. There is no `[KEWAKE]` line, so no wait was released by a set it had missed. log87's wake-up change did not act.
+- `[KWAITLONG]` names the stop. Both events belong to one player object (`84ACF490`), and nothing set either of them while it was waited on:
+  - the decoder (`82826FF8`) waits on `84ACF4F4`, a synchronization event, from lr `82827B0C`;
+  - the main thread waits on `84ACF514`, a synchronization event, from lr `8282894C`.
+- **The player's vtable** (read from the local game image only, nothing shared) starts with the method `8281B590`.
+  - The three thread loops: `+140` (`82827630`, demux/sound), `+144` (`82827918`, video decoder), `+148` (`82829000`, control).
+  - `+76` is `82828418`, the main thread's play loop.
+  - Event methods: wait on events 0-7 at `+164`-`+192`, set events 0-7 at `+196`-`+224`, reset events 4-7 at `+228`-`+240`.
+  - The decoder waits on event 1, its permission to decode. The main thread waits on event 3, a decoded frame.
+  - The decoder sets event 3 (`82827918` calls `+208`). The main loop sets event 1 at one place, `82828DF0`.
+  - So it is a deadlock between them. It shows only since log85 moved the interrupts to after the replay. With log83/84's timing the movie played on. The player seems not to tolerate a surface retired that late; this is inferred, not traced.
+- The movie's interrupt callback `82815910` calls method `+92` of its argument (another object), not the player's.
+
+## Log 88: `0.0.94-log88`, texture copies at the interrupt; log83's timing back
+
+- **Texture copies** (kernel_stubs.cpp, `tex_snapshot_at_interrupt`; `LSWTCS_TEXSNAP=0` turns it off).
+  - At each GPU interrupt, except the tiling callback, every texture sampled by the frames not yet replayed has its bytes copied. Those frames are the one being recorded and the published one not yet taken.
+  - The bytes copied are exactly those the decoder and the cache key read: `lsw_gpu_texture_extent` (new, in `lsw_gpu_texture.cc`) visits every block of the planned layout and adds the key's content probe.
+  - The render thread decodes a texture from its copy when the fetch constant matches and the copy covers the frame (`tex_source` in gl_backend.cpp, for `get_texture` and the texture pre-pass). It uses the oldest copy taken at or after that frame.
+  - Copies are dropped once their frames are replayed, with at most 96 kept.
+  - Logged as `[TEXSNAP]`: the first 5 interrupts, and a 5-second line with bytes copied and textures decoded from a copy.
+  - In play the walker meets no interrupts, so this costs nothing there.
+- **Interrupts run as in log83 again.** They are handed to a waiting guest thread at once. `LSWTCS_AWDEFER=1` brings back log85/86's queue.
+- **`LSWTCS_KEWAKE` is now off by default** (`=1` turns it on). It released nothing in run 90, and it changes every event wait in the game. `[KWAITLONG]` stays.
+- **Test:** handheld. Let the movie play: is the picture whole now (still slow)? Then press a button to skip, and then start a level.

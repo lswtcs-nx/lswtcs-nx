@@ -53,6 +53,8 @@ extern std::atomic<bool> g_frame_light;   // win32_switch.cpp: pad layout "auto"
 extern "C" void lsw_load_light_edge(uint32_t replay);   // kernel_stubs.cpp: a light stretch began, the load mode moves on
 extern "C" void lsw_boot_mark(const char* what);   // main.cpp: [BOOT] milliseconds since the process started (log67)
 extern "C" void lsw_replay_textures_read(uint64_t serial);   // kernel_stubs.cpp (log85): queued GPU interrupts wait for this
+extern "C" int lsw_tex_snapshots_active();                   // kernel_stubs.cpp (log88): texture copies taken at GPU interrupts
+bool lsw_tex_snapshot_find(const uint32_t* f6, uint64_t serial, std::shared_ptr<const std::vector<uint8_t>>* out, uint32_t* lo);
 extern "C" void lsw_ft_ring_dump();   // kernel_stubs.cpp: game frame times of the last 120 swaps ([FTRING])
 extern "C" void lsw_sched_ab_set(int audioprio, int walkoff);   // kernel_stubs.cpp: LSWTCS_ABCYCLE
 extern "C" void lsw_shm_frame_hash_set(int on);                 // kernel_stubs.cpp: H
@@ -2035,11 +2037,23 @@ struct FetchKeyHash {
 };
 std::unordered_map<FetchKey, GlTex, FetchKeyHash> g_tex_memo;
 
+// log88: where a texture's bytes are read from for the frame being replayed: its copy taken at a GPU interrupt, if one covers this
+// frame (kernel_stubs.cpp, tex_snapshot_at_interrupt), else guest memory. The copy stays alive until the next replay.
+uint64_t g_replay_serial = 0;
+std::vector<std::shared_ptr<const std::vector<uint8_t>>> g_snap_keep;
+const uint8_t* tex_source(const uint32_t* f6, const uint8_t* phys) {
+    if (!lsw_tex_snapshots_active()) return phys;
+    std::shared_ptr<const std::vector<uint8_t>> d;
+    uint32_t lo = 0;
+    if (!lsw_tex_snapshot_find(f6, g_replay_serial, &d, &lo)) return phys;
+    g_snap_keep.push_back(d);
+    return d->data() - lo;   // read at (physical address) as guest memory would be
+}
 GlTex get_texture(const uint32_t* fetch6) {
     FetchKey fk; memcpy(fk.w, fetch6, sizeof fk.w);
     auto mi = g_tex_memo.find(fk);
     if (mi != g_tex_memo.end()) return mi->second;
-    const uint8_t* phys = g_base + 0x80000000ull;
+    const uint8_t* phys = tex_source(fetch6, g_base + 0x80000000ull);
     uint64_t key;
     { RpScope rp(RP_TEXKEY); key = lsw_gpu_texture_key(fetch6, phys); }
     GlTex t;
@@ -3514,6 +3528,7 @@ bool texture_prepass_on() {
 // 200, 19 of them waiting 13-41 ms (about a display refresh) where run 79 had 6, and the next frame waited 420 ms on one 10 KB upload.
 struct DecodeJob {
     uint32_t f6[6]; uint64_t key; std::vector<FetchKey> fks;
+    const uint8_t* src = nullptr;   // log88: the texture's copy, else guest memory
     LswGpuTexDesc d; std::vector<uint8_t> buf; bool ok = false; uint64_t ns = 0;
 };
 struct DecodePool {
@@ -3535,7 +3550,7 @@ uint8_t* decode_reserve(void* c, uint32_t bytes) {
 }
 void decode_one(DecodeJob& j, const uint8_t* phys) {
     const uint64_t t0 = gp_now();
-    j.ok = lsw_gpu_decode_texture_into(j.f6, phys, &j.d, decode_reserve, &j.buf) && j.d.ok;
+    j.ok = lsw_gpu_decode_texture_into(j.f6, j.src ? j.src : phys, &j.d, decode_reserve, &j.buf) && j.d.ok;
     j.ns = gp_now() - t0;
 }
 // Decodes the next job nobody has taken; false when none is left.
@@ -3657,7 +3672,8 @@ void texture_prepass(const LswGpuFrame& f, bool gpurt) {
                 uint32_t base = 0, fmt = 0, gswz = 0, w = 0, h = 0, dim = 0;
                 if (!lsw_gpu_texture_info(f6, &base, &fmt, &gswz, &w, &h, &dim)) continue;
                 uint64_t key;
-                { RpScope rp(RP_TEXKEY); key = lsw_gpu_texture_key(f6, phys); }
+                const uint8_t* src = tex_source(f6, phys);   // log88
+                { RpScope rp(RP_TEXKEY); key = lsw_gpu_texture_key(f6, src); }
                 auto it = g_textures.find(key);
                 if (it != g_textures.end()) {   // known: memoise it as get_texture would
                     it->second.last_used = g_replays;
@@ -3675,6 +3691,7 @@ void texture_prepass(const LswGpuFrame& f, bool gpurt) {
                     jobs.emplace_back();
                     memcpy(jobs.back().f6, f6, sizeof jobs.back().f6);
                     jobs.back().key = key;
+                    jobs.back().src = src == phys ? nullptr : src;
                 }
                 jobs[jt->second].fks.push_back(fk);
             }
@@ -3708,6 +3725,8 @@ PresentSrc replay() {
     g_inputcheck_rendered=false;
     if (!g_replay_same) { RpScope rp(RP_TAKE); gpu_frame_take(); }
     LswGpuFrame& f = g_gpu_frame_render;   // replayed again if no newer frame was published
+    g_snap_keep.clear();          // log88: the previous replay's texture copies
+    g_replay_serial = f.serial;
     ++g_replays;
     level_watch();
     ++g_gl_epoch;   // present / capture / clears changed state since the last replay

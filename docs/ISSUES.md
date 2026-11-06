@@ -83,7 +83,14 @@ stopped after three frames, with all its threads waiting on events. Separate
 defect: `KeWaitForSingleObject` polls, so a set that is cleared before the next
 poll (or a pulse) never wakes the waiter. Log87 gives kernel wake-up semantics
 (`LSWTCS_KEWAKE=0` off; this affects every event wait) and reports infinite
-waits past 3 s (`[KWAITLONG]`). Untested on hardware.
+waits past 3 s (`[KWAITLONG]`).
+
+Run 90 (log87): same stop; no wake-up was missed. The decoder waits on the
+player's event 1 and the main thread on its event 3, a deadlock that appeared
+only once interrupts were delayed. Log88 runs interrupts at once again and
+copies, at each interrupt, the bytes of every texture the unreplayed frames
+sample; the renderer decodes from the copy (`LSWTCS_TEXSNAP=0` off).
+`LSWTCS_KEWAKE` is now off by default. Untested on hardware.
 
 ## 4. Guest PCR overwrite / allocator overlap
 

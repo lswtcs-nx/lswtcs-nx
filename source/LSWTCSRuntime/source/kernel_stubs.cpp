@@ -24,6 +24,8 @@
 #include <map>
 #include <vector>
 #include <deque>
+#include <memory>
+#include <array>
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -2958,7 +2960,7 @@ template <typename F> static void kw_block(F ready, uint32_t ms) {
 struct EvWake { uint64_t gen = 0; uint32_t waiters = 0, tokens = 0; };
 static std::unordered_map<uint32_t, EvWake> g_evw;   // events with waiters now, under g_kw_mtx
 static std::atomic<uint64_t> g_kewake_gen_hits{0}, g_kewake_token_hits{0}, g_kewake_sets{0};
-static bool kewake_on() { static const bool on = [] { const char* e = getenv("LSWTCS_KEWAKE"); return !(e && e[0] == '0'); }(); return on; }
+static bool kewake_on() { static const bool on = [] { const char* e = getenv("LSWTCS_KEWAKE"); return e && e[0] == '1'; }(); return on; }   // log88: off by default
 static void kewake_set(uint8_t* base, uint32_t ptr) {   // KeSetEvent / KePulseEvent
     if (!kewake_on()) return;
     const uint8_t type = PPC_LOAD_U8(ptr);
@@ -6523,7 +6525,7 @@ extern "C" void lsw_replay_textures_read(uint64_t serial) {   // gl_backend.cpp:
     while (serial > c && !g_tex_done_serial.compare_exchange_weak(c, serial)) {}
 }
 static bool aw_defer_on() {
-    static const bool on = [] { const char* e = getenv("LSWTCS_AWDEFER"); return !(e && e[0] == '0'); }();
+    static const bool on = [] { const char* e = getenv("LSWTCS_AWDEFER"); return e && e[0] == '1'; }();   // log88: off by default
     return on;
 }
 static bool aw_defer_pending() { return g_awq_any.load(std::memory_order_relaxed); }
@@ -6544,10 +6546,88 @@ static bool aw_isr_defer(uint32_t cpu_mask) {   // on the walker thread
     g_awq_any.store(true);
     return true;
 }
+// log88: texture contents as of a GPU interrupt. Runs 87-89: moving the movie's interrupt until after the replay (log85/86) left
+// the player's main thread and decoder waiting on each other after three frames; run as log83 does, at the point the walker reads
+// it, the movie plays but its surfaces are freed before the render thread reads them (the renderer reads textures from guest
+// memory at replay), so the decoder is already rewriting them. So at each interrupt the walker meets (except the tiling callback),
+// the bytes of every texture the frames not yet replayed sample are copied: the frame being recorded and the published one not
+// yet taken. The render thread decodes a texture from its copy when one matches the fetch constant and covers the frame
+// (lsw_tex_snapshot_find, the oldest copy taken at or after it). On the 360 the GPU has sampled them by the time the interrupt runs.
+// LSWTCS_TEXSNAP=0 turns it off. Copies are dropped once their frames have been replayed.
+struct TexSnap { uint32_t f6[6]; uint32_t lo; uint64_t serial_max; std::shared_ptr<const std::vector<uint8_t>> data; };
+static std::mutex g_snap_mtx;
+static std::vector<TexSnap> g_snaps;
+static std::atomic<int> g_snaps_n{0};
+static std::atomic<uint64_t> g_snap_taken{0}, g_snap_bytes{0}, g_snap_found{0}, g_snap_events{0};
+extern "C" int lsw_tex_snapshots_active() { return g_snaps_n.load(std::memory_order_relaxed) > 0; }
+bool lsw_tex_snapshot_find(const uint32_t* f6, uint64_t serial, std::shared_ptr<const std::vector<uint8_t>>* out, uint32_t* lo) {
+    std::lock_guard<std::mutex> lk(g_snap_mtx);
+    const TexSnap* best = nullptr;
+    for (const TexSnap& s : g_snaps)
+        if (s.serial_max >= serial && !memcmp(s.f6, f6, sizeof s.f6) && (!best || s.serial_max < best->serial_max)) best = &s;
+    if (!best) return false;
+    *out = best->data; *lo = best->lo;
+    ++g_snap_found;
+    return true;
+}
+static bool texsnap_on() { static const bool on = [] { const char* e = getenv("LSWTCS_TEXSNAP"); return !(e && e[0] == '0'); }(); return on; }
+static void tex_snapshot_at_interrupt() {
+    if (!texsnap_on()) return;
+    const uint64_t smax = g_pub_serial.load() + 1, done = g_tex_done_serial.load();
+    std::vector<std::array<uint32_t, 6>> fetches;
+    auto scan = [&](const LswGpuFrame& f) {
+        std::unordered_set<uint32_t> offs;
+        for (const LswGpuDrawRec& r : f.draws) {
+            if (r.kind == 1 || !offs.insert(r.cb_fetch_off).second) continue;
+            if (size_t(r.cb_fetch_off) + 32 * 6 * 4 > f.arena.size()) continue;
+            const uint32_t* all = reinterpret_cast<const uint32_t*>(f.arena.data() + r.cb_fetch_off);
+            for (int s = 0; s < 32; ++s) {
+                const uint32_t* f6 = all + s * 6;
+                uint32_t b, fm, sw, w, h, dm;
+                if (!lsw_gpu_texture_info(f6, &b, &fm, &sw, &w, &h, &dm)) continue;
+                std::array<uint32_t, 6> a;
+                memcpy(a.data(), f6, sizeof(uint32_t) * 6);
+                if (std::find(fetches.begin(), fetches.end(), a) == fetches.end()) fetches.push_back(a);
+            }
+        }
+    };
+    scan(g_gpu_frame_build);
+    { std::lock_guard<std::mutex> lk(g_gpu_frame_mtx); if (g_gpu_frame_ready) scan(g_gpu_frame_present); }
+    std::vector<TexSnap> made;
+    uint64_t bytes = 0;
+    for (const auto& a : fetches) {
+        uint32_t lo, hi;
+        if (!lsw_gpu_texture_extent(a.data(), &lo, &hi)) continue;
+        if (bytes + (hi - lo) > (48ull << 20)) break;   // a bound for one interrupt
+        auto v = std::make_shared<std::vector<uint8_t>>(hi - lo);
+        lsw_guest::copy(v->data(), g_base + 0x80000000ull + lo, hi - lo);
+        TexSnap s;
+        memcpy(s.f6, a.data(), sizeof s.f6);
+        s.lo = lo; s.serial_max = smax; s.data = std::move(v);
+        bytes += hi - lo;
+        made.push_back(std::move(s));
+    }
+    {
+        std::lock_guard<std::mutex> lk(g_snap_mtx);
+        g_snaps.erase(std::remove_if(g_snaps.begin(), g_snaps.end(), [&](const TexSnap& s) { return s.serial_max < done; }), g_snaps.end());
+        for (TexSnap& s : made) g_snaps.push_back(std::move(s));
+        if (g_snaps.size() > 96) g_snaps.erase(g_snaps.begin(), g_snaps.end() - 96);   // a bound if replays stop
+        g_snaps_n.store(int(g_snaps.size()));
+    }
+    g_snap_taken += made.size();
+    g_snap_bytes += bytes;
+    if (++g_snap_events <= 5) {
+        printf("[TEXSNAP] interrupt #%llu (callback %08X): %zu textures copied, %.2f MB, for frames up to %llu (textures read to %llu)\n",
+               (unsigned long long)g_snap_events.load(), g_xe_regs[0x57C], made.size(), bytes / 1048576.0, (unsigned long long)smax,
+               (unsigned long long)done);
+        fflush(stdout);
+    }
+}
 static void pm4_fire_interrupt(uint32_t cpu_mask) {
     if (!g_gfx_interrupt_callback) return;
     if (!t_isr_serving) ++g_isr_fired;
     if (t_async_walker) {   // state I: no guest context here (log83: handed over; log85: queued until the frame is replayed)
+        if (g_xe_regs[0x57C] != 0x822D2BA0u) tex_snapshot_at_interrupt();   // log88: before the ISR can free what was sampled
         if (aw_isr_defer(cpu_mask)) return;
         if (!aw_isr_hand(cpu_mask)) ++g_aw_isr_dropped;
         return;
@@ -6569,6 +6649,7 @@ static void pm4_fire_interrupt(uint32_t cpu_mask) {
             uint32_t cb = PPC_LOAD_U32(sa + 16);
             static uint64_t n_ok = 0, n_poison = 0;
             if (cb == 0x0BADF00Du) { if (++n_poison <= 5 || (n_poison % 1000) == 0) dbg_ram("[IRQ] skip: scratch4=BADF00D (stale INTERRUPT) #%llu\n", (unsigned long long)n_poison); return; }
+            if (!t_isr_serving && cb != 0x822D2BA0u) tex_snapshot_at_interrupt();   // log88: an interrupt run in a guest thread's own walk
             if (++n_ok <= 10 || (n_ok % 500) == 0) dbg_ram("[IRQ] #%llu mask=0x%02X cb=0x%08X arg=0x%08X\n", (unsigned long long)n_ok, cpu_mask, cb, PPC_LOAD_U32(sa + 20));
         }
     }
@@ -6912,6 +6993,15 @@ extern "C" void lsw_walkoff_report() {
             printf("[KEWAKE] 5 s: waits released by a set they did not see: %llu notification, %llu synchronization | sets with waiters %llu\n",
                    (unsigned long long)(g - l_g), (unsigned long long)(t - l_t), (unsigned long long)(s - l_s));
             l_g = g; l_t = t; l_s = s;
+        }
+    }
+    {
+        static uint64_t l_e = 0, l_f = 0, l_b = 0;
+        const uint64_t e = g_snap_events.load(), f = g_snap_found.load(), b = g_snap_bytes.load();
+        if (e != l_e || f != l_f) {
+            printf("[TEXSNAP] 5 s: interrupts %llu, %.1f MB copied, textures decoded from a copy %llu, copies kept %d\n",
+                   (unsigned long long)(e - l_e), (b - l_b) / 1048576.0, (unsigned long long)(f - l_f), g_snaps_n.load());
+            l_e = e; l_f = f; l_b = b;
         }
     }
     static int stuck_lines = 0;

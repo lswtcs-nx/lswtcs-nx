@@ -123,6 +123,36 @@ static uint32_t component_mapping(const xenos::xe_gpu_texture_fetch_t& fetch, co
 
 #include "lsw_gpu_texture_layout.inc"
 
+extern "C" int lsw_gpu_texture_extent(const uint32_t* fetch6, uint32_t* lo, uint32_t* hi) {
+  LswGpuTextureLayout layout{};
+  if (!lsw_gpu_plan_texture(fetch6, &layout)) return 0;
+  struct Range { uint64_t lo = ~0ull, hi = 0; } r;
+  if (!lsw_gpu_visit_texture_blocks(&layout, [](void* c, const LswGpuTextureBlock* b) {
+        auto& r = *static_cast<Range*>(c);
+        r.lo = std::min<uint64_t>(r.lo, b->physical & ~3u);   // the endian swap moves bytes only inside their word
+        r.hi = std::max<uint64_t>(r.hi, (uint64_t(b->physical) + b->bytes + 3) & ~3ull);
+        return true;
+      }, &r)) return 0;
+  // lsw_gpu_texture_key's content probe: the first 512 bytes at the fetch base, and samples over the padded base level.
+  xenos::xe_gpu_texture_fetch_t fetch;
+  std::memcpy(&fetch, fetch6, sizeof(fetch));
+  const uint64_t base = uint64_t(fetch.base_address << 12) & 0x1FFFFFFFull;
+  uint64_t probe = 512;
+  if (const auto* fi = FormatInfo::Get(uint32_t(fetch.format)); fi && fi->bytes_per_block()) {
+    uint32_t w = fetch.size_2d.width + 1, hgt = fetch.size_2d.height + 1;
+    uint32_t bw = std::max(1u, fi->block_width), bh = std::max(1u, fi->block_height);
+    uint64_t bytes = uint64_t(xe::align(w, 32u * bw) / bw) * (xe::align(hgt, 32u * bh) / bh) * fi->bytes_per_block();
+    if (bytes > 0x1000000ull) bytes = 0x1000000ull;
+    probe = std::max(probe, bytes);
+  }
+  r.lo = std::min(r.lo, base);
+  r.hi = std::max(r.hi, base + probe);
+  if (r.hi > 0x20000000ull) r.hi = 0x20000000ull;
+  if (r.hi <= r.lo || r.hi - r.lo > (64ull << 20)) return 0;
+  *lo = uint32_t(r.lo); *hi = uint32_t(r.hi);
+  return 1;
+}
+
 extern "C" uint32_t lsw_gpu_texture_mapping(const uint32_t* fetch6) {
   xenos::xe_gpu_texture_fetch_t fetch;
   std::memcpy(&fetch, fetch6, sizeof(fetch));

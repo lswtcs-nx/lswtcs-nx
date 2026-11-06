@@ -3261,3 +3261,44 @@ Diagnostics only. Behaviour is log79's.
 - **Replay on request.** When a frame is published while interrupts are queued, kernel_stubs.cpp calls `lsw_gpu_replay_request` (gl_backend.cpp). It posts one more frame to the render thread without a guest swap, so the render thread replays what was just published and reports its textures as read. The game's next present waits for that replay like any other (`LSWTCS_RTSYNC`).
 - `[AWDEFER]` adds a count of replays asked.
 - **Test:** the same as log85. Let the movie play, check whether the picture is whole (even if slow), then press a button and say what happens.
+
+
+## Run 89 (log86, handheld, 2026-11-06): three movie frames, then everything waits
+
+**Report:** the video is still broken, and the skip button did nothing. The session lasted about 70 s.
+
+**From the log:**
+- log86's two fixes worked as meant. `[AWDEFER]`: 4 interrupts, all run after their frame's replay (46-119 ms), none late. "frames published 2247, textures read to 2247, replays asked 3".
+- Three movie frames were drawn (replays 2246, 2248 and 2250, each with new Y/U/V textures). After that:
+  - the main thread waits in `sub_82828418`;
+  - the decoder (`82826FF8`) waits in `sub_82827918`;
+  - the control thread (`82827028`) waits in `sub_82829000`, all on `KeWaitForSingleObject`;
+  - only the demux/sound thread (`82826FC8`) runs.
+  - In runs 86-87 (log83/84) the movie kept going, with about two interrupts per frame. Only the timing of the interrupts differs.
+- There is still no `[PAD]` line: nothing polls the pad while the main thread waits.
+- **D3D callback packets** (`sub_822AE760`), in order:
+  1. SCRATCH_REG4/5 get the callback and its argument;
+  2. SCRATCH_REG0 gets the CPU mask;
+  3. WAIT_REG_MEM waits until that mask is in memory;
+  4. INTERRUPT;
+  5. WAIT_REG_MEM waits until the ISR has cleared SCRATCH_REG0;
+  6. SCRATCH_REG4 gets the `0x0BADF00D` poison.
+  - The walker skips WAIT_REG_MEM by default (`LSWTCS_WAITREG`, off since 2026-10-05), so it never waits for the ISR. log86's write-back of registers 0, 4 and 5 is consistent with this.
+- **A defect that fits a timing-dependent stall.** `KeWaitForSingleObject` only polls the event's SignalState (in 16 ms slices, `kw_block` checking every 1 ms). So a `KeSetEvent` followed by a `KeResetEvent` before the waiter's next look never releases it, and `KePulseEvent` (set, then clear at once) never releases anyone. The 360 kernel releases the threads waiting at the moment of the set. The movie's eight events per object are waited on, set and reset through wrappers at `82827150`-`828272D8`; four of them have reset wrappers. Not proven to be the cause here.
+
+## Log 87: `0.0.93-log87`, kernel wake-ups; long-wait report
+
+- **Wake-ups** (kernel_stubs.cpp, `EvWake`, `kewake_set`; `LSWTCS_KEWAKE=0` restores the old polling).
+  - A `KeWaitForSingleObject` on an event (type 0 or 1) registers as a waiter.
+  - A `KeSetEvent` or `KePulseEvent` while waiters exist bumps the event's generation (type 0), or adds one release token (type 1, at most one per waiter).
+  - A waiter whose event is clear is released if the generation moved, or if it takes a token. Taking a token also clears the event, so one set never releases two threads.
+  - This affects every event wait in the game, not just the movie.
+  - `[KEWAKE]` counts, every 5 s, the waits released by a set they did not see. A non-zero count shows that lost wake-ups were happening.
+- **`[KWAITLONG]`.** An infinite `KeWaitForSingleObject` past 3 s (then every 30 s; up to 60 lines) prints:
+  - the thread and its entry;
+  - the object, with its type and state;
+  - the caller's lr;
+  - waiters, tokens, and the sets seen while waiting.
+  - If the movie stops again, this names the event each thread waits on.
+- `KeWaitForMultipleObjects` keeps the old polling.
+- **Test:** handheld. Let the movie play, say whether the picture is whole and whether it keeps going, then press a button to skip. Then start a level and play a little: the wake-up change also affects gameplay.

@@ -2947,6 +2947,28 @@ template <typename F> static void kw_block(F ready, uint32_t ms) {
         g_kw_cv.wait_for(lk, step, [&] { return g_kw_gen != gen; });
     }
 }
+// log87: wake-ups as the kernel gives them. KeWaitForSingleObject only polls an event's SignalState, so a KeSetEvent followed by a
+// KeResetEvent before the waiter looks again, or a KePulseEvent (set and cleared at once), never released anyone. The 360 kernel
+// releases the threads waiting at the moment of the set: every waiter of a notification event (type 0), one waiter of a
+// synchronization event (type 1), even if the event is cleared right after. Run 89: with the GPU interrupts moved (log86) the title
+// movie stopped after three frames with its main thread, decoder and control thread all waiting; the movie's events are set and
+// reset from several threads (82827150-828272D8). Here a waiter registers on its event; a set or pulse while waiters exist bumps the
+// event's generation (type 0) or adds a release token (type 1, at most one per waiter). A waiter whose event is clear but whose
+// generation moved, or who finds a token, is released ([KEWAKE] counts these). Guarded by g_kw_mtx. LSWTCS_KEWAKE=0 = old polling.
+struct EvWake { uint64_t gen = 0; uint32_t waiters = 0, tokens = 0; };
+static std::unordered_map<uint32_t, EvWake> g_evw;   // events with waiters now, under g_kw_mtx
+static std::atomic<uint64_t> g_kewake_gen_hits{0}, g_kewake_token_hits{0}, g_kewake_sets{0};
+static bool kewake_on() { static const bool on = [] { const char* e = getenv("LSWTCS_KEWAKE"); return !(e && e[0] == '0'); }(); return on; }
+static void kewake_set(uint8_t* base, uint32_t ptr) {   // KeSetEvent / KePulseEvent
+    if (!kewake_on()) return;
+    const uint8_t type = PPC_LOAD_U8(ptr);
+    std::lock_guard<std::mutex> lk(g_kw_mtx);
+    auto it = g_evw.find(ptr);
+    if (it == g_evw.end() || !it->second.waiters) return;
+    ++g_kewake_sets;
+    ++it->second.gen;
+    if (type == 1 && it->second.tokens < it->second.waiters) ++it->second.tokens;
+}
 // Guest relative timeout (LARGE_INTEGER*, 100 ns, negative = relative) -> ms; nullptr = infinite.
 static uint32_t guest_timeout_ms(uint8_t* base, uint32_t p, uint32_t infinite_ms) {
     if (p < 0x80000000u || p >= 0xC0000000u) return infinite_ms;
@@ -3197,8 +3219,10 @@ PPC_FUNC(__imp__KeSetEvent) {
     uint32_t ptr = ctx.r3.u32;
     if (ptr >= 0x83212790u && ptr < 0x832127E0u) { static int n = 0; if (n++ < 60)   // DIAG: XAudio worker sync objects
         dbg_ram("[XAEV] set 0x%08X type=%u state=%d lr=0x%08X\n", ptr, PPC_LOAD_U8(ptr), (int32_t)PPC_LOAD_U32(ptr + 4), (uint32_t)ctx.lr); }
-    if (ptr >= 0x80000000u && ptr < 0xC0000000u)
+    if (ptr >= 0x80000000u && ptr < 0xC0000000u) {
         PPC_STORE_U32(ptr + 4, 1);
+        kewake_set(base, ptr);   // log87
+    }
     kw_notify();
     ctx.r3.u32 = 0;
 }
@@ -3207,6 +3231,7 @@ PPC_FUNC(__imp__KePulseEvent) {
     uint32_t ptr = ctx.r3.u32;
     if (ptr >= 0x80000000u && ptr < 0xC0000000u) {
         PPC_STORE_U32(ptr + 4, 1);
+        kewake_set(base, ptr);   // log87: the threads waiting now are released, though the event ends clear
         PPC_STORE_U32(ptr + 4, 0);
     }
     kw_notify();
@@ -3222,6 +3247,24 @@ PPC_FUNC(__imp__KeWaitForSingleObject) {
     uint32_t ptr = ctx.r3.u32;
     bool signaled = false;
     if (ptr >= 0x80000000u && ptr < 0xC0000000u) {
+        // log87: register as a waiter (events only), so a set that is cleared again before the next poll still releases us.
+        const uint8_t type = PPC_LOAD_U8(ptr);
+        const bool track = kewake_on() && (type == 0 || type == 1);
+        uint64_t g0 = 0;
+        if (track) { std::lock_guard<std::mutex> lk(g_kw_mtx); EvWake& e = g_evw[ptr]; ++e.waiters; g0 = e.gen; }
+        auto woke_locked = [&]() -> bool {   // caller holds g_kw_mtx
+            auto it = g_evw.find(ptr);
+            return it != g_evw.end() && (type == 0 ? it->second.gen != g0 : it->second.tokens > 0);
+        };
+        auto take_wake = [&]() -> bool {   // released by a set we did not see: consume it (one token for type 1)
+            if (!track) return false;
+            std::lock_guard<std::mutex> lk(g_kw_mtx);
+            if (!woke_locked()) return false;
+            if (type == 1) { --g_evw[ptr].tokens; PPC_STORE_U32(ptr + 4, 0); ++g_kewake_token_hits; } else ++g_kewake_gen_hits;   // type 1: that set is used up
+            return true;
+        };
+        const auto wait_t0 = std::chrono::steady_clock::now();
+        int long_reports = 0;
         // A null timeout means an infinite wait, including the movie's producer /
         // consumer event handshakes. Yield in bounded slices, but never report a
         // timeout to a caller which did not request one.
@@ -3231,26 +3274,55 @@ PPC_FUNC(__imp__KeWaitForSingleObject) {
             signaled = PPC_LOAD_U32(ptr + 4) != 0;
             if (!signaled) {
                 uint32_t ms = std::min<uint32_t>(16u, guest_timeout_ms(base, ctx.r7.u32, 16u));
-                if (ms) kw_block([&] { return PPC_LOAD_U32(ptr + 4) != 0; }, ms);
+                if (ms) kw_block([&] { return PPC_LOAD_U32(ptr + 4) != 0 || (track && woke_locked()); }, ms);
                 signaled = PPC_LOAD_U32(ptr + 4) != 0;
+                if (!signaled) signaled = take_wake();
             }
         } else if (gil_on()) {
             // Cooperative poll: at OUR turn check the flag; if unset, hand the turn to other
             // guest threads (which set +4) and retry. No host Sleep → deterministic boundary.
             for (int i = 0; i < 32; i++) {
                 if (PPC_LOAD_U32(ptr + 4) != 0) { signaled = true; break; }
+                if (take_wake()) { signaled = true; break; }
                 sched_yield_turn();
             }
         } else {
             GilYield y;   // (no GIL) release during the poll so the signaling thread can set +4
             for (int i = 0; i < 16; i++) {
                 if (PPC_LOAD_U32(ptr + 4) != 0) { signaled = true; break; }
+                if (take_wake()) { signaled = true; break; }
                 Sleep(1);
             }
         }
+        // log87 [KWAITLONG]: an infinite wait past 3 s (then every 30 s), with what it waits on.
+        if (!signaled && ctx.r7.u32 == 0) {
+            const auto waited = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - wait_t0).count();
+            if (waited >= 3000 + 30000LL * long_reports) {
+                static std::atomic<int> lines{0};
+                if (lines.fetch_add(1) < 60) {
+                    uint32_t w = 0, tk = 0; uint64_t gn = 0;
+                    if (track) { std::lock_guard<std::mutex> lk(g_kw_mtx); auto it = g_evw.find(ptr); if (it != g_evw.end()) { w = it->second.waiters; tk = it->second.tokens; gn = it->second.gen; } }
+                    printf("[KWAITLONG] guest thread %d (entry %08X) waits %lld ms on %08X type %u state %d, lr %08X | waiters %u, tokens %u, sets while waited %llu\n",
+                           g_sched_id, g_sched_id >= 0 && g_sched_id < LSW_SCHED_MAX ? g_sp_entry[g_sched_id] : 0u, (long long)waited, ptr,
+                           unsigned(PPC_LOAD_U8(ptr)), (int32_t)PPC_LOAD_U32(ptr + 4), (uint32_t)ctx.lr, w, tk, (unsigned long long)(gn - g0));
+                    fflush(stdout);
+                }
+                ++long_reports;
+            }
+        }
         } while (!signaled && ctx.r7.u32 == 0);
-        if (signaled && PPC_LOAD_U8(ptr) == 1)  // SynchronizationEvent: auto-reset
+        if (signaled && PPC_LOAD_U8(ptr) == 1 && PPC_LOAD_U32(ptr + 4) != 0) {  // SynchronizationEvent: auto-reset
             PPC_STORE_U32(ptr + 4, 0);
+            if (track) { std::lock_guard<std::mutex> lk(g_kw_mtx); EvWake& e = g_evw[ptr]; if (e.tokens) --e.tokens; }   // that set's token
+        }
+        if (track) {
+            std::lock_guard<std::mutex> lk(g_kw_mtx);
+            auto it = g_evw.find(ptr);
+            if (it != g_evw.end()) {
+                if (--it->second.waiters == 0) g_evw.erase(it);
+                else if (it->second.tokens > it->second.waiters) it->second.tokens = it->second.waiters;
+            }
+        }
     }
     if (signaled && ptr >= 0x83212790u && ptr < 0x832127E0u) { static int n = 0; if (n++ < 60)
         dbg_ram("[XAEV] wait1 0x%08X -> signaled lr=0x%08X\n", ptr, (uint32_t)ctx.lr); }
@@ -6831,6 +6903,15 @@ extern "C" void lsw_walkoff_report() {
                    (unsigned long long)g_pub_serial.load(), (unsigned long long)g_tex_done_serial.load(), (unsigned long long)g_replay_requests);
             g_awq_wait_max = 0;
             l_q = g_awq_queued; l_s = g_awq_served; l_late = g_awq_late; l_w = g_awq_wait_ns;
+        }
+    }
+    {
+        static uint64_t l_g = 0, l_t = 0, l_s = 0;
+        const uint64_t g = g_kewake_gen_hits.load(), t = g_kewake_token_hits.load(), s = g_kewake_sets.load();
+        if (g != l_g || t != l_t) {
+            printf("[KEWAKE] 5 s: waits released by a set they did not see: %llu notification, %llu synchronization | sets with waiters %llu\n",
+                   (unsigned long long)(g - l_g), (unsigned long long)(t - l_t), (unsigned long long)(s - l_s));
+            l_g = g; l_t = t; l_s = s;
         }
     }
     static int stuck_lines = 0;

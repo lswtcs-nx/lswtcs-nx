@@ -76,7 +76,14 @@ interrupt waited 500 ms. Writing back scratch register 1, which belongs to
 VBlank, likely stopped the movie for good. No pad press reached the game,
 because nothing polls the pad while the main thread waits. Log86 writes back
 only registers 0, 4 and 5, and requests a replay when a frame is published
-while interrupts wait. Untested on hardware.
+while interrupts wait.
+
+Run 89 (log86): every interrupt now waits for its replay, but the movie
+stopped after three frames, with all its threads waiting on events. Separate
+defect: `KeWaitForSingleObject` polls, so a set that is cleared before the next
+poll (or a pulse) never wakes the waiter. Log87 gives kernel wake-up semantics
+(`LSWTCS_KEWAKE=0` off; this affects every event wait) and reports infinite
+waits past 3 s (`[KWAITLONG]`). Untested on hardware.
 
 ## 4. Guest PCR overwrite / allocator overlap
 

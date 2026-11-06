@@ -3175,3 +3175,38 @@ Diagnostics only. Behaviour is log79's.
 - Gameplay should not change: no interrupts were met by the walker in play.
 - Risk: the interrupt now runs on whichever guest thread waits, for example a movie worker. On the 360 it also preempts any thread. If movie playback now continues, the next known faults are ISSUES.md #3's: corrupt pixels, and the hang at playback end (thread `82827028`'s loop may be that hang, or a consequence of the full queue).
 - **Test:** handheld. Leave the title screen idle until the movie plays, and let it run to the end. Then press a button and start a level. Ask whether the movie shows a picture, whether the picture is correct, and whether the game returns to the title or menu at the end.
+
+
+## Run 86 (log83, handheld, 2026-11-06): the movie plays, as garbage, at 3 frames a second
+
+**Report:** the title-idle movie now went past its first frame, but the picture was "all bugged" and the tester thinks it froze near the end. Capture `shot_2373.png`: the whole screen is green and magenta blocks with some structure. Session: about 111 s, title screen and movie only.
+
+**From the log:**
+- **log83 worked as meant.** `[AWISR]`: 27-54 interrupts per 5 s met by the walker, all served by a waiting guest thread (the XAudio thread, the main thread, the NuSound workers), none timed out, none dropped. The walker waited 2-10 ms on average, 41 ms at most.
+- **No hard freeze.** Frames kept coming until the session ended (`frames.log` to replay 2461), but at about 3 a second: from 45 s on, 12-18 frames per 5 s, 260-360 ms each. The movie's video thread (`82826FF8`) held the guest turn 70-83 % of the time and ran 256-309 ms of guest code per frame (`[GSPIKE]`). At that rate the one-minute movie would take about ten. The movie's sound played, with gaps (`[AUDIOQ]` up to 997 ms empty per 10 s).
+- **Why the picture is wrong:** XenonRecomp has no case for some VMX operations. It writes the assembly comment and no code, so the operation does nothing. The whole generated output has about 8,600 such empty operations in 954 functions: mostly `vslh`, `vsrah`, `vsubshs` and `vspltish`, plus conditional traps, which are harmless when empty.
+  - The author's `patch_tcs360_movie_vmx.py` filled the twelve WMV functions that were known.
+  - Run 86's profile and the direct-call closure of the three movie thread entries reach 826 functions. 62 of them still have about 1,650 empty operations. They include:
+    - `8288B6D0`: `vctuxs`, `vpkswus` and `vpkuhus`, a float to 8-bit conversion, likely the colour output;
+    - the `82D9xxxx` and `82DAxxxx` family, likely motion compensation;
+    - `8291A558`, with 110;
+    - `82866770`: `vpkswss`, the sound's float to 16-bit output.
+  - About 100 more functions in the same ranges, mostly in `82DAxxxx`, have the same sizes and gaps. They are likely variants picked through function pointers.
+- **Range check:** no game thread outside the movie samples code in `0x8282`-`0x8299` or `0x82D9`-`0x82DF`. This holds in run 84 (gameplay) and in this run's menu part. Game threads only touch system calls in `0x8281xxxx` and `0x829Bxxxx`, which have none of these gaps.
+
+## Log 84: `0.0.90-log84`, empty VMX operations filled in the movie code
+
+- `workspace-tools/fill_tcs360_movie_ops.py` fills every empty operation of 26 kinds in two sets of functions:
+  - the movie libraries' ranges, `0x82814000`-`0x829A0000` and `0x82D90000`-`0x82E00000`;
+  - two movie functions outside them (`82E043C0`, `82E0B540`).
+- The 26 kinds: VMX `vslh vsrh vsrah vrlh vsrab vsubshs vaddshs vsubsbs vaddsbs vsububm vsubuhs vmaxsh vminsh vmaxuh vminuh vavguh vcmpgtsh vcmpequh vcmpgtsw vandc vaddsws vpkswss vpkshss vpkswus vpkuhus vspltish vctuxs`, the record forms of the compares, and `eqv` and `mulhd`.
+- Result: 5,153 operations in 164 functions, in 15 generated files. Conditional traps stay empty.
+- Each inserted line ends in `// fill`, and `--revert` removes them. After a revert, `tools/generated_output.py check target` passes again; this was checked. While the fill is applied, that check reports those 15 files as changed.
+- **Register order.** Vector registers hold their bytes reversed, so element-wise operations work lane by lane. Two-source packs take their sources in the opposite order, as the generator's own `vpkshus` does.
+- **Non-volatile registers.** A non-volatile register that only omitted operations used becomes a fresh local, as in the author's `v14` case.
+- **Check on the PC:** `tests/fill_ops_check.py` builds the exact emitted lines with clang. It compares them with a reference written in PowerPC element order on 485 inputs (random values, edge values, and floats with NaN, denormals and out-of-range values), with the destination both separate and equal to a source, plus the compares' CR6 bits. Result: 60 cases, all equal.
+- **Not done:** speed.
+  - The video thread's samples, by guest instruction: about 20 % in VMX arithmetic (`vaddshs`, `vsrah`, `vsubshs`, `vslh`, `vcmpgtsh`), about 13 % in byte loops (`lbz`/`stb` in `828C38C0`/`828C2F60`), and 6 % waiting. No single hot spot.
+  - A tenfold gap is not something a fill or a micro-optimisation closes. It needs a native decoder or a much faster recompiled path.
+  - The backlog says "no decoder install authorized", so that is a decision for the author and the tester.
+- **Test:** handheld. Leave the title screen idle until the movie plays. Check whether the picture is now correct, even though slow, and whether the sound is clean. Then press a button and start a level. The movie will still be slow (about 3 frames a second, unless the garbage itself cost time).

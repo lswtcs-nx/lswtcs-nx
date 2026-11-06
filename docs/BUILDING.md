@@ -118,6 +118,14 @@ the existing preserved baseline for315 changed files; it is not a fresh-codegen
 test. Do not also run the older sentinel/movie generated-source patches: their
 current results are already represented by this cumulative delta.
 
+Since log84, also fill the VMX operations the generator left empty in the movie
+libraries. After this, `generated_output.py check` reports 15 files as changed;
+`--revert` removes the fill.
+
+```sh
+python workspace-tools/fill_tcs360_movie_ops.py "source/Convert 360/LSWTCS/output"
+```
+
 Then, from `source/`, run `python tools/gen_native_reverb.py` to generate the
 excluded game-derived reverb include from your local patched output. Generated
 source, PCH, objects and binaries remain private.

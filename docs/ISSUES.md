@@ -55,7 +55,14 @@ or import another game's memory offsets/decoder as a symptom fix.
 Run 85 (log82): with A/B state I the movie stopped after its first frame on a
 black screen. The ring walker thread dropped XMedia's surface-retire GPU
 interrupt (callback 0x82815910). Log83 hands those interrupts to a waiting
-guest thread; see RUN2_FINDINGS.md "Run 85". Untested on hardware.
+guest thread; see RUN2_FINDINGS.md "Run 85".
+
+Run 86 (log83): the movie played on, but as green/magenta blocks and at about
+3 frames a second. The decoder still ran through about 1,650 VMX operations
+that the generator left empty. Log84 fills them in the movie libraries
+(`workspace-tools/fill_tcs360_movie_ops.py`, checked on the PC by
+`tests/fill_ops_check.py`); see "Log 84". Untested on hardware. The speed
+remains open: it needs a native decoder or a much faster path.
 
 ## 4. Guest PCR overwrite / allocator overlap
 

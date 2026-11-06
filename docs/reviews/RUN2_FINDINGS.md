@@ -3455,3 +3455,31 @@ One launch, the usual route (the hub, `Gungan_A`, `Gungan_B`'s heavy part, the h
 - **-O3 and the one-TBL reversal:** 151 ns per guest call (90 %: 151-153) in the base state's windows, against run 93's 152 (152-153, same state). No measurable change. Both stay: they are exact, and PGO (build 2) is tuned on top of them.
 - **In v's windows: 157 ns per call** (156-158). A faster GPU may slow the CPU's memory accesses (shared LPDDR4), or the windows fell on different scenes (118-167 k calls per replay against 146-173 k). Not resolved.
 - **`[TLBBENCH]`:** 191.1 / 198.1 (+3.7 %) / 201.3, as in runs 92-93.
+
+## Log 93: `0.0.99-log93-pgogen`, build 2 of 3: the PGO counting session; 460.8 MHz by default
+
+- **460.8 MHz is the handheld default** (run 94). `hw_monitor.cpp` asks for `0x92220008` once its services are open. 1.5 s later, and at every `[CLOCK]` sample, it checks the real clocks: in handheld at 460.8 MHz the memory must read 1331.2 MHz, or the original configuration goes back for the rest of the launch. This check is renut-nx's, technique only.
+  - `LSWTCS_GPUBOOST=0` keeps 307.2 MHz; state v then switches it per A/B state.
+  - It logs `[GPUCLK] default: ...` and `[GPUCLK] state v on: ...`.
+  - `env.txt` is back to one A/B state.
+- **PGO, generate** (`-DLSW_PGO=generate`, build folder `build-pgo`).
+  - The game code and the runtime are built with `-fprofile-generate=<private/pgo/profile> -fprofile-update=single -fno-profile-values -fprofile-info-section=gcov_info`.
+  - `source/lsw_pgo.cpp` streams every registered object (657) with `__gcov_info_to_gcda` into `sdmc:/lswtcs/pgo/lswtcs_<run id>.stream`. It writes every 3 minutes on a thread at priority 0x3F on core 2, and at exit. Each launch keeps one file, replaced by its latest snapshot.
+  - `[PGO]` lines report each snapshot.
+  - Method from sa2-nx's and renut-nx's docs; no code taken. GCC's `gcov.h` has no `extern "C"`: wrap the include.
+- **Merge on the PC:** `python tools/pgo_merge.py <folder with the .stream files>` runs `gcov-tool merge-stream`, then sets `runs` in object summaries the stream left at 0.
+- **Use:** reconfigure the same folder with `-DLSW_PGO=use` and rebuild.
+  - It must be the same folder: the `.gcda` names hold the object paths. `-fprofile-prefix-path` would need the folder with backslashes, since GCC compares Windows paths, and that does not survive make.
+  - The use flags are `-fprofile-correction -fprofile-partial-training`.
+  - Change no game or runtime code between generate and use.
+- **Sizes:**
+
+  | | Instrumented | Normal |
+  | --- | --- | --- |
+  | NRO | 246.6 MB | 117 MB |
+  | `.text` | 155.9 MB | 79.4 MB |
+  | `.data` + `.bss` | 115.9 MB | 43.3 MB |
+
+  About 160 MB more of the heap goes to the image, and the last run ended with 672 MB free. The build took about 50 minutes (2 jobs, new folder).
+- **Test (handheld or docked; FPS does not count):** play the usual route plus anything else normally played, about 10 minutes. Quit through the game's menu, not HOME, so the exit snapshot is written. Bring back `lswtcs/pgo/` with the logs.
+- **Not yet verified on the console:** that the snapshot writes. The `[PGO]` lines show it, or the error.

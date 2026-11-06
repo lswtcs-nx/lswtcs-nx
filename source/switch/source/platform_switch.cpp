@@ -22,6 +22,10 @@
 #include <new>
 
 extern "C" void lsw_gpu_boost_set(bool on);   // hw_monitor.cpp (log92, A/B state v)
+#ifdef LSW_PGO_GENERATE
+extern "C" void lsw_pgo_start(unsigned long long run_id);   // lsw_pgo.cpp (log93)
+extern "C" void lsw_pgo_exit();
+#endif
 static const char* g_launch_path = nullptr;   // argv[0] from the launcher (log91: "4k" in it selects 4 KB guest pages)
 #ifndef LSW_DEKO_BACKEND
 extern "C" void lsw_bo_check_init(uint64_t);
@@ -571,6 +575,9 @@ extern "C" bool lsw_switch_init() {
                (unsigned long long)(used >> 20), (unsigned long long)(top >> 20));
     }
     load_env_file(LSW_DATA_DIR "/env.txt");
+#ifdef LSW_PGO_GENERATE
+    lsw_pgo_start(g_run_id);   // log93: PGO counts to sdmc:/lswtcs/pgo (lsw_pgo.cpp)
+#endif
     {   // log91: an NRO whose file name contains "4k" (a copy, e.g. switch/lswtcs-4k.nro) gets the 4 KB guest page layout (as
         // LSWTCS_GUEST2MB=0), so one session can play the same place with log89's 2 MB layout and without it. log90 used L held at
         // start, which sphaira's launch does not allow. argv[0] is the path the launcher passes; it is printed so a log shows it.
@@ -744,6 +751,9 @@ int main(int argc, char** argv) {
     void* result = nullptr;
     if (pthread_join(t, &result) != 0) return 1;
     lsw_gpu_boost_set(false);   // log92: the handheld configuration back to the original before leaving (state v)
+#ifdef LSW_PGO_GENERATE
+    lsw_pgo_exit();
+#endif
     lsw_save_shutdown();
     const int rc = int(intptr_t(result));
     printf("[NX] main returning %d run=%016llX\n", rc, (unsigned long long)g_run_id);

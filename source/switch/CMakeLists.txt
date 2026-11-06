@@ -256,6 +256,31 @@ string(FIND "${_ctx_fold}" "#define LSW_ADDR_FOLD_FAST 1" _has_fold)
 if(NOT _has_fold EQUAL -1)
     target_compile_definitions(lswtcs PRIVATE LSW_ADDR_FOLD_FAST=1)
 endif()
+# log93: profile-guided optimisation of the game code and the runtime (build 2 and 3 of the plan in CPU_ROADMAP.md). Method from
+# sa2-nx's and renut-nx's docs (no code taken). generate: an instrumented NRO; source/lsw_pgo.cpp streams the counts to the SD
+# (sdmc:/lswtcs/pgo), tools/pgo_merge.py turns them into .gcda files in LSW_PGO_DIR. use: the optimised NRO. Generate and use
+# must be the SAME build folder (build-pgo): the .gcda names hold the object paths. (-fprofile-prefix-path would need the folder
+# with backslashes, as GCC compares Windows paths, which does not survive make.) The counts are game-derived:
+# LSW_PGO_DIR is under private/. Changing game or runtime code after the counting session drops the counts of what changed.
+set(LSW_PGO "" CACHE STRING "Profile-guided optimisation: generate, use, or empty")
+get_filename_component(_pgo_default "${CMAKE_CURRENT_SOURCE_DIR}/../../private/pgo/profile" ABSOLUTE)
+set(LSW_PGO_DIR "${_pgo_default}" CACHE PATH "Folder of the .gcda files")
+if(LSW_PGO STREQUAL "generate")
+    set(_pgo -fprofile-generate=${LSW_PGO_DIR} -fprofile-update=single
+        -fno-profile-values -fprofile-info-section=gcov_info)
+    target_compile_options(GameCode PRIVATE ${_pgo})
+    target_compile_options(lswtcs PRIVATE ${_pgo})
+    target_sources(lswtcs PRIVATE source/lsw_pgo.cpp)
+    target_compile_definitions(lswtcs PRIVATE LSW_PGO_GENERATE=1)
+    target_link_options(lswtcs PRIVATE -fprofile-generate=${LSW_PGO_DIR})
+elseif(LSW_PGO STREQUAL "use")
+    set(_pgo -fprofile-use=${LSW_PGO_DIR} -fprofile-correction
+        -fprofile-partial-training -fno-profile-values -Wno-missing-profile -Wno-coverage-mismatch)
+    target_compile_options(GameCode PRIVATE ${_pgo})
+    target_compile_options(lswtcs PRIVATE ${_pgo})
+elseif(NOT LSW_PGO STREQUAL "")
+    message(FATAL_ERROR "LSW_PGO must be generate, use, or empty")
+endif()
 # switch-mesa: glad (GL loader), EGL, glapi, nouveau DRM (devkitPro portlibs).
 # switch-mesa rebuilt with Mesa's shader disk cache (tools/build_mesa.sh) is preferred when present:
 # its libEGL/libglapi come first on the link path; it needs zlib. Else the stock devkitPro package.
@@ -315,9 +340,12 @@ if(LSW_DEKO_BACKEND)
     nx_generate_nacp(lswtcs.nacp NAME "TCS Deko Live" AUTHOR "LSWTCS port" VERSION "0.0.7")
 else()
     if(LSW_GUEST_NONVOLATILE)
-        set(LSW_NACP_VERSION "0.0.98-log92nv")
+        set(LSW_NACP_VERSION "0.0.99-log93nv")
     else()
-        set(LSW_NACP_VERSION "0.0.98-log92")
+        set(LSW_NACP_VERSION "0.0.99-log93")
+        if(LSW_PGO STREQUAL "generate")
+            set(LSW_NACP_VERSION "0.0.99-log93-pgogen")   # the instrumented NRO
+        endif()
     endif()
     nx_generate_nacp(lswtcs.nacp NAME "LSWTCS" AUTHOR "LSWTCS port" VERSION "${LSW_NACP_VERSION}")
 endif()

@@ -23,6 +23,11 @@ u32 g_gpu_fd;
 bool g_have_gpu_load;
 TsSession g_ts_soc, g_ts_pcb;
 bool g_ts_sessions;
+// log93: the official handheld configuration 0x92220008 (GPU 460.8 MHz) by default (run 94: +9.7 % in heavy frames, +27 % in
+// medium ones). LSWTCS_GPUBOOST=0 keeps the default 307.2 MHz. Reverted for good if the memory clock is seen to move (renut-nx's
+// check, technique only): in handheld, at 460.8 MHz the memory must stay at 1331.2 MHz.
+bool g_boost_default;
+bool g_boost_reverted;
 
 void init_services() {
     g_use_clkrst = hosversionAtLeast(8, 0, 0);
@@ -49,12 +54,19 @@ void init_services() {
     fflush(stdout);
 }
 
+double clock_mhz(ClockSource& c);
+}  // namespace
+extern "C" void lsw_gpu_boost_set(bool on);
+namespace {
+
 double clock_mhz(ClockSource& c) {
     u32 hz = 0;
     if (!g_have_clocks) return -1;
     const Result rc = g_use_clkrst ? (c.open ? clkrstGetClockRate(&c.session, &hz) : 1) : pcvGetClockRate(c.pcv, &hz);
     return R_SUCCEEDED(rc) ? hz / 1e6 : -1;
 }
+
+void boost_check(double gpu, double emc, bool handheld);
 
 void sample() {
     const double cpu = clock_mhz(g_clocks[0]), gpu = clock_mhz(g_clocks[1]), emc = clock_mhz(g_clocks[2]);
@@ -72,6 +84,7 @@ void sample() {
     u32 battery = 0;
     PsmChargerType charger = PsmChargerType_Unconnected;
     if (g_have_psm) { psmGetBatteryChargePercentage(&battery); psmGetChargerType(&charger); }
+    boost_check(gpu, emc, appletGetOperationMode() == AppletOperationMode_Handheld);
     ApmPerformanceMode mode = ApmPerformanceMode_Invalid;
     u32 config = 0;
     if (g_have_apm) {
@@ -85,8 +98,27 @@ void sample() {
     fflush(stdout);
 }
 
+void boost_check(double gpu, double emc, bool handheld) {
+    if (!g_boost_default || g_boost_reverted || !handheld || gpu < 460.0) return;
+    if (emc > 1330.0 && emc < 1333.0) return;
+    g_boost_reverted = true;
+    g_boost_default = false;
+    lsw_gpu_boost_set(false);
+    printf("[GPUCLK] memory at %.1f MHz with the GPU at %.1f: configuration reverted to the original for this launch\n", emc, gpu);
+}
+
 void monitor_main(void*) {
     init_services();
+    {
+        const char* e = getenv("LSWTCS_GPUBOOST");
+        g_boost_default = !(e && e[0] == '0');
+    }
+    printf("[GPUCLK] default: %s (LSWTCS_GPUBOOST)\n", g_boost_default ? "official handheld configuration 0x92220008, GPU 460.8 MHz" : "system default");
+    if (g_boost_default) {
+        lsw_gpu_boost_set(false);   // applies the default (see lsw_gpu_boost_set)
+        svcSleepThread(1500000000ll);   // the call returns before the clocks change
+        boost_check(clock_mhz(g_clocks[1]), clock_mhz(g_clocks[2]), appletGetOperationMode() == AppletOperationMode_Handheld);
+    }
     for (;;) {
         sample();
         svcSleepThread(int64_t(g_period_s) * 1000000000ll);
@@ -102,6 +134,7 @@ void monitor_main(void*) {
 extern "C" void lsw_gpu_boost_set(bool on) {
     static int current = -1;
     static u32 original = 0;
+    on = on || g_boost_default;   // log93: on by default; state v only matters with LSWTCS_GPUBOOST=0
     if (!g_have_apm || current == int(on)) return;
     if (current < 0 && R_FAILED(apmGetPerformanceConfiguration(ApmPerformanceMode_Normal, &original))) original = 0;
     const u32 want = on ? 0x92220008u : (original ? original : 0x00020003u);

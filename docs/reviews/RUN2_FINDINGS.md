@@ -3149,3 +3149,29 @@ Diagnostics only. Behaviour is log79's.
 - **12 device buffers** (64 ms; was 6, 32 ms). `LSWTCS_AUDIOBUFS` sets 4-16. This adds about 32 ms of audio latency.
 - **Storage made ahead off by default** (`LSWTCS_BOPOOLFILL=1` turns it on). The demand is still learned and saved.
 - **Test:** handheld, `Gungan_B`'s heavy part and an opening crawl, at high volume. Ask whether the audio still crackles or pops, and whether lip sync in cutscenes feels late. Read `[AUDIO]` limiter lines and `[AUDIOQ]` empties against run 84.
+
+
+## Run 85 (log82, handheld, 2026-11-06): the title-idle movie freezes on a black screen
+
+**Report:** the tester left the title screen idle. The attract movie (`DEMOINTRO.WMV`, see ISSUES.md #3) started, the screen went black and the game froze. The author says this was a known freeze in his last build. Session: about 200 s, title screen and menu only, no level.
+
+**From the log:**
+- The last replay is 2277, about 49 s in. It is the movie's first frame: `[ONETILE]` 1280x720, two new shaders, one 1280x720 and two 640x360 single-channel textures (the decoder's Y/U/V planes). No swap or replay follows.
+- `[SCHEDPROF]`: the main thread leaves the rotation. The movie's decoder thread (entry `82826FC8`) and a second movie thread (`82826FF8`) run until about 110 s, while the movie's sound plays (`[AUDIO]` peak 0.34-0.36). Then the sound stops (peak 0) and a third movie thread (`82827028`) holds the turn 96 % of the time: in `sub_82829000` it polls `KeWaitForSingleObject` with a timeout and calls `KeSetEvent` without end.
+- `hwprof.txt`: the main thread waits on `KeWaitForSingleObject` (null timeout) in `sub_82828418` < `sub_823BD3E0` < `sub_82318280` for the rest of the session. `[LONGWAIT]` prints only when a wait ends, so it never printed.
+- The runtime already names this hang (kernel_stubs.cpp, `LSWTCS_IBINT`): XMedia retires its three video surfaces from a GPU interrupt inside the movie's draw IBs (callback `0x82815910`). If that interrupt is dropped, the queue fills and the main thread waits for ever in `sub_82828418` with the movie workers asleep.
+- **Cause in this build:** state I (`MAPXSHNLUBIkhwregdq`, with k) walks the ring on the walker thread, and `pm4_fire_interrupt` drops every interrupt met there (`if (t_async_walker) { ++g_aw_isr_dropped; return; }`), because that thread has no guest context. In-game walks carry no interrupts (run 42; `[ASYNCWALK]` "interrupts dropped 0" in every report of this run), so this never showed in play. With k, every kick of the movie goes to the walker, so each surface-retire interrupt was dropped after the first frame.
+- Not proven: `[ASYNCWALK]` prints only on replays, so no line shows the drops during the movie. The author's freeze (no state I in his build) may have another cause; ISSUES.md #3 also lists corrupt movie pixels and a hang at playback end.
+
+## Log 83: `0.0.89-log83`, GPU interrupts from the walker thread
+
+- `pm4_fire_interrupt` on the walker thread (state I) no longer drops the interrupt. It hands it over (`aw_isr_hand`) and waits, up to 100 ms, for a guest thread to run it. The interrupt's record is in guest memory the rest of the ring may overwrite, so the walker does not read on meanwhile. It gives up the turn while it waits.
+- A guest thread that holds the turn runs it with its own live context (`aw_isr_service`), as VdSwap's walk did before state I:
+  - at the start of `KeWaitForSingleObject` (each 16 ms slice of an infinite wait, where the movie's main thread sits), `KeWaitForMultipleObjects`, `NtWaitForSingleObjectEx` and `KeDelayExecutionThread`;
+  - inside the loops that wait for the walker: `async_walk_join` (fence, ring, phase and VdSwap sites), `async_walk_try` and `ring_window_wait`.
+- If nobody takes it within 100 ms it is dropped as before and counted.
+- `LSWTCS_AWISR=0` restores the old dropping.
+- New log lines: `[AWISR] interrupt #N ... served by guest thread` (first 5), and every 5 s, from the XMA thread so it prints without replays: `[AWISR] 5 s: interrupts met by the walker, served, timed out, walker wait avg/max, dropped since boot`.
+- Gameplay should not change: no interrupts were met by the walker in play.
+- Risk: the interrupt now runs on whichever guest thread waits, for example a movie worker. On the 360 it also preempts any thread. If movie playback now continues, the next known faults are ISSUES.md #3's: corrupt pixels, and the hang at playback end (thread `82827028`'s loop may be that hang, or a consequence of the full queue).
+- **Test:** handheld. Leave the title screen idle until the movie plays, and let it run to the end. Then press a button and start a level. Ask whether the movie shows a picture, whether the picture is correct, and whether the game returns to the title or menu at the end.

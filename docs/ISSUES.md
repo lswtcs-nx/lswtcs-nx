@@ -52,6 +52,11 @@ Need the same frame's decoder-ready bytes, plane strides/format, upload input an
 displayed output, plus ring reset/callback/event completion. Do not skip the movie
 or import another game's memory offsets/decoder as a symptom fix.
 
+Run 85 (log82): with A/B state I the movie stopped after its first frame on a
+black screen. The ring walker thread dropped XMedia's surface-retire GPU
+interrupt (callback 0x82815910). Log83 hands those interrupts to a waiting
+guest thread; see RUN2_FINDINGS.md "Run 85". Untested on hardware.
+
 ## 4. Guest PCR overwrite / allocator overlap
 
 Guest PCR memory at0x88010000 was overwritten; allocator ownership domains can

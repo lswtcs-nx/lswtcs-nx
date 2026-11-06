@@ -450,14 +450,15 @@ enum { WALK_FENCE, WALK_RING, WALK_PHASE, WALK_SWAP, WALK_SITES };
 static void pm4_walk_site(void* ctxp, int site);
 static bool walk_fence_note(uint32_t fence, uint32_t put, uint32_t get);
 static void walk_fence_after(uint32_t fence, uint32_t put, uint32_t get);
-static bool async_walk_try(uint32_t fence, uint32_t put);
+static bool async_walk_try(uint32_t fence, uint32_t put, PPCContext* isr_ctx);
 static bool async_walk_running();
-static bool ring_window_wait(uint32_t dev, uint32_t start, uint32_t len);
+static bool ring_window_wait(uint32_t dev, uint32_t start, uint32_t len, PPCContext* isr_ctx);
+static void aw_isr_service(PPCContext& ctx);   // log83: run a GPU interrupt the walker thread met (state I)
 static uint64_t g_aw_phase_skips = 0;
 // [ASYNCWALK] IB work by thread (top-level IBs, wall time): 0 the main thread, 1 the walker, 2 any other. Run 46: by the walk counters
 // the walker did the walk in state I, yet the main thread's sampled share of walk code (record path, page hashes) barely fell.
 static std::atomic<uint64_t> g_ib_ns[3];
-static void async_walk_join(int site);
+static void async_walk_join(int site, PPCContext* isr_ctx = nullptr);
 // The D3D device seen at fence waits, and its put (next segment fence) when the last walk with work ended: a fence below it had its
 // segment in the ring then, so that walk already read it.
 static uint32_t g_fence_dev = 0, g_put_at_walk = 0;
@@ -491,7 +492,7 @@ extern "C" void ppc_ringbuf_advance_get(uint8_t* base, uint32_t gpu_obj_addr, vo
         walk_fence_note(static_cast<PPCContext*>(ctxp)->r4.u32, PPC_LOAD_U32(gpu_obj_addr + 10908), PPC_LOAD_U32(PPC_LOAD_U32(gpu_obj_addr + 10896)));
     // State I: the awaited fence's segment was read by an earlier walk (run 41: 9558 of 9559 waits), so this wait does not need the
     // walk; the walker thread does it while the game goes on, and the next walk or VdSwap waits for it.
-    if (!(noted && async_walk_try(static_cast<PPCContext*>(ctxp)->r4.u32, PPC_LOAD_U32(gpu_obj_addr + 10908))))
+    if (!(noted && async_walk_try(static_cast<PPCContext*>(ctxp)->r4.u32, PPC_LOAD_U32(gpu_obj_addr + 10908), static_cast<PPCContext*>(ctxp))))
         pm4_walk_site(ctxp, WALK_FENCE);   // consume what was submitted before claiming the GPU caught up
     if (noted) walk_fence_after(static_cast<PPCContext*>(ctxp)->r4.u32, PPC_LOAD_U32(gpu_obj_addr + 10908), PPC_LOAD_U32(PPC_LOAD_U32(gpu_obj_addr + 10896)));
     static int mode = -1; if (mode < 0) { const char* e = getenv("LSWTCS_GETMODE"); mode = e ? atoi(e) : 1; }
@@ -531,7 +532,7 @@ extern "C" void lswtcs_ad778_get(uint8_t* base, uint32_t dev, uint32_t start, vo
     static int on = -1;
     if (on < 0) { const char* e = getenv("LSWTCS_GETPHASE"); on = (!e || e[0] != '0') ? 1 : 0; }
     if (!on) return;
-    if (ctxp && ring_window_wait(dev, start, static_cast<PPCContext*>(ctxp)->r5.u32)) return;   // state r: the reader is past the window
+    if (ctxp && ring_window_wait(dev, start, static_cast<PPCContext*>(ctxp)->r5.u32, static_cast<PPCContext*>(ctxp))) return;   // state r: the reader is past the window
     pm4_walk_site(ctxp, WALK_RING);   // ring-space wait: consume the ring so the window really is free
     uint32_t mirror = PPC_LOAD_U32(dev + 10896);
     if (mirror >= 0x80000000u)   // GPU physical space (0xA0xxxxxx) — no upper bound
@@ -3026,6 +3027,7 @@ PPC_FUNC(sub_8250D550) {
 }
 PPC_FUNC(__imp__NtWaitForSingleObjectEx) {
     PPC_FUNC_PROLOGUE();
+    aw_isr_service(ctx);
     LswLongWait long_wait("NtWaitForSingleObjectEx", ctx, base, ctx.r3.u32, guest_timeout_ms(base, ctx.r6.u32));
     // r3=handle, r6=*timeout (int64 100ns; negative=relative from now)
     // Switch: replace with nn::os::WaitEvent / svcWaitSynchronization
@@ -3206,6 +3208,7 @@ PPC_FUNC(__imp__KeWaitForSingleObject) {
         // consumer event handshakes. Yield in bounded slices, but never report a
         // timeout to a caller which did not request one.
         do {
+        aw_isr_service(ctx);   // log83: each 16 ms slice of a long wait (the movie's main thread waits here)
         if (gil_on() && blockwait_on()) {
             signaled = PPC_LOAD_U32(ptr + 4) != 0;
             if (!signaled) {
@@ -3258,6 +3261,7 @@ PPC_FUNC(__imp__KeWaitForMultipleObjects) {
     static int on = -1;
     if (on < 0) { const char* e = getenv("LSWTCS_KEWAITMULTI"); on = (e && e[0] == '0') ? 0 : 1; }
     if (!on) { ctx.r3.u32 = 0; return; }
+    aw_isr_service(ctx);
     uint32_t count = ctx.r3.u32, arr = ctx.r4.u32;
     bool wait_all = (ctx.r5.u32 == 0);
     uint32_t tptr = ctx.r9.u32;
@@ -6361,10 +6365,52 @@ static void pm4_dump_state() {
 // Fire graphics interrupt for each set bit in cpu_mask.
 // g_interrupt_ctx must be set by the caller (VdSwap sets it around pm4_process_ring).
 static uint64_t g_isr_fired = 0, g_isr_ns = 0, g_aw_isr_dropped = 0;   // [WALKWHY]: guest interrupt callbacks run from walks, and their time
+// log83: GPU interrupts met by the walker thread (state I). Run 85: the title-idle movie (DEMOINTRO.WMV) froze on a black screen.
+// XMedia retires its three video surfaces from a GPU interrupt in the movie's draw IBs (callback 0x82815910); state I walks the ring
+// on a thread with no guest context and dropped every interrupt there, so after the first frame the queue stayed full and the main
+// thread waited for ever in sub_82828418. In-game walks carry no interrupts (run 42, [ASYNCWALK] "interrupts dropped 0").
+// Now the walker hands the interrupt to the next guest thread that enters a wait stub or waits for the walker, which runs it with its
+// own live context (as VdSwap's walk did before state I), and waits for that, up to 100 ms, before reading on: the interrupt's
+// record is in memory the rest of the ring may overwrite. If nobody takes it in time it is dropped as before.
+// LSWTCS_AWISR=0 restores dropping.
+static std::atomic<bool> g_aw_isr_req{false};
+static std::atomic<uint32_t> g_aw_isr_mask{0};
+static std::atomic<uint64_t> g_aw_isr_served{0};
+static uint64_t g_aw_isr_handed = 0, g_aw_isr_timeouts = 0, g_aw_isr_wait_ns = 0, g_aw_isr_wait_max = 0;
+static thread_local bool t_isr_serving = false;
+static bool aw_isr_on() {
+    static const bool on = [] { const char* e = getenv("LSWTCS_AWISR"); return !(e && e[0] == '0'); }();
+    return on;
+}
+static bool aw_isr_hand(uint32_t cpu_mask) {   // on the walker thread
+    if (!aw_isr_on() || !gil_on()) return false;
+    const uint64_t t0 = gp_now(), gen = g_aw_isr_served.load();
+    g_aw_isr_mask.store(cpu_mask);
+    g_aw_isr_req.store(true);
+    ++g_aw_isr_handed;
+    bool served = false;
+    for (;;) {
+        if (g_aw_isr_served.load() != gen) { served = true; break; }
+        if (gp_now() - t0 > 100000000ull) {
+            bool expect = true;
+            if (g_aw_isr_req.compare_exchange_strong(expect, false)) break;   // nobody took it: dropped
+            while (g_aw_isr_served.load() == gen) std::this_thread::sleep_for(std::chrono::microseconds(20));   // taken: let it finish
+            served = true;
+            break;
+        }
+        if (!t_walk_off && g_sched_id >= 0 && g_sched_turn == g_sched_id) sched_yield_turn();   // let a guest thread have the turn
+        std::this_thread::sleep_for(std::chrono::microseconds(20));
+    }
+    const uint64_t w = gp_now() - t0;
+    g_aw_isr_wait_ns += w;
+    if (w > g_aw_isr_wait_max) g_aw_isr_wait_max = w;
+    if (!served) ++g_aw_isr_timeouts;
+    return served;
+}
 static void pm4_fire_interrupt(uint32_t cpu_mask) {
     if (!g_gfx_interrupt_callback) return;
-    ++g_isr_fired;
-    if (t_async_walker) { ++g_aw_isr_dropped; return; }   // state I: no guest context here; run 42 saw no interrupt from a walk
+    if (!t_isr_serving) ++g_isr_fired;
+    if (t_async_walker) { if (!aw_isr_hand(cpu_mask)) ++g_aw_isr_dropped; return; }   // state I: no guest context here (log83: handed over)
     struct IsrTime { uint64_t t0 = gp_now(); ~IsrTime() { g_isr_ns += gp_now() - t0; } } isr_time;
     if (!g_interrupt_ctx) { ++g_isr_lost; return; }
     WalkNeedsTurn need_turn;   // runs the guest ISR (and may drain tile lists)
@@ -6688,6 +6734,22 @@ extern "C" void lsw_walkoff_report() {
     const uint32_t rbd = g_rb_size >> 2, w = PPC_LOAD_U32(0x7FC80714u) % rbd, r = g_rb_rptr_dwords % rbd;
     // Not before the first walk has run since boot (runs 17: the menu's ring sat at 25/22 for 10 s with nothing wrong).
     const bool stuck = end && ms_now - end > 3000 && w != r && g_wo_ibs.load() + g_walk_waits.load() > 0;
+    {
+        static uint64_t l_handed = 0, l_served = 0, l_to = 0, l_wns = 0;
+        const uint64_t served = g_aw_isr_served.load();
+        if (g_aw_isr_handed != l_handed || g_aw_isr_dropped) {
+            static uint64_t l_drop = ~0ull;
+            if (g_aw_isr_handed != l_handed || g_aw_isr_dropped != l_drop) {
+                const uint64_t h = g_aw_isr_handed - l_handed;
+                printf("[AWISR] 5 s: interrupts met by the walker %llu, served by a guest thread %llu, timed out %llu, walker waited %.2f ms avg %.2f max | dropped since boot %llu\n",
+                       (unsigned long long)h, (unsigned long long)(served - l_served), (unsigned long long)(g_aw_isr_timeouts - l_to),
+                       h ? (g_aw_isr_wait_ns - l_wns) / 1e6 / h : 0.0, g_aw_isr_wait_max / 1e6, (unsigned long long)g_aw_isr_dropped);
+                g_aw_isr_wait_max = 0;
+                l_drop = g_aw_isr_dropped;
+            }
+            l_handed = g_aw_isr_handed; l_served = served; l_to = g_aw_isr_timeouts; l_wns = g_aw_isr_wait_ns;
+        }
+    }
     static int stuck_lines = 0;
     if (stuck && stuck_lines >= 20) return;
     if (!d[0] && !stuck && !d[5] && !d[8] && !d[10]) return;
@@ -6798,6 +6860,25 @@ static std::condition_variable g_aw_cv;
 static std::atomic<bool> g_aw_pending{false}, g_aw_busy{false};
 static int g_aw_sid = -1;
 static uint64_t g_aw_kicks = 0, g_aw_walks = 0, g_aw_walk_ns = 0, g_aw_joins[WALK_SITES + 1], g_aw_join_ns[WALK_SITES + 1];
+// log83: on a guest thread that holds the turn, in a wait stub or waiting for the walker: run the interrupt the walker handed over.
+static void aw_isr_service(PPCContext& ctx) {
+    if (!g_aw_isr_req.load(std::memory_order_relaxed) || t_async_walker || t_isr_serving || t_walk_off) return;
+    if (!gil_on() || g_sched_id < 0 || g_sched_turn != g_sched_id) return;
+    bool expect = true;
+    if (!g_aw_isr_req.compare_exchange_strong(expect, false)) return;
+    t_isr_serving = true;
+    PPCContext* saved = g_interrupt_ctx;
+    g_interrupt_ctx = &ctx;
+    pm4_fire_interrupt(g_aw_isr_mask.load());
+    g_interrupt_ctx = saved;
+    t_isr_serving = false;
+    const uint64_t n = g_aw_isr_served.fetch_add(1) + 1;
+    if (n <= 5) {
+        printf("[AWISR] interrupt #%llu from the walker served by guest thread %d (entry %08X), lr %08X\n", (unsigned long long)n, g_sched_id,
+               g_sched_id < LSW_SCHED_MAX ? g_sp_entry[g_sched_id] : 0u, (uint32_t)ctx.lr);
+        fflush(stdout);
+    }
+}
 static void async_walker_body(int id) {
     t_async_walker = true;
     g_sched_id = id;
@@ -6860,7 +6941,7 @@ static bool seg_read(uint32_t fence) {
 static std::atomic<int> g_ring_early_on{0};
 extern "C" void lsw_ring_early_set(int on) { g_ring_early_on.store(on, std::memory_order_relaxed); }
 static uint64_t g_ring_early_hits = 0, g_ring_early_fallbacks = 0;
-static bool ring_window_wait(uint32_t dev, uint32_t start, uint32_t len) {
+static bool ring_window_wait(uint32_t dev, uint32_t start, uint32_t len, PPCContext* isr_ctx) {
     if (!g_ring_early_on.load(std::memory_order_relaxed) || t_async_walker || !async_walk_running() || !g_rb_size ||
         !g_walk_pos_set.load(std::memory_order_relaxed))
         return false;
@@ -6873,6 +6954,7 @@ static bool ring_window_wait(uint32_t dev, uint32_t start, uint32_t len) {
     ++g_aw_joins[WALK_RING];
     uint32_t pos = g_walk_pos.load(std::memory_order_relaxed) % rbd;
     while (async_walk_running() && inside(pos)) {
+        if (isr_ctx) aw_isr_service(*isr_ctx);
         if (gil_on() && g_sched_id >= 0) sched_yield_turn();   // the walker may be waiting for the turn
         std::this_thread::sleep_for(std::chrono::microseconds(20));
         pos = g_walk_pos.load(std::memory_order_relaxed) % rbd;
@@ -6883,17 +6965,18 @@ static bool ring_window_wait(uint32_t dev, uint32_t start, uint32_t len) {
     ++g_ring_early_hits;
     return true;
 }
-static void async_walk_join(int site) {
+static void async_walk_join(int site, PPCContext* isr_ctx) {
     if (t_async_walker || (!g_aw_busy.load() && !g_aw_pending.load())) return;
     const uint64_t t0 = gp_now();
     ++g_aw_joins[site];
     while (g_aw_busy.load() || g_aw_pending.load()) {
+        if (isr_ctx) aw_isr_service(*isr_ctx);   // log83: the walker may be waiting for us to run an interrupt
         if (gil_on() && g_sched_id >= 0) sched_yield_turn();   // the walker may be waiting for the turn
         std::this_thread::sleep_for(std::chrono::microseconds(20));
     }
     g_aw_join_ns[site] += gp_now() - t0;
 }
-static bool async_walk_try(uint32_t fence, uint32_t put) {
+static bool async_walk_try(uint32_t fence, uint32_t put, PPCContext* isr_ctx) {
     if (!g_async_walk_on.load(std::memory_order_relaxed) || !gil_on() || g_sched_id < 0) return false;
     auto done = [fence] { const uint32_t d = g_put_done.load(); return (d && int32_t(d - fence) > 0) || seg_read(fence); };
     if (!done()) {   // the fence's segment is not fully read: if the walker is on it, wait until it has passed it; else walk here
@@ -6915,6 +6998,7 @@ static bool async_walk_try(uint32_t fence, uint32_t put) {
         if (g_kick_mark_n) g_fw_since_kick_ns += t0 - g_kick_marks[(g_kick_mark_n - 1) & 63].t;
         if (const uint64_t w0 = g_aw_walk_t0.load()) g_fw_walk_age_ns += t0 > w0 ? t0 - w0 : 0;
         while (async_walk_running() && !done()) {
+            if (isr_ctx) aw_isr_service(*isr_ctx);
             if (gil_on() && g_sched_id >= 0) sched_yield_turn();   // the walker may be waiting for the turn
             std::this_thread::sleep_for(std::chrono::microseconds(20));
         }
@@ -6962,7 +7046,7 @@ static void async_walk_kick() {
     ++g_aw_kick_handoffs;
 }
 static void pm4_walk_site(void* ctxp, int site) {
-    async_walk_join(site);
+    async_walk_join(site, static_cast<PPCContext*>(ctxp));
     const uint64_t t0 = gp_now();
     const uint32_t r0 = g_rb_rptr_dwords;
     pm4_walk_now(ctxp);
@@ -7581,7 +7665,7 @@ PPC_FUNC(__imp__VdSwap) {
             } else {
                 const bool nodrain = wo && g_swap_nodrain.load(std::memory_order_relaxed);
                 if (nodrain) ++g_wo_swap_nodrain;
-                async_walk_join(WALK_SITES);   // VdSwap: the frame's walk must be done
+                async_walk_join(WALK_SITES, &ctx);   // VdSwap: the frame's walk must be done
                 g_interrupt_ctx = &ctx;
                 const uint64_t walk_t0 = gp_now();
                 const uint32_t walk_r0 = g_rb_rptr_dwords;
@@ -8713,6 +8797,7 @@ PPC_FUNC(__imp__KeDelayExecutionThread) {
     // DIAG (LSWTCS_DELAYLOG=1): guest sleeps per caller (lr) every 5 s as [DELAY]: count, requested ms, real ms.
     static const bool delaylog = [] { const char* e = getenv("LSWTCS_DELAYLOG"); return e && e[0] == '1'; }();
     const auto d0 = delaylog ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+    aw_isr_service(ctx);
     uint32_t want_ms = 0;
     if (gil_on() && blockwait_on()) {
         uint32_t ms = guest_timeout_ms(base, ctx.r5.u32, 1u);

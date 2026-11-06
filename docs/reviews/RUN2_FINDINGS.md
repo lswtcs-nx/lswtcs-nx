@@ -3240,3 +3240,24 @@ Diagnostics only. Behaviour is log79's.
   - `[GTHREAD]`: every guest thread start and exit, up to 300.
   - Both go to the SD card at once (`lsw_log_async_drain`), so the next log shows how far a skip gets before the process ends.
 - **Test:** handheld. Let the movie play, and check whether the picture is now whole, even if slow. Then press a button to skip it. If the game ends, note what the screen shows (an error code? a return to the HOME menu?). Bring the newest file in `atmosphere/crash_reports` and `atmosphere/fatal_reports` from the SD card, if there is one.
+
+
+## Run 88 (log85, handheld, 2026-11-06): black screen again, the movie's sound plays, skipping does nothing
+
+**Report:** the screen stayed black while the movie's music played. The skip button did nothing. There was no crash this time.
+
+**From the log:**
+- `[AWDEFER]`: only two interrupts were queued in the whole session.
+  - The first ran after 133 ms.
+  - The second ran late, after 502 ms: "frames published 2296, textures read to 2295". Frame 2296 was published but never replayed.
+  - No third interrupt came. The decoder thread (`82826FF8`) then waited for a surface for the rest of the session (`sub_82827918`, 98 % of its samples), as in run 85. From about 115 s, the third movie thread (`82827028`) held 96 % of the turn.
+- **Circular wait.** A frame is published when its swap packet is read: by the walker, or by the next VdSwap's walk. The render thread only replays when the game's next VdSwap posts a frame (`gpu_d3d12_present`). So the movie's main thread waited for a decoded frame, the decoder waited for a free surface, the surface's interrupt waited for the replay, and the replay waited for the next VdSwap. Only the 500 ms cap broke the cycle.
+- **Why it stopped for good.** log85 wrote all mirrored scratch registers (0, 1, 4 and 5) back before each queued interrupt. The D3D ISR (`sub_822ADA00`) reads only register 0 (CPUs still to acknowledge), 4 (callback) and 5 (argument). Register 1 is written by the VBlank path (`sub_822B7898`). A 500 ms-old value there is the likely reason nothing moved after the second interrupt. This is inferred from the code, not traced.
+- **The skip.** No `[PAD]` line in the whole session. With the main thread stuck waiting for the movie, nothing polls the pad, so a press cannot reach the game. The music played to the end (`[AUDIO]` peak 0.33-0.36, then 0 from about 110 s).
+
+## Log 86: `0.0.92-log86`
+
+- **Only registers 0, 4 and 5** are written back before a queued interrupt runs.
+- **Replay on request.** When a frame is published while interrupts are queued, kernel_stubs.cpp calls `lsw_gpu_replay_request` (gl_backend.cpp). It posts one more frame to the render thread without a guest swap, so the render thread replays what was just published and reports its textures as read. The game's next present waits for that replay like any other (`LSWTCS_RTSYNC`).
+- `[AWDEFER]` adds a count of replays asked.
+- **Test:** the same as log85. Let the movie play, check whether the picture is whole (even if slow), then press a button and say what happens.

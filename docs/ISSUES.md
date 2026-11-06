@@ -69,7 +69,14 @@ Likely cause: the surface-retire interrupt ran when the walker read it, before
 the renderer read the surface, so the decoder was already rewriting it. Log85
 queues those interrupts until the frame is replayed. Skipping the movie ends the
 process with no handler output; log85 logs presses and guest thread exits.
-Both are untested on hardware.
+
+Run 88 (log85): black screen again after two frames. The render thread only
+replays on the game's next VdSwap, which waited for the movie, so the queued
+interrupt waited 500 ms. Writing back scratch register 1, which belongs to
+VBlank, likely stopped the movie for good. No pad press reached the game,
+because nothing polls the pad while the main thread waits. Log86 writes back
+only registers 0, 4 and 5, and requests a replay when a frame is published
+while interrupts wait. Untested on hardware.
 
 ## 4. Guest PCR overwrite / allocator overlap
 

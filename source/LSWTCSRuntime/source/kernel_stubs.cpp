@@ -456,6 +456,9 @@ static bool ring_window_wait(uint32_t dev, uint32_t start, uint32_t len, PPCCont
 static void aw_isr_service(PPCContext& ctx);   // log83: run a GPU interrupt the walker thread met (state I)
 // log85: frames published at VdSwap, and the newest frame whose textures the renderer has read (lsw_replay_textures_read).
 static std::atomic<uint64_t> g_pub_serial{0}, g_tex_done_serial{0};
+static bool aw_defer_pending();   // log86: queued walker interrupts are waiting for a replay
+extern "C" __attribute__((weak)) void lsw_gpu_replay_request();   // gl_backend.cpp (log86)
+static uint64_t g_replay_requests = 0;
 static uint64_t g_aw_phase_skips = 0;
 // [ASYNCWALK] IB work by thread (top-level IBs, wall time): 0 the main thread, 1 the walker, 2 any other. Run 46: by the walk counters
 // the walker did the walk in state I, yet the main thread's sampled share of walk code (record path, page hashes) barely fell.
@@ -4479,6 +4482,10 @@ static void geom_swap_packet(uint32_t swap_fb) {
 #endif
         if (g_gpu_frame_ready) gpu_shm_carry_uploads(g_gpu_frame_present, g_gpu_frame_build);
         std::swap(g_gpu_frame_build, g_gpu_frame_present); g_gpu_frame_build.clear(); g_gpu_frame_ready = true; ++g_shm_frame; }
+    // log86: run 88 stopped after two movie frames. A frame is published here, when its swap packet is read, but the render thread
+    // only replays when the game's next VdSwap posts a frame; the movie's main thread waited for a decoded frame, the decoder for a
+    // free surface, and the surface's interrupt for the replay. While interrupts wait, ask for a replay of what was just published.
+    if (aw_defer_pending() && lsw_gpu_replay_request) { lsw_gpu_replay_request(); ++g_replay_requests; }
     if (g_geom_vert_count == 0) return;   // duplicate swap marker with nothing drawn: keep last frame
     geom_publish();
     geom_reset_build();
@@ -6447,6 +6454,7 @@ static bool aw_defer_on() {
     static const bool on = [] { const char* e = getenv("LSWTCS_AWDEFER"); return !(e && e[0] == '0'); }();
     return on;
 }
+static bool aw_defer_pending() { return g_awq_any.load(std::memory_order_relaxed); }
 static bool aw_isr_defer(uint32_t cpu_mask) {   // on the walker thread
     if (!aw_defer_on() || !gil_on() || g_xe_regs[0x57C] == 0x822D2BA0u) return false;
     AwIsrDeferred d;
@@ -6817,10 +6825,10 @@ extern "C" void lsw_walkoff_report() {
             size_t pending;
             { std::lock_guard<std::mutex> lk(g_awq_mtx); pending = g_awq.size(); }
             const uint64_t s = g_awq_served - l_s;
-            printf("[AWDEFER] 5 s: interrupts queued %llu, run %llu (late %llu), waited %.1f ms avg %.1f max, pending %zu (peak %zu) | frames published %llu, textures read to %llu\n",
+            printf("[AWDEFER] 5 s: interrupts queued %llu, run %llu (late %llu), waited %.1f ms avg %.1f max, pending %zu (peak %zu) | frames published %llu, textures read to %llu, replays asked %llu\n",
                    (unsigned long long)(g_awq_queued - l_q), (unsigned long long)s, (unsigned long long)(g_awq_late - l_late),
                    s ? (g_awq_wait_ns - l_w) / 1e6 / s : 0.0, g_awq_wait_max / 1e6, pending, g_awq_peak,
-                   (unsigned long long)g_pub_serial.load(), (unsigned long long)g_tex_done_serial.load());
+                   (unsigned long long)g_pub_serial.load(), (unsigned long long)g_tex_done_serial.load(), (unsigned long long)g_replay_requests);
             g_awq_wait_max = 0;
             l_q = g_awq_queued; l_s = g_awq_served; l_late = g_awq_late; l_w = g_awq_wait_ns;
         }
@@ -6954,9 +6962,12 @@ static void aw_defer_serve(PPCContext& ctx) {
             g_awq.pop_front();
             if (g_awq.empty()) g_awq_any.store(false);
         }
+        // Only the registers the D3D ISR (sub_822ADA00) reads: 0 (CPUs still to acknowledge), 4 (callback) and 5 (its argument).
+        // log85 put back all mirrored ones; register 1 is the VBlank path's (sub_822B7898 writes it), and an old value there
+        // stopped the movie for good in run 88.
         const uint32_t sa = g_gfx_interrupt_data ? PPC_LOAD_U32(g_gfx_interrupt_data + 10900) : 0;
         if (sa >= 0x82000000u && sa < 0xC0000000u)
-            for (uint32_t i = 0; i < 8; ++i)
+            for (uint32_t i : {0u, 4u, 5u})
                 if (d.umsk & (1u << i)) PPC_STORE_U32(sa + i * 4, d.regs[i]);
         t_isr_serving = true;
         PPCContext* saved = g_interrupt_ctx;

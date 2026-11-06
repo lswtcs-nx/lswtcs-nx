@@ -5614,5 +5614,11 @@ void gpu_d3d12_present(uint8_t*, uint32_t, uint32_t, uint32_t, uint32_t) {
     appletMainLoop();   // HOME / exit requests
 }
 bool gpu_d3d12_poll() { return appletMainLoop(); }
+// log86 (kernel_stubs.cpp): one more replay without a guest swap, so a frame published while GPU interrupts wait for it is read.
+// The game's next present waits for it like any other (LSWTCS_RTSYNC).
+extern "C" void lsw_gpu_replay_request() {
+    { std::lock_guard<std::mutex> lk(g_mtx); ++g_frames_posted; }
+    g_cv.notify_all();
+}
 extern "C" void lswtcs_set_pending_shad(const char*) {}
 extern "C" int lswtcs_pathb_compile(const char*, uint32_t) { return 0; }   // Path-B HLSL compile (D3D12 only)

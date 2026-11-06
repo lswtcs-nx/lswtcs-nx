@@ -61,8 +61,15 @@ Run 86 (log83): the movie played on, but as green/magenta blocks and at about
 3 frames a second. The decoder still ran through about 1,650 VMX operations
 that the generator left empty. Log84 fills them in the movie libraries
 (`workspace-tools/fill_tcs360_movie_ops.py`, checked on the PC by
-`tests/fill_ops_check.py`); see "Log 84". Untested on hardware. The speed
-remains open: it needs a native decoder or a much faster path.
+`tests/fill_ops_check.py`); see "Log 84". The speed remains open: it needs a
+native decoder or a much faster path.
+
+Run 87 (log84): shapes appeared, but most of each frame was zero (dark green).
+Likely cause: the surface-retire interrupt ran when the walker read it, before
+the renderer read the surface, so the decoder was already rewriting it. Log85
+queues those interrupts until the frame is replayed. Skipping the movie ends the
+process with no handler output; log85 logs presses and guest thread exits.
+Both are untested on hardware.
 
 ## 4. Guest PCR overwrite / allocator overlap
 

@@ -765,6 +765,7 @@ void map_full(const PadState& pad, u64 b, XiState& st) {
     st.lx = SHORT(l.x); st.ly = SHORT(l.y); st.rx = SHORT(r.x); st.ry = SHORT(-(r.y < -32767 ? -32767 : int32_t(r.y)));
 }
 
+extern "C" void lsw_log_async_drain();   // log_async.cpp
 DWORD WINAPI nx_xinput_get_state(DWORD slot, void* out) {
     std::call_once(g_pad_once, pads_init);
     if (slot >= DWORD(g_players)) return 1167;   // ERROR_DEVICE_NOT_CONNECTED
@@ -782,6 +783,19 @@ DWORD WINAPI nx_xinput_get_state(DWORD slot, void* out) {
     }
     XiState st{};
     const u64 b = padGetButtons(pad);
+    if (slot == 0) {   // log85: [PAD] the first 60 presses, on the card at once (run 87: skipping the movie ended the process silently)
+        static u64 prev = 0;
+        static int presses = 0;
+        const u64 down = b & ~prev;
+        prev = b;
+        if (down && presses < 60) {
+            ++presses;
+            const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+            printf("[PAD] press 0x%llX (held 0x%llX) #%d at %lld ms\n", (unsigned long long)down, (unsigned long long)b, presses, (long long)ms);
+            fflush(stdout);
+            lsw_log_async_drain();
+        }
+    }
     const u32 style = padGetStyleSet(pad);
     // Face buttons, LSWTCS_PADLAYOUT (log65):
     //   position  Switch A/B/X/Y act as the 360 pad's B/A/Y/X: the bottom button (Switch B) is the 360's A, as in the 360's

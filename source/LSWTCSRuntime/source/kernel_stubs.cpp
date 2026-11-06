@@ -454,6 +454,8 @@ static bool async_walk_try(uint32_t fence, uint32_t put, PPCContext* isr_ctx);
 static bool async_walk_running();
 static bool ring_window_wait(uint32_t dev, uint32_t start, uint32_t len, PPCContext* isr_ctx);
 static void aw_isr_service(PPCContext& ctx);   // log83: run a GPU interrupt the walker thread met (state I)
+// log85: frames published at VdSwap, and the newest frame whose textures the renderer has read (lsw_replay_textures_read).
+static std::atomic<uint64_t> g_pub_serial{0}, g_tex_done_serial{0};
 static uint64_t g_aw_phase_skips = 0;
 // [ASYNCWALK] IB work by thread (top-level IBs, wall time): 0 the main thread, 1 the walker, 2 any other. Run 46: by the walk counters
 // the walker did the walk in state I, yet the main thread's sampled share of walk code (record path, page hashes) barely fell.
@@ -999,6 +1001,17 @@ static thread_local int g_sched_id = -1;   // this thread's scheduler id (main=0
 static void sched_register(int id);        // register + wait for first turn
 static void sched_leave(int id);           // thread exiting: drop from rotation
 
+// log85: guest thread starts and exits, in stdout and on the card at once ([GTHREAD]). Run 87: skipping the title-idle movie ended
+// the process with no crash, abort or exit line; the movie's threads stop on a skip, so this shows how far the stop got.
+extern "C" __attribute__((weak)) void lsw_log_async_drain();
+static void gthread_note(const char* what, int id, uint32_t entry) {
+    static std::atomic<int> lines{0};
+    if (lines.fetch_add(1) >= 300) return;
+    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    printf("[GTHREAD] %s id %d entry %08X at %lld ms\n", what, id, entry, (long long)ms);
+    fflush(stdout);
+    if (lsw_log_async_drain) lsw_log_async_drain();
+}
 static void guest_thread_body(GuestThread* gt) {
     WaitForSingleObject(gt->resume_ev, INFINITE);
     PPCFunc* fn = PPC_LOOKUP_FUNC(g_base, gt->entry);
@@ -1008,6 +1021,7 @@ static void guest_thread_body(GuestThread* gt) {
         return;
     }
     dbg_ram("[Thread 0x%08X] arg=0x%08X starting\n", gt->entry, gt->arg);
+    gthread_note("start", gt->sched_id, gt->entry);
 
     g_sched_id = gt->sched_id;     // deterministic id assigned at ExCreateThread
     sched_register(g_sched_id);    // join the cooperative scheduler, wait for our turn
@@ -1040,6 +1054,7 @@ static void guest_thread_body(GuestThread* gt) {
     }
     sched_leave(g_sched_id);   // drop out of the scheduler rotation so it doesn't wait on us
     dbg_ram("[Thread 0x%08X] returned\n", gt->entry);
+    gthread_note("exit", gt->sched_id, gt->entry);
 
 }
 
@@ -4444,7 +4459,8 @@ static void geom_swap_packet(uint32_t swap_fb) {
         g_gpu_frame_build.swap_fb = swap_fb;
         g_gpu_frame_build.swap = ordered_swap;
         { extern float g_ft_last_game, g_ft_last_real; static uint64_t serial = 0;
-          g_gpu_frame_build.game_ft = g_ft_last_game; g_gpu_frame_build.swap_real = g_ft_last_real; g_gpu_frame_build.serial = ++serial; }
+          g_gpu_frame_build.game_ft = g_ft_last_game; g_gpu_frame_build.swap_real = g_ft_last_real; g_gpu_frame_build.serial = ++serial;
+          g_pub_serial.store(serial); }
 #ifndef __SWITCH__
         tcs_capture_boundary(g_gpu_frame_build);
 #endif
@@ -6407,10 +6423,55 @@ static bool aw_isr_hand(uint32_t cpu_mask) {   // on the walker thread
     if (!served) ++g_aw_isr_timeouts;
     return served;
 }
+// log85: run 87 showed the movie with most of each frame dark green (Y = U = V = 0) and the rest in pieces. On the 360 an interrupt
+// in the command stream fires once the GPU has executed everything before it, so XMedia frees a video surface only after the draw
+// that sampled it. Here the walker reaches the interrupt when it reads the commands, but the draw samples the surface later, when
+// the render thread replays the frame and reads the texture from guest memory. Freed early, the surface was already being cleared
+// and decoded again (dcbz128, then macroblock by macroblock) when it was read.
+// So an interrupt the walker meets (except the tiling callback 0x822D2BA0, which keeps the log83 hand-over) is queued: with its
+// scratch registers (SCRATCH_REG0-7, which carry the callback and its argument) and the serial of the frame being recorded. A guest
+// thread runs it, as in log83, once the renderer has read the textures of that frame (or of a newer one, when frames are skipped),
+// writing the saved registers back to the scratch block first: later commands may have changed them. The walker reads on.
+// After 500 ms it runs anyway (counted as late). LSWTCS_AWDEFER=0 = log83's hand-over for every interrupt.
+struct AwIsrDeferred { uint32_t mask, umsk, regs[8]; uint64_t need, t; };
+static std::mutex g_awq_mtx;
+static std::deque<AwIsrDeferred> g_awq;
+static std::atomic<bool> g_awq_any{false};
+static uint64_t g_awq_queued = 0, g_awq_served = 0, g_awq_late = 0, g_awq_wait_ns = 0, g_awq_wait_max = 0;
+static size_t g_awq_peak = 0;
+extern "C" void lsw_replay_textures_read(uint64_t serial) {   // gl_backend.cpp: after a replay's draw loop
+    uint64_t c = g_tex_done_serial.load();
+    while (serial > c && !g_tex_done_serial.compare_exchange_weak(c, serial)) {}
+}
+static bool aw_defer_on() {
+    static const bool on = [] { const char* e = getenv("LSWTCS_AWDEFER"); return !(e && e[0] == '0'); }();
+    return on;
+}
+static bool aw_isr_defer(uint32_t cpu_mask) {   // on the walker thread
+    if (!aw_defer_on() || !gil_on() || g_xe_regs[0x57C] == 0x822D2BA0u) return false;
+    AwIsrDeferred d;
+    d.mask = cpu_mask;
+    d.umsk = g_xe_regs[0x1DC] ? g_xe_regs[0x1DC] : 0x33u;
+    for (int i = 0; i < 8; ++i) d.regs[i] = g_xe_regs[0x578 + i];
+    d.need = g_pub_serial.load() + 1;   // the frame being recorded now
+    d.t = gp_now();
+    {
+        std::lock_guard<std::mutex> lk(g_awq_mtx);
+        g_awq.push_back(d);
+        ++g_awq_queued;
+        if (g_awq.size() > g_awq_peak) g_awq_peak = g_awq.size();
+    }
+    g_awq_any.store(true);
+    return true;
+}
 static void pm4_fire_interrupt(uint32_t cpu_mask) {
     if (!g_gfx_interrupt_callback) return;
     if (!t_isr_serving) ++g_isr_fired;
-    if (t_async_walker) { if (!aw_isr_hand(cpu_mask)) ++g_aw_isr_dropped; return; }   // state I: no guest context here (log83: handed over)
+    if (t_async_walker) {   // state I: no guest context here (log83: handed over; log85: queued until the frame is replayed)
+        if (aw_isr_defer(cpu_mask)) return;
+        if (!aw_isr_hand(cpu_mask)) ++g_aw_isr_dropped;
+        return;
+    }
     struct IsrTime { uint64_t t0 = gp_now(); ~IsrTime() { g_isr_ns += gp_now() - t0; } } isr_time;
     if (!g_interrupt_ctx) { ++g_isr_lost; return; }
     WalkNeedsTurn need_turn;   // runs the guest ISR (and may drain tile lists)
@@ -6750,6 +6811,20 @@ extern "C" void lsw_walkoff_report() {
             l_handed = g_aw_isr_handed; l_served = served; l_to = g_aw_isr_timeouts; l_wns = g_aw_isr_wait_ns;
         }
     }
+    {
+        static uint64_t l_q = 0, l_s = 0, l_late = 0, l_w = 0;
+        if (g_awq_queued != l_q || g_awq_served != l_s) {
+            size_t pending;
+            { std::lock_guard<std::mutex> lk(g_awq_mtx); pending = g_awq.size(); }
+            const uint64_t s = g_awq_served - l_s;
+            printf("[AWDEFER] 5 s: interrupts queued %llu, run %llu (late %llu), waited %.1f ms avg %.1f max, pending %zu (peak %zu) | frames published %llu, textures read to %llu\n",
+                   (unsigned long long)(g_awq_queued - l_q), (unsigned long long)s, (unsigned long long)(g_awq_late - l_late),
+                   s ? (g_awq_wait_ns - l_w) / 1e6 / s : 0.0, g_awq_wait_max / 1e6, pending, g_awq_peak,
+                   (unsigned long long)g_pub_serial.load(), (unsigned long long)g_tex_done_serial.load());
+            g_awq_wait_max = 0;
+            l_q = g_awq_queued; l_s = g_awq_served; l_late = g_awq_late; l_w = g_awq_wait_ns;
+        }
+    }
     static int stuck_lines = 0;
     if (stuck && stuck_lines >= 20) return;
     if (!d[0] && !stuck && !d[5] && !d[8] && !d[10]) return;
@@ -6860,10 +6935,53 @@ static std::condition_variable g_aw_cv;
 static std::atomic<bool> g_aw_pending{false}, g_aw_busy{false};
 static int g_aw_sid = -1;
 static uint64_t g_aw_kicks = 0, g_aw_walks = 0, g_aw_walk_ns = 0, g_aw_joins[WALK_SITES + 1], g_aw_join_ns[WALK_SITES + 1];
+// log85: run the queued interrupts whose frame has been replayed (or that waited 500 ms), oldest first.
+static void aw_defer_serve(PPCContext& ctx) {
+    uint8_t* base = g_base;
+    for (;;) {
+        AwIsrDeferred d;
+        bool late = false;
+        {
+            std::lock_guard<std::mutex> lk(g_awq_mtx);
+            if (g_awq.empty()) { g_awq_any.store(false); return; }
+            const AwIsrDeferred& h = g_awq.front();
+            const uint64_t waited = gp_now() - h.t;
+            if (g_tex_done_serial.load() < h.need) {
+                if (waited < 500000000ull) return;
+                late = true;
+            }
+            d = h;
+            g_awq.pop_front();
+            if (g_awq.empty()) g_awq_any.store(false);
+        }
+        const uint32_t sa = g_gfx_interrupt_data ? PPC_LOAD_U32(g_gfx_interrupt_data + 10900) : 0;
+        if (sa >= 0x82000000u && sa < 0xC0000000u)
+            for (uint32_t i = 0; i < 8; ++i)
+                if (d.umsk & (1u << i)) PPC_STORE_U32(sa + i * 4, d.regs[i]);
+        t_isr_serving = true;
+        PPCContext* saved = g_interrupt_ctx;
+        g_interrupt_ctx = &ctx;
+        pm4_fire_interrupt(d.mask);
+        g_interrupt_ctx = saved;
+        t_isr_serving = false;
+        const uint64_t w = gp_now() - d.t;
+        g_awq_wait_ns += w;
+        if (w > g_awq_wait_max) g_awq_wait_max = w;
+        ++g_awq_served;
+        if (late) ++g_awq_late;
+        if (g_awq_served <= 5) {
+            printf("[AWDEFER] interrupt #%llu (callback %08X) run by guest thread %d after %.1f ms%s\n", (unsigned long long)g_awq_served,
+                   d.regs[4], g_sched_id, w / 1e6, late ? ", late: its frame was not replayed" : "");
+            fflush(stdout);
+        }
+    }
+}
 // log83: on a guest thread that holds the turn, in a wait stub or waiting for the walker: run the interrupt the walker handed over.
 static void aw_isr_service(PPCContext& ctx) {
-    if (!g_aw_isr_req.load(std::memory_order_relaxed) || t_async_walker || t_isr_serving || t_walk_off) return;
+    if (t_async_walker || t_isr_serving || t_walk_off) return;
     if (!gil_on() || g_sched_id < 0 || g_sched_turn != g_sched_id) return;
+    if (g_awq_any.load(std::memory_order_relaxed)) aw_defer_serve(ctx);
+    if (!g_aw_isr_req.load(std::memory_order_relaxed)) return;
     bool expect = true;
     if (!g_aw_isr_req.compare_exchange_strong(expect, false)) return;
     t_isr_serving = true;

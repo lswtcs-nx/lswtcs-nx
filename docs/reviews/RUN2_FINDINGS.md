@@ -3210,3 +3210,33 @@ Diagnostics only. Behaviour is log79's.
   - A tenfold gap is not something a fill or a micro-optimisation closes. It needs a native decoder or a much faster recompiled path.
   - The backlog says "no decoder install authorized", so that is a decision for the author and the tester.
 - **Test:** handheld. Leave the title screen idle until the movie plays. Check whether the picture is now correct, even though slow, and whether the sound is clean. Then press a button and start a level. The movie will still be slow (about 3 frames a second, unless the garbage itself cost time).
+
+
+## Run 87 (log84, handheld, 2026-11-06): shapes in the movie, still mostly broken; skipping ends the process
+
+**Report:** "something seems to appear, but not completely". Captures `shot_2374` and `shot_2400` show shapes, including a LEGO figure in grey, over a mostly dark green screen with scattered blocks and horizontal streaks. Skipping the movie still ends the game.
+
+**From the log:**
+- The fill changed the picture, from noise everywhere to recognisable shapes. Dark green is what Y = U = V = 0 gives, so much of each displayed frame is zero in all three planes. The history captures (`hist_2374`) show the luma mostly black with decoded pieces.
+- **Timing.** On the 360 an interrupt in the command stream fires after the GPU has executed the commands before it, so XMedia frees a video surface only after the draw that sampled it. Here, since log83, the interrupt runs when the walker reads it. The draw reads the surface later: the render thread decodes textures from guest memory at replay (`get_texture` / `texture_prepass`, `phys = g_base + 0x80000000`). In between, the decoder may already be clearing the surface (`dcbzl`) and decoding the next frame into it. This also fits the author's "moving corrupt pixels": without state I, the interrupt runs in VdSwap's walk, also before the replay.
+  - Not proven: remaining decode errors could also cause it. All other VMX operations the movie code uses were reviewed against PowerPC semantics with the reversed register layout, and look right: `vperm`, the merges, the unpacks, `vsldoi`, the splats, the unsigned compares, `lvlx`/`lvrx`/`stvlx`/`stvrx`/`stvewx`, and `dcbzl`.
+- **The skip.** The log ends mid-line at about 105 s, with no `[CRASH]`, `abort()`, `exit()` or throw line, and no `crash.log`. Each of those handlers prints and drains the log first, so the process was ended from outside them, or the system was. Run 86 ended the same way. The candidates:
+  - a system fatal, for example `fatalThrow` in Mesa's EGL Switch driver when `nwindowDequeueBuffer`/`QueueBuffer` fail;
+  - a kernel or GPU fault;
+  - the tester closing a hung game.
+  - It is not yet known which.
+
+## Log 85: `0.0.91-log85`, interrupts wait for the replay; skip diagnostics
+
+- **Deferred interrupts** (kernel_stubs.cpp, `aw_isr_defer`, `aw_defer_serve`; `LSWTCS_AWDEFER=0` restores log83's hand-over).
+  - An interrupt the walker meets is queued instead of handed over, except the tiling callback `0x822D2BA0`.
+  - Each queued interrupt keeps its own `SCRATCH_REG0-7`, which carry the callback and its argument, and the serial of the frame being recorded.
+  - The walker reads on.
+  - A guest thread at a wait stub or walker wait runs it once `lsw_replay_textures_read`, called by gl_backend.cpp after each replay's draw loop, reports that frame or a newer one. First it writes the saved registers back into the scratch block, because later commands may have changed them.
+  - After 500 ms it runs anyway, and is counted as late.
+  - Log lines: `[AWDEFER]` for the first 5 runs, plus a 5-second line: queued, run, late, wait avg/max, pending, frames published, and textures read.
+- **Skip diagnostics:**
+  - `[PAD]`: the first 60 button presses.
+  - `[GTHREAD]`: every guest thread start and exit, up to 300.
+  - Both go to the SD card at once (`lsw_log_async_drain`), so the next log shows how far a skip gets before the process ends.
+- **Test:** handheld. Let the movie play, and check whether the picture is now whole, even if slow. Then press a button to skip it. If the game ends, note what the screen shows (an error code? a return to the HOME menu?). Bring the newest file in `atmosphere/crash_reports` and `atmosphere/fatal_reports` from the SD card, if there is one.

@@ -52,6 +52,7 @@ extern std::atomic<uint32_t> g_ab_toggle_request;   // win32_switch.cpp: A/B tog
 extern std::atomic<bool> g_frame_light;   // win32_switch.cpp: pad layout "auto" reads it (light or frozen frames: a menu)
 extern "C" void lsw_load_light_edge(uint32_t replay);   // kernel_stubs.cpp: a light stretch began, the load mode moves on
 extern "C" void lsw_boot_mark(const char* what);   // main.cpp: [BOOT] milliseconds since the process started (log67)
+extern "C" void lsw_replay_textures_read(uint64_t serial);   // kernel_stubs.cpp (log85): queued GPU interrupts wait for this
 extern "C" void lsw_ft_ring_dump();   // kernel_stubs.cpp: game frame times of the last 120 swaps ([FTRING])
 extern "C" void lsw_sched_ab_set(int audioprio, int walkoff);   // kernel_stubs.cpp: LSWTCS_ABCYCLE
 extern "C" void lsw_shm_frame_hash_set(int on);                 // kernel_stubs.cpp: H
@@ -4364,6 +4365,7 @@ PresentSrc replay() {
         ++drawn;
     }
     rp_close(RP_LOOP, t_loop, t_loop_in);
+    lsw_replay_textures_read(f.serial);   // log85: every texture of this frame has been read from guest memory
     inv_report();
     RpScope rp_tail(RP_TAIL);
     // Present source: the resolve target at the frontbuffer address, else colour RT 0 of pitch 1280.

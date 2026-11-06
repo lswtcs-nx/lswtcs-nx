@@ -3334,3 +3334,72 @@ Diagnostics only. Behaviour is log79's.
 - **Interrupts run as in log83 again.** They are handed to a waiting guest thread at once. `LSWTCS_AWDEFER=1` brings back log85/86's queue.
 - **`LSWTCS_KEWAKE` is now off by default** (`=1` turns it on). It released nothing in run 90, and it changes every event wait in the game. `[KWAITLONG]` stays.
 - **Test:** handheld. Let the movie play: is the picture whole now (still slow)? Then press a button to skip, and then start a level.
+
+## Logs 89 and 90: 2 MB guest pages; a launch switch and an A/B control
+
+Described in CPU_ROADMAP.md, "torchlight-nx study" (log89: guest memory window and backings 2 MB aligned, `LSWTCS_GUEST2MB=0` for the old layout) and "renut-nx, katamari-nx and mkdd-nx study" (log90: L held at start for 4 KB pages; the control state `MAPXSHNLUBIkhwregdq0`). log89 was never run on its own.
+
+## Run 91 (log90, handheld, 2026-11-06): 2 MB pages in place, no measurable change; the control state sizes the noise
+
+One launch: the hub, `Gungan_A`, `Gungan_B`'s heavy part, the hub (211 s). No crash. The movie was not played.
+
+**The L switch could not be used.** The tester launches from sphaira, not from the Home menu, so L cannot be held at start. log91 replaces it with a second NRO (below).
+
+**From the log:**
+- The 2 MB layout was in place: the window at `0x772600000`, and the 16 MB, 512 MB and 64 MB ranges with 2 MB-aligned backings.
+- Handheld is GPU-bound: about 38 ms of GPU per heavy frame. The heavy part ran at 25.7 FPS (run 79: 25.7).
+- **CPU per guest call** (`guest_call_cost.py`): 158 ns (90 %: 157-159), against 155-163 ns in runs 72-84. No gain shows. Either the kernel does not use 2 MB blocks for these mappings, or TLB misses were not a large part of the cost. log91 measures which.
+- **The control:** the two A/B states are identical. `MAPXSHNLUBIkhwregdq0` against `MAPXSHNLUBIkhwregdq` came out at -4.3 % (90 %: -12.2 to +4.7) over 8 against 9 visits. So one short session cannot resolve effects under about 10 %, as the memory note on noise says. This is a measured noise floor, not an estimate.
+- Free memory at the end: 672 MB.
+
+**Main-thread profile, heavy frames** (`hwprof_report.py`; 33,889 samples, 79 % in generated guest code):
+- The top functions are `sub_8231ED30` 5.1 %, `sub_82320328` 3.6 %, `sub_8249DB20` 2.7 %, `sub_822BC218` 2.6 %, `sub_822B5878` 2.5 %, then several at 2.0 %. Several pass katamari-nx's 2 % floor.
+- **Their sampled instructions** (scratchpad `hot_insns.py`, a sample usually lands after the slow instruction) show two costs that come from the generator, not from these functions:
+  - **Float compares.** The CR compare is written `un = isnan(l) || isnan(r); lt = !un && l < r; ...`, which GCC compiles to `fcmp`, `b.vs`, then a signalling `fcmpe` on the same registers. In `sub_8231ED30` and `sub_8249DB20`, 12-16 % of their samples are on those `fcmpe`.
+  - **The region table.** Every guest access is `lsr #29`, a load from `ppc_view_base`, then the access itself: two dependent loads on the A57's single load pipe.
+- **Over all generated code** (scratchpad `table_cost.py`): 16.6 % of the main thread's guest-code samples sit on the access right after a table load, and 3.6 % one instruction later. Table loads are 3.9 % of the guest instructions (1,250,471 of 32,188,417). Float compares: 3.0 % of the samples.
+
+## Log 91: `0.0.97-log91`, A and B builds; a boot TLB measurement
+
+Two builds, **one NRO on the SD**. The tester asked for a single test rather than three launches, so the SD's `switch/lswtcs.nro` is B, and A stays as a fallback (`private/lswtcs-log91.elf`). A's only change is exact and is inside B, and the boot measurement below answers the 4 KB question within one launch.
+
+| Build | What differs |
+| --- | --- |
+| A (`build-mesa`) | 2 MB guest pages, quiet float compares |
+| B (`build-fold`, on the SD) | A plus guest addresses without the region table |
+| A named `*4k*.nro` | 4 KB layout (kept in the code, not staged) |
+
+- **Quiet float compares (A and B).** `workspace-tools/tune_tcs360_context.py` rewrites `PPCCRRegister::compare(double, double)` in the generated `ppc_context.h` with `__builtin_isunordered`, `isless`, `isgreater` and `==`: one `fcmp` and four `cset`. The four CR bits are the same for every input. `tests/cr_compare_check.py` checks 20,001,600 pairs (special values exhaustively, the rest random) at -O0 and -O2: 0 differences. The host's Invalid flag on quiet NaNs is the only difference, and the guest FPSCR does not read it. It applies to all game code (11,660 compare sites), so it is in both builds. Like the movie-op fill, it must stay applied (`--check`, `--revert`).
+- **Fast address fold (B only).** `tune_tcs360_context.py --fold-fast` on a copy of the output (`output_fold`, build folder `build-fold`):
+  - `PPC_HOST(x)` = `base + (bit 31 set ? x & 0x9FFFFFFF : x)`, which compiles to `adds`, `and`, `csel` and no table load.
+  - Same as the table except in region 0xE0000000, which this also folds onto 0x80000000. That region is mapped only with the heap bypass on (`lsw_guest_layout.h`, "small-alloc pool"). With `LSWTCS_HEAPBYPASS=0` (env.txt), any access there faults today, so no running guest code reaches it.
+  - main.cpp refuses to start B with the bypass on (`[INIT] this build (fast address fold) cannot run ...`). B prints `[INIT] guest addresses: fast fold, no region table (log91 B)`.
+- **The 4k NRO.** The file name is the launcher's argv[0]. Boot prints `[NX] launched as "...": guest page layout: 4 KB ("4k" in the file name)`.
+- **`[TLBBENCH]` at boot** (all three; `LSWTCS_TLBBENCH=0` off; about 1 s). Two 32 MB code-memory aliases of 2 MB-aligned backings, mapped like the guest window: one at a 2 MB-aligned address, one 64 KB off, where block descriptors are impossible. Then a chain of 400,000 dependent loads, each on a random 4 KB page; best of three, alternating. Then the same chain over the guest's 512 MB physical range.
+  - A clear gap between the aliases means the kernel maps aligned aliases with 2 MB blocks. No gap means log89's change cannot act.
+  - The guest range's figure, read against the two aliases, shows the same for the real window.
+- **Test: one launch, docked if possible** (FPS shows CPU changes only there): the hub, `Gungan_B`'s heavy part for 3-4 minutes, back to the hub.
+  - **The yardstick is history, not a second launch.** ns per guest call does not depend on the mode, since the CPU clock is the same: run 91 158 (handheld), run 71 162 (docked), runs 72-84 155-163 (cross-session spread about 3 %). Docked FPS: run 71's heavy part 30.0.
+  - **Reading:** B at or under about 150 ns is a gain beyond the spread. Between 152 and 163 is no measurable change. Over that, B is worse, and A goes on the SD.
+  - The size is not predicted: samples on an instruction show where time waits, not how much an exact replacement saves.
+
+## Run 92 (provisional log91, handheld, 2026-11-06): 2 MB pages are not a lever; B's build fixed before staging
+
+The tester ran the NRO that was on the SD before B was staged: log90's code plus the argv layout switch and `[TLBBENCH]`, built at 15:43, without the quiet compares. Its ELF was not kept: `build-mesa` was rebuilt as A before the run came back. The run is in `private/runs/run92-log91pre`; do not read its `hwprof.txt` with another build's ELF. One launch, the hub, `Gungan_A`, `Gungan_B`'s heavy part, the hub (264 s). No crash.
+
+- **`[TLBBENCH]`:** 2 MB-aligned alias 194.0 ns per dependent load, 64 KB-offset alias 203.0 (+4.6 %), guest 512 MB range 203.8.
+  - So at most about 9 ns is saved, on a load that already misses every cache (about 200 ns), and nothing on cache hits. That fits runs 91 and 92 showing no change per guest call.
+  - The page walks of the 4 KB alias likely hit the L2 cache, which is why the gap is small. Whether the real window gets blocks stays open: its figure matches the offset alias, but it spans 16 times more memory.
+  - **Verdict:** log89's layout stays (about 6 MB, harmless), but it is not worth more work.
+- **CPU per guest call:** 158 ns (90 %: 156-159), the same as run 91. Two sessions now give the baseline for B.
+- **Control state:** -2.8 % (90 %: -11.0 to +3.8) over 10 against 10 visits; run 91 gave -4.3 %. The in-run A/B noise is about ±7 %.
+- **B's build, corrected before staging.** The runtime files include `output/ppc_context.h` by a fixed path, not through `RECOMP_OUTPUT`. In B the game code therefore uses the fast fold while the runtime keeps the table; both give the same address everywhere except the unmapped 0xE0000000. But main.cpp's guard and B's line were not compiled in. CMakeLists.txt now defines `LSW_ADDR_FOLD_FAST=1` for the runtime when `RECOMP_OUTPUT`'s header has the fold. The staged B (`c4dce967...`) prints `[INIT] guest addresses: fast fold, no region table (log91 B)`.
+- **Static check of the ELFs** (scratchpad `static_count.py`, words in `.text`):
+
+  | | log90 | A | B |
+  | --- | --- | --- | --- |
+  | region-table loads (`lsr #29` then `ldr [.., lsl #3]`) | 461,018 | 460,877 | 959 |
+  | `fcmpe` | 22,657 | 12,825 | 12,808 |
+
+  The remaining ones are in the runtime and libraries.
+- **Next test:** B, one launch, as in "Log 91". Compare against 158 ns.

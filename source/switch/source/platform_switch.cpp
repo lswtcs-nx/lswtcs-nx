@@ -20,6 +20,8 @@
 #include <typeinfo>
 #include <malloc.h>
 #include <new>
+
+static const char* g_launch_path = nullptr;   // argv[0] from the launcher (log91: "4k" in it selects 4 KB guest pages)
 #ifndef LSW_DEKO_BACKEND
 extern "C" void lsw_bo_check_init(uint64_t);
 extern "C" void lsw_bo_check_dump(FILE*, const uintptr_t*, size_t);
@@ -568,17 +570,15 @@ extern "C" bool lsw_switch_init() {
                (unsigned long long)(used >> 20), (unsigned long long)(top >> 20));
     }
     load_env_file(LSW_DATA_DIR "/env.txt");
-    {   // log90: L held while the game starts = the 4 KB guest page layout for this launch only (as LSWTCS_GUEST2MB=0), so one
-        // session can play the same place with log89's 2 MB layout and without it. Sampled for about 60 ms: HID needs a moment.
-        padConfigureInput(8, HidNpadStyleSet_NpadStandard);
-        PadState p;
-        padInitializeDefault(&p);
-        uint64_t held = 0;
-        for (int i = 0; i < 12; ++i) { padUpdate(&p); held |= padGetButtons(&p); svcSleepThread(5000000); }
-        if (held & HidNpadButton_L) setenv("LSWTCS_GUEST2MB", "0", 1);
+    {   // log91: an NRO whose file name contains "4k" (a copy, e.g. switch/lswtcs-4k.nro) gets the 4 KB guest page layout (as
+        // LSWTCS_GUEST2MB=0), so one session can play the same place with log89's 2 MB layout and without it. log90 used L held at
+        // start, which sphaira's launch does not allow. argv[0] is the path the launcher passes; it is printed so a log shows it.
+        const char* path = g_launch_path ? g_launch_path : "";
+        const bool named4k = strstr(path, "4k") || strstr(path, "4K");
+        if (named4k) setenv("LSWTCS_GUEST2MB", "0", 1);
         const char* g2 = getenv("LSWTCS_GUEST2MB");
-        printf("[NX] guest page layout: %s (%s)\n", g2 && g2[0] == '0' ? "4 KB" : "2 MB",
-               held & HidNpadButton_L ? "L held at start" : "LSWTCS_GUEST2MB / default");
+        printf("[NX] launched as \"%s\"; guest page layout: %s (%s)\n", path, g2 && g2[0] == '0' ? "4 KB" : "2 MB",
+               named4k ? "\"4k\" in the file name" : "LSWTCS_GUEST2MB / default");
     }
     if (&lsw_big_alloc_min) {   // log75: blocks of this many KB or more from newlib, not rpmalloc's caches (0 = all rpmalloc)
         if (const char* e = getenv("LSWTCS_BIGALLOC")) lsw_big_alloc_min = size_t(atoi(e)) * 1024;
@@ -604,6 +604,71 @@ extern "C" bool lsw_switch_init() {
     }
     runtime_selftest();
     return true;
+}
+
+// ---- TLB bench (log91) -----------------------------------------------------------------------
+// Does the kernel map a code-memory MapOwner alias with 2 MB blocks when the address and the backing are 2 MB aligned? Run 91
+// could not tell (handheld, GPU-bound; 158 ns per guest call, as before). Two 32 MB aliases of 2 MB-aligned backings, mapped the
+// way the guest window is: one at a 2 MB-aligned address, one 64 KB off it (block descriptors impossible there). A chain of
+// dependent loads, each on a random 4 KB page, so every load misses the caches; with 4 KB pages each also needs a page walk
+// (32 MB is 8192 pages, eight times the A57's TLB). Then the same chain over the guest's 512 MB physical range. Read-only on
+// the guest range (zeroed just before). LSWTCS_TLBBENCH=0 skips it; about 1 s at boot.
+static double tlb_chain_ns(const uint8_t* p, size_t size, int loads) {
+    const size_t pages = size >> 12;
+    uint64_t x = 0, i = 0x9E3779B97F4A7C15ull;
+    const uint64_t t0 = armGetSystemTick();
+    for (int k = 0; k < loads; ++k) {
+        i = i * 6364136223846793005ull + 1442695040888963407ull + x;   // x (always 0) makes each address wait for the last load
+        x = *(const volatile uint64_t*)(p + (((i >> 24) % pages) << 12) + ((i >> 12) & 0xFC0));
+    }
+    return double(armTicksToNs(armGetSystemTick() - t0)) / loads;
+}
+
+static void tlb_bench(uint8_t* guest) {
+    const char* e = getenv("LSWTCS_TLBBENCH");
+    if (e && e[0] == '0') return;
+    constexpr size_t kBlock = 0x200000, kSize = 32u << 20, kOff = 0x10000;
+    void* raw[2] = {malloc(kSize + kBlock), malloc(kSize + kBlock)};
+    virtmemLock();
+    uint8_t* hole = (uint8_t*)virtmemFindAslr(2 * kSize + 3 * kBlock, 0x10000);
+    uint8_t* va[2] = {nullptr, nullptr};
+    VirtmemReservation* res = nullptr;
+    if (hole) {
+        uint8_t* a = (uint8_t*)(((uintptr_t)hole + kBlock - 1) & ~(uintptr_t)(kBlock - 1));
+        va[0] = a;                              // 2 MB aligned
+        va[1] = a + kSize + kBlock + kOff;      // 64 KB past a 2 MB boundary
+        res = virtmemAddReservation(hole, 2 * kSize + 3 * kBlock);
+    }
+    virtmemUnlock();
+    Handle h[2] = {INVALID_HANDLE, INVALID_HANDLE};
+    bool ok = raw[0] && raw[1] && res;
+    for (int k = 0; ok && k < 2; ++k) {
+        void* src = (void*)(((uintptr_t)raw[k] + kBlock - 1) & ~(uintptr_t)(kBlock - 1));
+        Result rc = svcCreateCodeMemory(&h[k], src, kSize);
+        if (R_SUCCEEDED(rc)) rc = svcControlCodeMemory(h[k], CodeMapOperation_MapOwner, va[k], kSize, Perm_Rw);
+        if (R_FAILED(rc)) { printf("[TLBBENCH] alias %d map failed rc=0x%X\n", k, rc); if (h[k] != INVALID_HANDLE) svcCloseHandle(h[k]); h[k] = INVALID_HANDLE; ok = false; break; }
+        memset(va[k], 0, kSize);
+    }
+    if (ok) {
+        constexpr int kLoads = 400000;
+        double t2m = 1e30, t4k = 1e30, tg = 1e30;
+        for (int round = 0; round < 3; ++round) {   // best of three, alternating, so warm-up and interrupts fall on both
+            t4k = std::min(t4k, tlb_chain_ns(va[1], kSize, kLoads));
+            t2m = std::min(t2m, tlb_chain_ns(va[0], kSize, kLoads));
+            if (guest) tg = std::min(tg, tlb_chain_ns(guest + 0x80000000ull, 512u << 20, kLoads));
+        }
+        printf("[TLBBENCH] random dependent loads, ns each (best of 3): 2 MB-aligned alias %.1f, 64 KB-offset alias %.1f "
+               "(%+.1f %%), guest 512 MB range %.1f. A clear gap means the kernel maps aligned aliases with 2 MB blocks.\n",
+               t2m, t4k, 100.0 * (t4k - t2m) / t2m, tg);
+    }
+    for (int k = 0; k < 2; ++k)
+        if (h[k] != INVALID_HANDLE) {
+            svcControlCodeMemory(h[k], CodeMapOperation_UnmapOwner, va[k], kSize, 0);
+            svcCloseHandle(h[k]);
+        }
+    if (res) { virtmemLock(); virtmemRemoveReservation(res); virtmemUnlock(); }
+    free(raw[0]);
+    free(raw[1]);
 }
 
 // ---- guest memory window ----------------------------------------------------------------------
@@ -660,13 +725,15 @@ extern "C" uint8_t* lsw_switch_guest_window(size_t size) {
                src, block ? " (2 MB aligned)" : "");
     }
     printf("[NX] UsedMemory after window: %llu MB\n", (unsigned long long)(info_u64(InfoType_UsedMemorySize) >> 20));
+    tlb_bench(w);
     return w;
 }
 
 // ---- entry ----------------------------------------------------------------------------------
 static void* runtime_thread(void*) { int rc = lsw_runtime_main(); printf("[NX] runtime main returned %d\n", rc); return reinterpret_cast<void*>(intptr_t(rc)); }
 
-int main(int, char**) {
+int main(int argc, char** argv) {
+    if (argc > 0 && argv && argv[0]) g_launch_path = argv[0];
     pthread_t t;
     pthread_attr_t a;
     pthread_attr_init(&a);

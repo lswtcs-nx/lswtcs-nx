@@ -509,3 +509,16 @@ Runs 73-75 crashed from host memory, and the remaining stutters are texture uplo
 - **Hold L while the game starts** to get the 4 KB guest page layout for that launch (as `LSWTCS_GUEST2MB=0`). Boot prints `[NX] guest page layout: 2 MB` or `4 KB`, and the window line names the layout. So one session can compare log89's 2 MB pages with the old layout at the same place.
 - **env.txt:** `LSWTCS_ABSTATES=MAPXSHNLUBIkhwregdq,MAPXSHNLUBIkhwregdq0`. Both are the full set; the digit `0` switches nothing. The FPS difference between them is the in-run noise floor.
 - **Test (docked, CPU-bound):** launch normally, hub then `Gungan_B`'s heavy part for about 2 minutes, back to the hub; quit. Launch again holding L, same route. Compare the heavy part's FPS and `guest_call_cost.py` between the launches, and the two A/B states within each launch.
+
+## Update after run 91 (6 November 2026)
+
+- **2 MB guest pages:** in place in run 91, but no change in CPU per guest call (158 ns against 155-163 ns before). log91's `[TLBBENCH]` boot line measures whether the kernel uses 2 MB blocks for these mappings at all. The L-at-start switch could not be used from sphaira; `lswtcs-4k.nro` replaces it.
+- **The A/B method's noise, measured:** two identical states in one 3.5-minute session differed by -4.3 % (90 %: -12.2 to +4.7). Effects under about 10 % need longer or repeated sessions.
+- **katamari-nx's gate, applied to run 91's profile:** the top main-thread functions pass the 2 % floor, but what their samples show is the generator's code, not the functions':
+  - float compares as `fcmp` + branch + `fcmpe`: 3.0 % of guest-code samples. Fixed exactly in log91 (both builds);
+  - the region-table load before every guest access: 16.6 % of guest-code samples sit on the access right after one. log91 B removes the table (exact with the heap bypass off).
+- **Next, by run 92's result:**
+  - if B is faster docked, make the fast fold the default (and retire `LSWTCS_HEAPBYPASS=1`, which it cannot run with);
+  - if `[TLBBENCH]` shows no 2 MB blocks, log89's layout can stay (it costs about 6 MB) but its premise is gone;
+  - the hand track (katamari) then starts from a profile without these two costs.
+- **PGO** stays the owner's call (one extra session on an instrumented NRO). **Four cores** stay the author's (a forwarder install).

@@ -241,6 +241,14 @@ target_include_directories(lswtcs PRIVATE
     "${XENIA_ROOT}/third_party/xxhash" include)
 target_compile_definitions(lswtcs PRIVATE LSW_ROOT_DIR="sdmc:/lswtcs" LSW_DATA_DIR="sdmc:/lswtcs")
 target_compile_options(lswtcs PRIVATE ${LSW_ARCH_FLAGS} ${LSW_COMPAT} ${LSW_WIN32} -O2 -g -w -fno-strict-aliasing)
+# log91 B: game code from an output copy with tune_tcs360_context.py --fold-fast. The runtime includes output/ppc_context.h by a
+# fixed path (table form, the same addresses except the unmapped 0xE0000000), so it learns of the fold here: main.cpp then refuses
+# the heap bypass and prints the build's line.
+file(READ "${RECOMP_OUTPUT}/ppc_context.h" _ctx_fold)
+string(FIND "${_ctx_fold}" "#define LSW_ADDR_FOLD_FAST 1" _has_fold)
+if(NOT _has_fold EQUAL -1)
+    target_compile_definitions(lswtcs PRIVATE LSW_ADDR_FOLD_FAST=1)
+endif()
 # switch-mesa: glad (GL loader), EGL, glapi, nouveau DRM (devkitPro portlibs).
 # switch-mesa rebuilt with Mesa's shader disk cache (tools/build_mesa.sh) is preferred when present:
 # its libEGL/libglapi come first on the link path; it needs zlib. Else the stock devkitPro package.
@@ -300,9 +308,9 @@ if(LSW_DEKO_BACKEND)
     nx_generate_nacp(lswtcs.nacp NAME "TCS Deko Live" AUTHOR "LSWTCS port" VERSION "0.0.7")
 else()
     if(LSW_GUEST_NONVOLATILE)
-        set(LSW_NACP_VERSION "0.0.96-log90nv")
+        set(LSW_NACP_VERSION "0.0.97-log91nv")
     else()
-        set(LSW_NACP_VERSION "0.0.96-log90")
+        set(LSW_NACP_VERSION "0.0.97-log91")
     endif()
     nx_generate_nacp(lswtcs.nacp NAME "LSWTCS" AUTHOR "LSWTCS port" VERSION "${LSW_NACP_VERSION}")
 endif()

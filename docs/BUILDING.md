@@ -126,6 +126,28 @@ libraries. After this, `generated_output.py check` reports 15 files as changed;
 python workspace-tools/fill_tcs360_movie_ops.py "source/Convert 360/LSWTCS/output"
 ```
 
+Since log91, also make the float compares quiet in the generated `ppc_context.h`
+(one `fcmp` instead of up to four compares and three branches; the same CR bits,
+checked by `tests/cr_compare_check.py --compiler <clang++>`). It changes the
+precompiled header, so every game unit recompiles (about 25 minutes with 2 jobs).
+`--check` reports the state; `--revert` restores the generator's form.
+
+```sh
+python workspace-tools/tune_tcs360_context.py
+```
+
+The log91 B build (guest addresses without the region table) uses a copy of the
+output, `output_fold`, and its own build folder, `build-fold`. It is configured
+like `build-mesa`, plus `-DRECOMP_OUTPUT=<path>/output_fold`:
+
+```sh
+cp -r "source/Convert 360/LSWTCS/output" "source/Convert 360/LSWTCS/output_fold"
+python workspace-tools/tune_tcs360_context.py --output-dir "source/Convert 360/LSWTCS/output_fold" --fold-fast
+```
+
+B refuses to start with `LSWTCS_HEAPBYPASS` on: its fold is exact only while
+guest region 0xE0000000 is unmapped.
+
 Then, from `source/`, run `python tools/gen_native_reverb.py` to generate the
 excluded game-derived reverb include from your local patched output. Generated
 source, PCH, objects and binaries remain private.

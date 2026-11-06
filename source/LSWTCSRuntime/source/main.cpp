@@ -1300,6 +1300,15 @@ int main() {
     ppc_view_base[5] = g_base - 0x20000000ULL;
     ppc_view_base[6] = g_base - 0x40000000ULL;
 #endif
+#if defined(LSW_ADDR_FOLD_FAST) && LSW_ADDR_FOLD_FAST
+    // log91 B (tune_tcs360_context.py --fold-fast): PPC_HOST folds 0xE0000000 onto 0x80000000 as well, which is exact only
+    // while that region is unmapped, that is with the heap bypass off.
+    if (lswtcs_bypass_on()) {
+        printf("[INIT] this build (fast address fold) cannot run with LSWTCS_HEAPBYPASS on; set it to 0 in env.txt\n");
+        return 1;
+    }
+    printf("[INIT] guest addresses: fast fold, no region table (log91 B)\n");
+#endif
 
     // [DEBUG] Pause before guest code so a debugger can attach and set a hardware
     // write-breakpoint on the heap free-list sentinel (g_base+0x84000180) to catch

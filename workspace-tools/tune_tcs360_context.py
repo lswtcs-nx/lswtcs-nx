@@ -1,0 +1,119 @@
+"""Exact speed changes to the generated output's ppc_context.h (log91).
+
+1. Float compares (fcmpu/fcmpo into a CR field, 11,660 sites). The generator's PPCCRRegister::compare(double, double)
+   computes `un = isnan(l) || isnan(r)` and then `!un && l < r` and so on. devkitA64 GCC turns that into up to four
+   compares and three branches: fcmp l,l; b.vs; fcmp r,r; b.vs; then a signalling fcmpe l,r for `<` and `>`, and another
+   fcmp for `==`. In run 91's console profile, compares were 9-15 % of the samples inside the main thread's top functions
+   (sub_8231ED30, sub_8249DB20). The quiet forms below (isunordered, isless, isgreater, ==) give the same four bits for
+   every input, NaNs and signed zeros included (tests/cr_compare_check.py checks this exhaustively over special values and
+   randomly over the rest), and compile to one fcmp and four csets. The host's FP exception flags are the only thing that
+   differs (fcmpe raises Invalid on a quiet NaN); nothing reads them: the guest's FPSCR is emulated from the rounding bits
+   only (PPCFPSCRRegister::loadFromHost).
+
+2. --fold-fast (only for a copy of the output, built as a separate B NRO): guest addresses without the region table.
+   PPC_HOST was ppc_view_base[x >> 29] + x: before every guest load and store, a load from the table (lsr #29, then
+   ldr [table, idx, lsl #3]), so each guest access is two dependent loads on the A57's single load pipe. In run 91's
+   console profile 16.6 % of the main thread's samples in generated code sat on the access right after such a table
+   load, and 3.6 % one instruction later (the loads are 3.9 % of the code). The table folds the 0xA0000000 and 0xC0000000
+   physical views onto 0x80000000 and is identity elsewhere. The fast form: if bit 31 is set, clear bits 30-29 (tst, and,
+   csel). It differs from the table only in region 0xE0000000, which it also folds onto 0x80000000; that region is mapped
+   only with the heap bypass on (lsw_guest_layout.h, "small-alloc pool"), so main.cpp refuses to start such a build with
+   LSWTCS_HEAPBYPASS on. With the bypass off (env.txt), an access there faults today, so no running guest code reaches it.
+
+Like workspace-tools/fill_tcs360_movie_ops.py, this edits the generated output in place; tools/generated_output.py check
+reports ppc_context.h as changed while it is applied. The original text is kept in a comment so --revert can restore it.
+Usage: python workspace-tools/tune_tcs360_context.py [--output-dir DIR] [--check | --revert]
+"""
+from pathlib import Path
+import argparse
+import sys
+
+ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_OUT = ROOT / "source" / "Convert 360" / "LSWTCS" / "output"
+
+OLD = """    inline void compare(double left, double right) noexcept
+    {
+        un = __builtin_isnan(left) || __builtin_isnan(right);
+        lt = !un && (left < right);
+        gt = !un && (left > right);
+        eq = !un && (left == right);
+    }
+"""
+
+NEW = """    inline void compare(double left, double right) noexcept
+    {
+        // tune_tcs360_context.py (log91): quiet compares, one fcmp; the same bits as the generator's form, which was:
+        //   un = __builtin_isnan(left) || __builtin_isnan(right);
+        //   lt = !un && (left < right); gt = !un && (left > right); eq = !un && (left == right);
+        un = __builtin_isunordered(left, right);
+        lt = __builtin_isless(left, right);
+        gt = __builtin_isgreater(left, right);
+        eq = left == right;
+    }
+"""
+
+
+HOST_OLD = """#if defined(LSW_ADDR_FOLD_CMOV) && LSW_ADDR_FOLD_CMOV
+#define PPC_HOST(x) (base + ppc_fold((uint32_t)(x)))
+#else
+#define PPC_HOST(x) (ppc_view_base[(uint32_t)(x) >> 29] + (uint32_t)(x))
+#endif
+"""
+
+HOST_NEW = """// tune_tcs360_context.py --fold-fast (log91 B): no region table. Bit 31 set: clear bits 30-29, so 0xA0000000 and
+// 0xC0000000 fold onto 0x80000000 as the table does, and 0xE0000000 too (mapped only with the heap bypass, which main.cpp
+// refuses in this build). The table form was: ppc_view_base[(uint32_t)(x) >> 29] + (uint32_t)(x).
+#define LSW_ADDR_FOLD_FAST 1
+static inline __attribute__((always_inline)) uint32_t lsw_fold_fast(uint32_t a) { return (int32_t)a < 0 ? (a & 0x9FFFFFFFu) : a; }
+#define PPC_HOST(x) (base + lsw_fold_fast((uint32_t)(x)))
+"""
+
+
+def fold_fast(a, text):
+    n_old, n_new = text.count(HOST_OLD), text.count(HOST_NEW)
+    if n_old + n_new != 1:
+        sys.exit(f"expected exactly one PPC_HOST block, found {n_old} original and {n_new} fast")
+    if a.check: print(f"PPC_HOST: {'fast fold' if n_new else 'region table'}"); return None
+    if a.revert: return text.replace(HOST_NEW, HOST_OLD) if n_new else None
+    if a.output_dir.resolve() == DEFAULT_OUT.resolve():
+        sys.exit("--fold-fast is for a copy of the output (the B build), not the default output folder")
+    return text.replace(HOST_OLD, HOST_NEW) if n_old else None
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--output-dir", type=Path, default=DEFAULT_OUT)
+    ap.add_argument("--fold-fast", action="store_true", help="item 2 instead of item 1 (a copy of the output only)")
+    g = ap.add_mutually_exclusive_group()
+    g.add_argument("--check", action="store_true", help="report whether the change is applied; change nothing")
+    g.add_argument("--revert", action="store_true", help="put the generator's form back")
+    a = ap.parse_args()
+    path = a.output_dir / "ppc_context.h"
+    raw = path.read_bytes()
+    crlf = b"\r\n" in raw
+    text = raw.decode("utf-8").replace("\r\n", "\n")
+    if a.fold_fast:
+        out = fold_fast(a, text)
+        if out is not None:
+            path.write_bytes((out.replace("\n", "\r\n") if crlf else out).encode("utf-8"))
+            print(f"{path}: PPC_HOST {'restored' if a.revert else 'fast fold'}")
+        return
+    has_old, has_new = text.count(OLD), text.count(NEW)
+    if has_old + has_new != 1:
+        sys.exit(f"{path}: expected exactly one compare(double, double), found {has_old} original and {has_new} tuned")
+    if a.check:
+        print(f"{path.name}: float compare {'tuned' if has_new else 'original'}")
+        return
+    if a.revert:
+        if has_old: print("already original"); return
+        text = text.replace(NEW, OLD)
+    else:
+        if has_new: print("already tuned"); return
+        text = text.replace(OLD, NEW)
+    out = text.replace("\n", "\r\n") if crlf else text
+    path.write_bytes(out.encode("utf-8"))
+    print(f"{path.name}: float compare {'restored' if a.revert else 'tuned'}")
+
+
+if __name__ == "__main__":
+    main()

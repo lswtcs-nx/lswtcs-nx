@@ -3440,3 +3440,18 @@ Build 1 of the plan in CPU_ROADMAP.md, "rc-guide material study": exact code cha
   - **-O3 and the reversal:** ns per guest call against run 93's 152 ns. Mode does not matter, but read it from the base state's windows, since v changes the GPU wait.
   - Expected: v well above noise in heavy frames if handheld is GPU-bound as measured (about 38 ms of GPU at 307.2 MHz).
 - **Built:** 30 minutes (2 jobs), NRO 117.0 MB (B: 115.1). On the SD: `1cee37e1...`; ELF `private/lswtcs-log92.elf`. `guest_call_cost.py` now takes `--state S`.
+
+## Run 94 (log92, handheld, 2026-11-06): 460.8 MHz is +9.7 % in heavy frames; -O3 and the vector reversal show nothing
+
+One launch, the usual route (the hub, `Gungan_A`, `Gungan_B`'s heavy part, the hub; 230 s). No crash. In `private/runs/run94-log92` with its ELF.
+
+- **State v works as built:** 28 `[GPUCLK]` switches, all `rc=0x0`, between `0x92220008` and the original `0x00020003`. `[CLOCK]` reads gpu=460.8 in 23 samples and 307.2 in 23.
+- **FPS, v against the base** (same session, A/B every 6 s):
+  - load-matched heavy frames (`pair_states.py`): **+9.7 % (90 %: +2.7 to +16.1)**, 9 against 7 visits;
+  - 300-1300 draws: 34.7 to **44.2 FPS** (+27 %);
+  - 1300-2500 draws: 25.9 to **28.0** (+8 %); mean frame 37 to 32 ms.
+- **Why heavy frames gain less:** at 460.8 MHz a heavy frame takes about 32 ms, close to the docked CPU wall (run 71: 30.0 FPS, about 33 ms). So the main thread now limits heavy frames in handheld as well, and CPU gains will show there too.
+- **Cost:** the SoC peaked at 44.0 °C (run 93: 42.4) and the battery fell 91 to 89 % in 230 s (run 93: 93 to 93). One short session only.
+- **-O3 and the one-TBL reversal:** 151 ns per guest call (90 %: 151-153) in the base state's windows, against run 93's 152 (152-153, same state). No measurable change. Both stay: they are exact, and PGO (build 2) is tuned on top of them.
+- **In v's windows: 157 ns per call** (156-158). A faster GPU may slow the CPU's memory accesses (shared LPDDR4), or the windows fell on different scenes (118-167 k calls per replay against 146-173 k). Not resolved.
+- **`[TLBBENCH]`:** 191.1 / 198.1 (+3.7 %) / 201.3, as in runs 92-93.

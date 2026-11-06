@@ -3239,6 +3239,7 @@ uint32_t g_ab_changes = 0;
 // LSWTCS_ABTOGGLE (log65): states the A/B toggle combo (hold L + R, click the left stick) steps through, then back to the cycle
 // above. A toggled state holds until the next press ([ABTOGGLE]; frames.log writes it as "# ab STATE" like any state). For a
 // fault that shows in one place: the tester stands there and steps through the suspects.
+extern "C" void lsw_gpu_boost_set(bool on);   // hw_monitor.cpp (log92, state v)
 void ab_cycle_tick() {
     static const uint64_t period_ns = [] { const char* e = getenv("LSWTCS_ABCYCLE"); return uint64_t(e ? atoi(e) : 0) * 1000000000ull; }();
     static const bool toggles_set = [] { const char* e = getenv("LSWTCS_ABTOGGLE"); return e && *e; }();
@@ -3390,6 +3391,7 @@ void ab_cycle_tick() {
     lsw_nvc0_cb_dedupe = has('B');   // B: nouveau skips constant buffer binds that change nothing (mesa_cbdedupe_edits.py)
     lsw_nvc0_zcull = has('c');   // c (log62): ZCULL set up in nouveau (mesa_zcull_edits.py); out after run 62, exact but no gain
     g_quad_tris = has('q');   // q (log63): quad lists as indexed triangles, without the quad geometry shader (quad_expand_frame)
+    lsw_gpu_boost_set(has('v'));   // v (log92): handheld GPU at 460.8 MHz, the official configuration 0x92220008 (hw_monitor.cpp)
     lsw_shm_age_set(has('E'));
     lsw_quantum_div_set(has('Q') ? 4 : 0);
     g_polyofs_on = has('O');

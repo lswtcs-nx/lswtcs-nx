@@ -3419,3 +3419,24 @@ One launch of B (`[INIT] guest addresses: fast fold, no region table (log91 B)`)
   - After `msr fpcr` (flush-mode switches): 2.4 %. There are 72,249 such instructions in the game code.
   - Region-table loads: gone.
   - What remains is the access after the new `csel`, stores into `ctx`, and the switches. No single cost is above about 2-3 %.
+
+## Log 92: `0.0.98-log92`, build 1 of 3: -O3, one-TBL vector reversal, GPU 460.8 MHz as A/B state v
+
+Build 1 of the plan in CPU_ROADMAP.md, "rc-guide material study": exact code changes together, plus the handheld GPU clock as an in-run A/B state. The fast fold (log91 B) is the default since run 93.
+
+- **Game code at -O3** (`LSW_GAME_O3`, on; OFF = -O2). sa2-nx compiles its recompiled code at -O3. This is the same code, only a different optimisation level, and `-ffp-contract` and aliasing are unchanged from before.
+- **Vector byte reversal** (`tune_tcs360_context.py --vec-rev`, applied to all generated files; `--revert` restores).
+  - The generated `simde_mm_shuffle_epi8(x, simde_mm_load_si128((simde__m128i*)VectorMaskL))` reloads the mask from the non-const table at every site (stores may alias it), ANDs it with 0x8F, then runs a `tbl`.
+  - `lsw_vrev16(x)` shuffles by the constant {15..0}, the table's first row, so the result is the same 16 bytes. GCC keeps the mask in a register: one `tbl`.
+  - This was checked on a loop compiled with devkitA64. The rewrite round-trips byte-identically (apply, revert, diff).
+  - 19,043 sites. In the ELF, vector `and`s go from 22,893 (log91 B) to 15,404.
+- **State v: the official handheld performance configuration `0x92220008`** (GPU 460.8 MHz, memory 1331.2 MHz; nfsmw-nx, technique only). Homebrew starts at the default configuration (run 91: `0x00020003`, GPU 307.2 MHz).
+  - `lsw_gpu_boost_set` (hw_monitor.cpp) sets it for the handheld mode only (`ApmPerformanceMode_Normal`), and puts the original back when the state goes. It logs `[GPUCLK]`.
+  - The `[CLOCK]` lines show the GPU clock a few seconds later (the call returns before the clocks change).
+  - Docked has its own configuration, so v changes nothing there.
+- **env.txt:** `LSWTCS_ABSTATES=MAPXSHNLUBIkhwregdq,MAPXSHNLUBIkhwregdqv` (6 s each, random order). This replaces the control pair: runs 91-93 measured that noise (about ±7 %).
+- **Test: handheld,** one launch, the usual route (the hub, `Gungan_B`'s heavy part 3-4 minutes, the hub).
+  - **State v against the base:** FPS by place (`pair_states.py`), from the same session.
+  - **-O3 and the reversal:** ns per guest call against run 93's 152 ns. Mode does not matter, but read it from the base state's windows, since v changes the GPU wait.
+  - Expected: v well above noise in heavy frames if handheld is GPU-bound as measured (about 38 ms of GPU at 307.2 MHz).
+- **Built:** 30 minutes (2 jobs), NRO 117.0 MB (B: 115.1). On the SD: `1cee37e1...`; ELF `private/lswtcs-log92.elf`. `guest_call_cost.py` now takes `--state S`.

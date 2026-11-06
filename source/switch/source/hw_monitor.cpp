@@ -94,6 +94,22 @@ void monitor_main(void*) {
 }
 }  // namespace
 
+// log92, A/B state v: the official handheld performance configuration 0x92220008 (GPU 460.8 MHz, memory 1331.2 MHz), the one
+// nfsmw-nx asks for (technique only; not an overclock). Homebrew starts at the default (run 91: 0x00020003, GPU 307.2 MHz). Set
+// for the handheld mode only (ApmPerformanceMode_Normal); docked keeps its own configuration. The original goes back when the
+// state ends. apmSetPerformanceConfiguration returns before the clocks change, so [CLOCK] shows the new clock a little later.
+// Until the monitor thread has opened apm the call does nothing and is retried at the next state change.
+extern "C" void lsw_gpu_boost_set(bool on) {
+    static int current = -1;
+    static u32 original = 0;
+    if (!g_have_apm || current == int(on)) return;
+    if (current < 0 && R_FAILED(apmGetPerformanceConfiguration(ApmPerformanceMode_Normal, &original))) original = 0;
+    const u32 want = on ? 0x92220008u : (original ? original : 0x00020003u);
+    const Result rc = apmSetPerformanceConfiguration(ApmPerformanceMode_Normal, want);
+    current = int(on);
+    printf("[GPUCLK] state v %s: handheld configuration 0x%08X (original 0x%08X) rc=0x%X\n", on ? "on" : "off", want, original, rc);
+}
+
 extern "C" void lsw_hw_monitor_start() {
     if (const char* e = getenv("LSWTCS_CLOCKLOG")) g_period_s = atoi(e);
     if (g_period_s <= 0) return;

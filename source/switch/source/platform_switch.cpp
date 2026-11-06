@@ -21,6 +21,7 @@
 #include <malloc.h>
 #include <new>
 
+extern "C" void lsw_gpu_boost_set(bool on);   // hw_monitor.cpp (log92, A/B state v)
 static const char* g_launch_path = nullptr;   // argv[0] from the launcher (log91: "4k" in it selects 4 KB guest pages)
 #ifndef LSW_DEKO_BACKEND
 extern "C" void lsw_bo_check_init(uint64_t);
@@ -742,6 +743,7 @@ int main(int argc, char** argv) {
     pthread_attr_destroy(&a);
     void* result = nullptr;
     if (pthread_join(t, &result) != 0) return 1;
+    lsw_gpu_boost_set(false);   // log92: the handheld configuration back to the original before leaving (state v)
     lsw_save_shutdown();
     const int rc = int(intptr_t(result));
     printf("[NX] main returning %d run=%016llX\n", rc, (unsigned long long)g_run_id);

@@ -91,6 +91,13 @@ if(_n GREATER 0)
     file(CONFIGURE OUTPUT "${UNITY_DIR}/game_${_u}.cpp" CONTENT "${_batch}" @ONLY)
     list(APPEND UNITY_SOURCES "${UNITY_DIR}/game_${_u}.cpp")
 endif()
+# log92: game code at -O3 (sa2-nx compiles its recompiled code at -O3; -O2 before). OFF = -O2 again.
+option(LSW_GAME_O3 "Compile the generated game code at -O3" ON)
+if(LSW_GAME_O3)
+    set(LSW_GAME_OPT -O3)
+else()
+    set(LSW_GAME_OPT -O2)
+endif()
 add_library(GameCode OBJECT ${UNITY_SOURCES})
 target_include_directories(GameCode PRIVATE
     "${RECOMP_OUTPUT}" "${LSW_ROOT}/LSWTCSRuntime/include" "${LSW_ROOT}/simde/simde")
@@ -105,7 +112,7 @@ if(LSW_GAME_PCH)
 endif()
 target_compile_options(GameCode PRIVATE
     # -g1 (line tables only): full -g on 20-file unity units costs GCC several GB each.
-    ${LSW_ARCH_FLAGS} ${LSW_GAME_COMPAT} -O2 -g1 -w -fno-exceptions -fno-rtti
+    ${LSW_ARCH_FLAGS} ${LSW_GAME_COMPAT} ${LSW_GAME_OPT} -g1 -w -fno-exceptions -fno-rtti
     -ffunction-sections -fdata-sections)
 if(LSW_GAME_INLINE AND EXISTS "${GAME_UNITS_FILE}")
     # Under -fPIC GCC treats every global function as replaceable and inlines none of them; nothing replaces symbols in the
@@ -308,9 +315,9 @@ if(LSW_DEKO_BACKEND)
     nx_generate_nacp(lswtcs.nacp NAME "TCS Deko Live" AUTHOR "LSWTCS port" VERSION "0.0.7")
 else()
     if(LSW_GUEST_NONVOLATILE)
-        set(LSW_NACP_VERSION "0.0.97-log91nv")
+        set(LSW_NACP_VERSION "0.0.98-log92nv")
     else()
-        set(LSW_NACP_VERSION "0.0.97-log91")
+        set(LSW_NACP_VERSION "0.0.98-log92")
     endif()
     nx_generate_nacp(lswtcs.nacp NAME "LSWTCS" AUTHOR "LSWTCS port" VERSION "${LSW_NACP_VERSION}")
 endif()

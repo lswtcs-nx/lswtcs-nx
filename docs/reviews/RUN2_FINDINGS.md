@@ -3403,3 +3403,19 @@ The tester ran the NRO that was on the SD before B was staged: log90's code plus
 
   The remaining ones are in the runtime and libraries.
 - **Next test:** B, one launch, as in "Log 91". Compare against 158 ns.
+
+## Run 93 (log91 B, handheld, 2026-11-06): -3.8 % CPU per guest call; the table and the double compares are gone from the profile
+
+One launch of B (`[INIT] guest addresses: fast fold, no region table (log91 B)`), the same route as runs 91 and 92 (the hub, `Gungan_A`, `Gungan_B`'s heavy part, the hub; 269 s). No crash, nothing reported wrong. In `private/runs/run93-log91b` with its ELF.
+
+- **CPU per guest call: 152 ns (90 %: 152-152)**, against 158 (157-159) and 158 (156-159) in runs 91 and 92, the same route on the same day. That is -3.8 %. It is also under every earlier session (runs 72-92: 155-170), whose spread is about 3 %.
+  - Before the run, about 150 was set as a clear gain and 152-163 as no measurable change. So 152 sits at that edge. The read here is a likely gain of about 4 %, not proven by the threshold set in advance.
+  - It is the two changes together (fast fold and quiet compares); this run cannot split them.
+- **FPS:** handheld is GPU-bound (heavy part 25.7), so FPS cannot show it. At 113-169 k guest calls per replay, 6 ns a call is about 0.7-1.0 ms of main-thread CPU per frame. Docked, CPU-bound at about 33 ms a frame, that would be about +3 % (30.0 to about 31 FPS). This is an estimate, not measured.
+- **Control state:** +0.2 % (90 %: -7.1 to +6.7).
+- **`[TLBBENCH]`:** aligned alias 196.4, offset 203.7 (+3.7 %), guest range 205.8. The same picture as run 92.
+- **Main-thread profile** (heavy frames, 37,936 samples, 79 % in guest code). Still flat: `sub_8231ED30` 4.6 %, `sub_82320328` 3.5 %, `sub_822B5878` 3.2 %.
+  - On or right after a float compare: 1.0 % of guest-code samples (3.0 % in run 91).
+  - After `msr fpcr` (flush-mode switches): 2.4 %. There are 72,249 such instructions in the game code.
+  - Region-table loads: gone.
+  - What remains is the access after the new `csel`, stores into `ctx`, and the switches. No single cost is above about 2-3 %.

@@ -522,3 +522,12 @@ Runs 73-75 crashed from host memory, and the remaining stutters are texture uplo
   - if `[TLBBENCH]` shows no 2 MB blocks, log89's layout can stay (it costs about 6 MB) but its premise is gone;
   - the hand track (katamari) then starts from a profile without these two costs.
 - **PGO** stays the owner's call (one extra session on an instrumented NRO). **Four cores** stay the author's (a forwarder install).
+
+## Update after run 93 (6 November 2026)
+
+- **log91 B (fast address fold plus quiet compares):** 152 ns per guest call against 158 twice the same day, and under every earlier session. Likely about -4 % of main-thread CPU. Docked this should be about +3 % FPS, unmeasured. B is the build on the SD.
+- **To make B the default in the source** (no output copy): apply `--fold-fast` to the main output (the tool refuses that today on purpose), and drop the heap bypass (`LSWTCS_HEAPBYPASS=1`), which B cannot run with. The bypass is already off in env.txt. This is the next small step.
+- **Left on the main thread, heavy frames:** flush-mode switches about 2.4 % of guest-code samples, float compares 1.0 %, the rest spread thin. The largest functions are under 5 %. Further CPU gains need either:
+  - a flush-mode flow proof (renut's `flush_mode_flow`: drop switches the control flow proves unneeded; up to about 2 %);
+  - PGO (the owner's call);
+  - katamari's hand track on functions whose samples show a removable cost. None stands out now.

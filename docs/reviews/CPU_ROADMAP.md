@@ -478,3 +478,34 @@ Runs 73-75 crashed from host memory, and the remaining stutters are texture uplo
 - Whether the kernel really uses block descriptors for code-memory `MapOwner` mappings is not proven. Torchlight's backings are mapped the same way (heap backing plus code alias) and they measured the gain.
 - **Expected:** fewer TLB misses on guest loads and stores. Most visible docked (CPU-bound), where the main thread is about 95 % busy.
 - **Measure:** docked, `Gungan_B`'s heavy part, against run 71's 30.0 FPS (CPU wall) and `guest_call_cost.py`. The cross-session spread is about 3 %.
+
+## renut-nx, katamari-nx and mkdd-nx study (6 November 2026)
+
+**Sources:** renut-nx `docs/` (codegen-enhancements, enhancements, pgo-lto, four-core-mode, renut-cpu-work-from-sa2, record-time-draw-path, porting-start-here, porting-a-360-game-prompt; no licence shown, so techniques only), katamari-nx `docs/optimising-functions.md` (GPL-3, techniques only), mkdd-nx `OPTIMIZATION.md`, `RECOMP_PORT_GUIDE.md`, `DEKO3D_MIGRATION.md` (MIT). No code was taken.
+
+**Most of what they list is already here, or was measured here and dropped:**
+
+| Technique | This port | Verdict |
+| --- | --- | --- |
+| Registers as C++ locals (non-volatile, non-argument, CR/CTR/XER) | `lswtcs_locals.toml`; no `ctx.r0/r2/r11/r12/f0` in the output | Done |
+| Hot functions gathered in one region (renut's `.text.hot`, for the instruction TLB) | `hot_order.ld`: 2042 sampled functions in 3.7 MB (run 37) | Done |
+| Inlinable guest calls, LTO | `LSW_GAME_INLINE`: no gain in run 64 (156-161 ns per call either way) | Measured, off |
+| Flush mode only switched when it changes | `enableFlushMode` tests the cached `csr` before `msr fpcr` | Done |
+| `skip_msr`, cheap `KeTlsGetValue`, buffered logs | Done (mk9-nx, torchlight-nx studies; `lsw_log_async`) | Done |
+| Guest memory without `volatile` plus loop barriers | log77 B: wrong behaviour in run 78, because GameCode lacks `-fno-strict-aliasing` (renut and Banjo compile with it). Even so, at most 2-5 % per guest call | Shelved; a redo needs `-fno-strict-aliasing` |
+| `dcbt` as prefetch (2,804 sites here, now emitted as comments) | renut's method rule: prefetch measured neutral or slower on the A57 almost every time | Not done |
+| `rlwinm` as shift or extract forms (25,576 rotate-and-mask sites here) | devkitA64 GCC already emits 1-2 instructions for most masks. A rewrite would save about one instruction at some sites; renut measured -0.59 % | Too small to measure |
+| Arguments in registers | renut measured a net loss (+2.8 % cost) once registers are locals | Not done |
+| Localized copies and hand-written natives (katamari: only past a console-profile gate, at least 2 % of the limiting thread, with a removable cost) | Our main-thread profile is flat; the top function is 4.7 % (run 72) | Fails the gate today |
+| PGO (renut: instrumented build, one session, then an optimised build; bo2-360-nx +9 %) | Never tried. Counts must come from the Switch build, so it needs one session on an instrumented NRO, which runs slower | **Candidate; the owner's call** (an extra hardware session) |
+| Four cores (renut: background threads on core 3 when the NPDM grants it) | `LSWTCS_CORE3=1` is set (bo2-360-nx route); whether a launch is granted core 3 is not rechecked in this study. A four-core NPDM needs a forwarder title | **The author's call** (an install) |
+| mkdd: present the picture without the final copy; count game frames; switchable changes; measure one change at a time | Our FPS counts guest swaps; every change has an A/B letter or an environment switch | Method already followed |
+
+**Correctness finding, no change made:** GameCode is compiled without `-ffp-contract=off`, so GCC (`-ffp-contract=fast` by default) may fuse a separate guest `fmul` and `fadd` into one FMA, which the 360 would round twice. renut found exactly this ("a correctness fix, not an enhancement"). Here the generator writes the fused `fmadd` family as `a * b + c` (9,019 sites), which is only fused because of that same default. So turning contraction off would make `fmadd` round twice. The right fix is `fma()` for the fused forms plus `-ffp-contract=off`. It changes game arithmetic, so it needs its own test and the author's review. Not related to any open issue so far.
+
+**renut's method rule taken: a do-nothing control in the A/B list.** Their 15 s pairs had about ±1.5 ms of noise and marked items slower that were not. Here every A/B claim is judged by its interval, but the method's own noise was never measured in-run.
+
+**log90 (`0.0.96-log90`):**
+- **Hold L while the game starts** to get the 4 KB guest page layout for that launch (as `LSWTCS_GUEST2MB=0`). Boot prints `[NX] guest page layout: 2 MB` or `4 KB`, and the window line names the layout. So one session can compare log89's 2 MB pages with the old layout at the same place.
+- **env.txt:** `LSWTCS_ABSTATES=MAPXSHNLUBIkhwregdq,MAPXSHNLUBIkhwregdq0`. Both are the full set; the digit `0` switches nothing. The FPS difference between them is the in-run noise floor.
+- **Test (docked, CPU-bound):** launch normally, hub then `Gungan_B`'s heavy part for about 2 minutes, back to the hub; quit. Launch again holding L, same route. Compare the heavy part's FPS and `guest_call_cost.py` between the launches, and the two A/B states within each launch.

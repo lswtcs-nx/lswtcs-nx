@@ -568,6 +568,18 @@ extern "C" bool lsw_switch_init() {
                (unsigned long long)(used >> 20), (unsigned long long)(top >> 20));
     }
     load_env_file(LSW_DATA_DIR "/env.txt");
+    {   // log90: L held while the game starts = the 4 KB guest page layout for this launch only (as LSWTCS_GUEST2MB=0), so one
+        // session can play the same place with log89's 2 MB layout and without it. Sampled for about 60 ms: HID needs a moment.
+        padConfigureInput(8, HidNpadStyleSet_NpadStandard);
+        PadState p;
+        padInitializeDefault(&p);
+        uint64_t held = 0;
+        for (int i = 0; i < 12; ++i) { padUpdate(&p); held |= padGetButtons(&p); svcSleepThread(5000000); }
+        if (held & HidNpadButton_L) setenv("LSWTCS_GUEST2MB", "0", 1);
+        const char* g2 = getenv("LSWTCS_GUEST2MB");
+        printf("[NX] guest page layout: %s (%s)\n", g2 && g2[0] == '0' ? "4 KB" : "2 MB",
+               held & HidNpadButton_L ? "L held at start" : "LSWTCS_GUEST2MB / default");
+    }
     if (&lsw_big_alloc_min) {   // log75: blocks of this many KB or more from newlib, not rpmalloc's caches (0 = all rpmalloc)
         if (const char* e = getenv("LSWTCS_BIGALLOC")) lsw_big_alloc_min = size_t(atoi(e)) * 1024;
         printf("[HEAP] blocks of %zu KB or more from newlib's allocator (LSWTCS_BIGALLOC, 0 = all in rpmalloc)\n", lsw_big_alloc_min / 1024);
@@ -624,8 +636,8 @@ extern "C" uint8_t* lsw_switch_guest_window(size_t size) {
     VirtmemReservation* res = w ? virtmemAddReservation(w, size) : nullptr;
     virtmemUnlock();
     if (!res) { printf("[NX] cannot reserve 0x%zX-byte guest window\n", size); return nullptr; }
-    printf("[NX] guest window %p (0x%zX bytes, %s)\n", (void*)w, size,
-           ((uintptr_t)w & (kBlock - 1)) == 0 ? "2 MB aligned" : "not 2 MB aligned: 4 KB pages");
+    printf("[NX] guest window %p (0x%zX bytes, %s, %s layout)\n", (void*)w, size,
+           ((uintptr_t)w & (kBlock - 1)) == 0 ? "2 MB aligned" : "not 2 MB aligned: 4 KB pages", big ? "2 MB" : "4 KB");
     const char* hb = getenv("LSWTCS_HEAPBYPASS");
     const bool bypass = !(hb && hb[0] == '0');   // same default as main.cpp lswtcs_bypass_on(): ON unless "0"
     for (const LswGuestRange& r : lsw_guest_ranges) {

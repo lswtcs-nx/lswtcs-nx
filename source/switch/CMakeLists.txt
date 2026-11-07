@@ -349,6 +349,11 @@ if(LSW_DEKO_BACKEND)
 else()
     if(LSW_GUEST_NONVOLATILE)
         set(LSW_NACP_VERSION "0.0.99-log96nv")   # log96: no strict aliasing, barriers on guest memory only
+        if(LSW_PGO STREQUAL "generate")
+            set(LSW_NACP_VERSION "0.0.99-log97nvg")   # log97: the instrumented NRO of log96's code (wide counts)
+        elseif(LSW_PGO STREQUAL "use")
+            set(LSW_NACP_VERSION "0.0.99-log98nvp")   # log98: log96's code optimised with those counts
+        endif()
     else()
         set(LSW_NACP_VERSION "0.0.99-log93")
         if(LSW_PGO STREQUAL "generate")

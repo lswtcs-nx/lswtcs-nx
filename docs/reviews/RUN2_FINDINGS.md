@@ -3581,3 +3581,16 @@ In C the r10 loop keeps the register in a host register (the reload is gone; one
 - **FPS between sessions is noisy.** The same build against run 97, load-matched: heavy -6.1 % (90 %: -21 to +2), medium +12.1 %. Against run 94's 460.8 MHz state, heavy +3.1 % (90 %: -4.4 to +12.5), not run 97's +11.4 %.
 - **Correction to run 97:** PGO's main-thread gain (-10 % CPU per guest call) is solid. Its heavy-frame FPS gain is somewhere between about +3 and +11 %. One session against another cannot place it closer.
 - **Method:** ns per guest call is the measure to trust across sessions (±1 % here). Cross-session FPS needs in-run A/B, or several sessions.
+
+## Run 99: log96 (guest memory without volatile) in handheld at 460.8 MHz: about -11 % CPU per guest call without PGO
+
+- **It was log96:** the boot line reads `... no strict aliasing, guest-memory barriers at loop headers and fences (log96)`.
+- **Played:** the hub, Gungan A, B, C and E; 7.3 minutes. No errors in the log. SoC at most 44.4 °C.
+- **CPU per guest call: 139 ns** (90 %: 138-141; 15 heavy windows). Earlier results:
+  - run 94's 460.8 MHz windows, the same code with volatile and no PGO: 157;
+  - PGO (runs 97 and 98): 140-141.
+
+  So log96 gains about as much as PGO did, without it.
+- **Load-matched FPS, Gungan:** against run 94's 460.8 MHz state, heavy +6.7 % (90 %: -4.2 to +41) and medium +4.7 %. One session against another; run 98 showed that such comparisons move by ±10 %.
+- **Behaviour:** waiting on the tester (run 78 had the camera moving by itself and a lower audio pitch).
+- **Next:** log97, the instrumented NRO of log96's code (`build-nvpgo`, counts to `private/pn`), for the wide counting session. Then log98, log96's code optimised with those counts.

@@ -130,6 +130,9 @@ if(LSW_GUEST_NONVOLATILE)
         message(FATAL_ERROR "LSW_GUEST_NONVOLATILE needs RECOMP_OUTPUT made by tools/make_nonvolatile_output.py")
     endif()
     target_compile_definitions(GameCode PRIVATE LSW_GUEST_NONVOLATILE=1)
+    # log96: without volatile, GCC's type-based aliasing let a 32-bit store and a 16- or 64-bit load of the same guest address
+    # pass each other (run 78: the camera drifting, audio pitch). The runtime has always been built this way.
+    target_compile_options(GameCode PRIVATE -fno-strict-aliasing)
 endif()
 
 # ---- XMA audio decoding: FFmpeg subset (aarch64 files instead of x86) + Xenia XmaContextNew ----
@@ -345,7 +348,7 @@ if(LSW_DEKO_BACKEND)
     nx_generate_nacp(lswtcs.nacp NAME "TCS Deko Live" AUTHOR "LSWTCS port" VERSION "0.0.7")
 else()
     if(LSW_GUEST_NONVOLATILE)
-        set(LSW_NACP_VERSION "0.0.99-log93nv")
+        set(LSW_NACP_VERSION "0.0.99-log96nv")   # log96: no strict aliasing, barriers on guest memory only
     else()
         set(LSW_NACP_VERSION "0.0.99-log93")
         if(LSW_PGO STREQUAL "generate")

@@ -3538,3 +3538,37 @@ One launch, the usual route (the hub, `Gungan_A`, `Gungan_B`'s heavy part, the h
   - **The tool's checks:** run 94's v against its base state gives +10.1 % heavy, as reported then (+9.7 %). Run 93 against run 94's base state (same build and clock) gives +0.7 % heavy.
 - **Caveat:** one session against another. The heavy gain matches the main-thread CPU gain, as expected now that heavy frames are CPU-limited at 460.8 MHz. Gungan B and C were played here, and only B in run 94. No errors in the log.
 - **Kept:** the PGO build is the build to stage from now on. Changed functions lose their counts (shown as coverage-mismatch warnings) until a new counting session, so the counts should be renewed after large changes. The instrumented build of the same code is `-DLSW_PGO=generate` in `build-pgo`.
+
+## Log 96: `0.0.99-log96nv`, guest memory without volatile again, with the run 78 fault fixed
+
+**Why now.** The two hottest game functions (`sub_8231ED30` and `sub_82320328`, 8 % of the main thread in run 97) spend their samples on loops that load, increment and store a guest register kept in `ctx` (r10, at `[ctx, #64]`) on every iteration. GCC's loop store motion gives up on loops that contain `volatile` accesses, and every guest load and store is `volatile`.
+
+**PC test on unit 359** (GCC 16.1, `-O3`, no PGO; instructions and `ctx` loads and stores per function):
+
+| | `sub_82320328` | `sub_8231ED30` |
+| --- | --- | --- |
+| A: as now (volatile) | 508 / 101 | 1409 / 297 |
+| B: log77's non-volatile copy (barrier clobbers all memory) | 514 / 47 | 993 / 89 |
+| C: non-volatile, barrier on guest memory only | 513 / 44 | 989 / 75 |
+
+In C the r10 loop keeps the register in a host register (the reload is gone; one store per iteration is left).
+
+**Log96 = C, made from the current output** (`switch/tools/make_nonvolatile_output.py` into `output_nv`, build folder `build-nv`, no PGO):
+- **`-fno-strict-aliasing` on GameCode.** Run 78's camera drift and audio pitch were very likely type-based aliasing: without `volatile`, a 32-bit store and a 16- or 64-bit load of the same guest address could pass each other. The runtime has always had the flag.
+- **`LSW_GUEST_BARRIER()` is now `asm volatile("" : "+m"(*(uint8_t (*)[4 GB])base))`:** it may read and write all of guest memory, and nothing else.
+  - It sits at the 33,616 loop headers and 70 guest fences.
+  - Guest values are reloaded after it, as before. Registers kept in `ctx` (restrict, never in guest memory) may stay in host registers.
+- **Unchanged:**
+  - MMIO stores stay volatile;
+  - `lwarx`/`stwcx.` stay atomics;
+  - the runtime keeps volatile;
+  - quiet compares, fast fold and vector reversal are in, as in log95.
+- **Boot line:** `[NX] guest code: loads and stores without volatile, no strict aliasing, guest-memory barriers at loop headers and fences (log96)`.
+- **Not PGO.** Changed generated code drops the counts. The comparison is run 94's 460.8 MHz state (the same code with volatile, no PGO): 157 ns per guest call. If log96 holds up, the wide counting session is done on its code.
+- **Built:** `.text` 101.6 MB, against 103.6 MB in `build-mesa`. `sub_8231ED30` went from 5,636 to 3,956 bytes; `sub_82320328` from 2,032 to 2,052. NRO `545240f85bbe53a8`, ELF `private/lswtcs-log96nv.elf`.
+- **SD:**
+  - `switch/lswtcs.nro` = log96;
+  - `switch/lswtcs-log95pgo.nro` = run 97's build (`029aa06125b91c0a`), the fallback for normal play.
+- **Test (handheld, normal speed, the usual route: the hub, Gungan A and B's heavy part, back to the hub):**
+  - Watch for run 78's faults (the camera moving by itself, a lower audio pitch) and anything else unusual. If one shows, close it and use the log95 NRO.
+  - From the logs: ns per guest call against 157 (run 94 at 460.8 MHz, the same code with volatile, no PGO), and load-matched FPS against run 94's v state (`pair_runs.py`).

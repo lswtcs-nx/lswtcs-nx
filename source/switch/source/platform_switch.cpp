@@ -563,7 +563,7 @@ extern "C" bool lsw_switch_init() {
            (unsigned long long)(info_u64(InfoType_TotalMemorySize) >> 20),
            (unsigned long long)(info_u64(InfoType_UsedMemorySize) >> 20));
 #ifdef LSW_BUILD_GUEST_NV
-    printf("[NX] guest code: loads and stores without volatile, barriers at loop headers and fences (log77 B)\n");
+    printf("[NX] guest code: loads and stores without volatile, no strict aliasing, guest-memory barriers at loop headers and fences (log96)\n");
 #else
     printf("[NX] guest code: volatile loads and stores (normal build)\n");
 #endif

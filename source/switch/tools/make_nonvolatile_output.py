@@ -7,7 +7,8 @@ The generated output itself is never changed. The copy differs in three ways:
    LSW_GUEST_NONVOLATILE is defined (CMake option LSW_GUEST_NONVOLATILE, GameCode target only), so the runtime, which
    includes the same header and polls guest memory in host loops, keeps volatile. The MMIO store macros
    (PPC_MM_STORE_*, 17 sites) keep volatile in every case.
-2. A compiler barrier (LSW_GUEST_BARRIER, an empty asm with a memory clobber) after every sync, lwsync, eieio and isync.
+2. A compiler barrier (LSW_GUEST_BARRIER, an empty asm that may read and write all of guest memory; log96: guest memory only,
+   no longer a clobber of all memory) after every sync, lwsync, eieio and isync.
    The generator emits these as comments only; volatile alone kept the order of stores around them.
 3. The same barrier right after every label that a later goto in the same function jumps to: every loop's header.
    Without it GCC may keep a value read from guest memory in a register for the whole loop, and a loop that waits for
@@ -29,7 +30,10 @@ CTX_HEAD = '''// ---- log77 (switch/tools/make_nonvolatile_output.py) ----
 #else
 #define LSW_GV volatile
 #endif
-#define LSW_GUEST_BARRIER() __asm__ __volatile__("" ::: "memory")
+// log96: the barrier names guest memory only (the whole 4 GB window behind `base`), not all memory. A "memory" clobber
+// also made GCC reload and store the guest registers kept in ctx around every loop header; ctx is restrict and never in
+// guest memory, so it may stay in host registers. Guest values are still reloaded after the barrier, as before.
+#define LSW_GUEST_BARRIER() __asm__ __volatile__("" : "+m"(*(uint8_t (*)[0x100000000ull])base))
 '''
 MM = '''// log77: MMIO stores stay volatile whatever LSW_GV is.
 #ifndef PPC_MM_STORE_U8

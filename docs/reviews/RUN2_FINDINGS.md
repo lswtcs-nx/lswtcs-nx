@@ -3511,7 +3511,12 @@ One launch, the usual route (the hub, `Gungan_A`, `Gungan_B`'s heavy part, the h
 ## Log 95: `0.0.99-log95pgo`, build 3 of 3: optimised with run 96's counts
 
 - **Build:** `build-pgo` reconfigured with `-DLSW_PGO=use`, so the profile folder is `private/pp`. Full rebuild of the game code and runtime; the same sources as log94 apart from the PGO hooks. About 33 minutes with 2 jobs.
-- **Warnings:** the use flags are now `-Wmissing-profile -Wno-error=coverage-mismatch` (were silenced). The build printed no warning: every object found its `.gcda` and no function's checksum changed.
+- **Warnings:** the use flags are now `-Wmissing-profile -Wno-error=coverage-mismatch` (were silenced). The build printed none, but that proves nothing: GameCode and the runtime are compiled with `-w`, which suppresses every warning.
+- **Checked object by object instead:**
+  - 358 of the 633 game-code objects have no count above zero: they never ran in run 96.
+  - 316 game-code objects have the same `.text` size as in `build-mesa`.
+  - Every object that ran changed, so the counts were read wherever there were any.
+  - The 57 % that never ran is the case for wider counts.
 - **The profile is applied:**
   - `.text` is 109.8 MB, against 103.6 MB in `build-mesa` (not PGO).
   - Game-code objects change size by -2 % to +4 %.

@@ -583,3 +583,55 @@ Techniques only, no code taken. Checked against this port:
   5. **Not speed:**
      - the movie through FFmpeg's WMV3 decoder (ISSUES #3);
      - our own options screen (clock and other choices).
+
+## Plan for the next two sessions (6 November 2026, after run 97)
+
+**What decides the grouping:**
+- **PGO counts belong to the code they were taken on.** A changed function loses its counts (checksum mismatch).
+  - Generated-code changes touch thousands of functions, so they need new counts.
+  - Runtime changes touch a few functions and keep most counts.
+- **A/B letters work in any build,** the instrumented one and the PGO one included.
+- **The counts so far are narrow.** 358 of the 633 game-code objects never ran in run 96, and PGO leaves those unoptimised.
+
+So every change goes into one instrumented build, played widely, and the PGO build made from its counts is measured. That is two sessions, one of them slow.
+
+**Run 97's profile, main thread, heavy frames:**
+- 79 % in generated game code. Flat: the top functions are 5.3, 3.7 and 3.0 %.
+- Inside it:
+  - flush-mode switches: 1.7 % of game-code samples;
+  - single/double float conversions: 2.0 %;
+  - float compares: 1.3 %.
+- **12 % without the turn,** mostly blocked. Other game threads run meanwhile (`[THREADCPU]` heavy windows: audio `827DB318` 3.5-4.0 ms a replay, scheduler id 11 3.9-4.0 ms).
+- About 1.3 % sleep-polling in `async_walk_join` (the walker join from `lswtcs_ad6a0_phase`).
+- **Not a cost:** run 96's largest counter (11.3 billion) is a byte vector's default-init loop. It is empty, and so removed, outside the instrumented build.
+
+**Build 1 (log96, instrumented; the wide counting session):**
+
+| Item | Where | Size (estimate) | How it is checked |
+| --- | --- | --- | --- |
+| Flush-mode flow: drop switches the control flow proves redundant | generated code | at most about 1.5 % main thread | Built in; a PC check of the rewrite |
+| Single-precision arithmetic without the double round trip, only where both operands are provably single values | generated code | at most about 2 % | Built in; exhaustive PC check of the rewritten forms |
+| Removable costs in the top three game functions, if any (katamari's gate) | generated code | 0 to a few % | Built in; PC check |
+| Walker join woken instead of polled | runtime | about 1 % | A/B letter |
+| Turn sharing: whether the main thread waits for thread 11's or the audio thread's turns in heavy frames, and whether that work can run off the turn (as audio callbacks already do) | runtime | **up to about 10 % of main-thread time; the largest unknown, and the riskiest** | PC analysis of runs 94-97 first; A/B letter only if a safe route exists |
+| Resolve hand-over: a colour resolve that clears its source hands the render target's texture over instead of copying (needs a coordinate scale in the fetch) | renderer | about 1.4 ms of GPU at 460.8 MHz, about 5 % of a GPU-limited frame | A/B letter, plus a visual check |
+| Control letter that switches nothing | | | In-run noise |
+| Our options entry: GPU clock 307.2 / 460.8 MHz, saved on the card | runtime | not speed | Functional check |
+
+**Test 1 (slow, 15-20 minutes, handheld or docked):** several episodes, vehicle levels, the cantina and cutscenes. Closing from HOME is fine. Bring back `lswtcs/pgo/` and the logs. Any visual fault matters: the letters switch every 15 s.
+
+**Build 2 (log97): PGO use with test 1's counts.** No code change after build 1.
+
+**Test 2 (normal speed, handheld, the usual route plus one other level):**
+- the letters in-run;
+- ns per guest call against run 97's 140;
+- FPS against run 97, load-matched.
+
+**Outside this cycle:**
+- the movie through FFmpeg's WMV3 decoder (ISSUES #3; large, and only the title-idle demo);
+- four cores (an install, the author's call);
+- the `fp-contract` correctness fix (changes game arithmetic, the author's review);
+- localized copies (the profile is flat: no function passes the gate with a removable cost);
+- Deko3D.
+
+The cutscene fault from run 95 waits for the tester's description.

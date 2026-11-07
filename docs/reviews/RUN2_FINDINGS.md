@@ -3518,3 +3518,18 @@ One launch, the usual route (the hub, `Gungan_A`, `Gungan_B`'s heavy part, the h
   - `gl_backend.o` has 104 hot or cold sections, against 8 without PGO.
   - Guest functions are not split into hot and cold sections. With `-fprofile-partial-training`, functions that never ran keep the normal optimisation.
 - **Test (handheld, the usual route; 460.8 MHz is the default):** nothing to switch. Compare with run 94's 460.8 MHz windows: 157 ns per guest call (`guest_call_cost.py`), and FPS in the heavy and medium scenes (medium 44.2). Gameplay outside the counted levels (the map, Gungan, PodSprint) may gain less, or lose a little.
+
+## Run 97: log95 (PGO) in handheld at 460.8 MHz, 5.7 minutes: main thread about 11 % faster
+
+- **CPU per guest call: 140 ns** (90 %: 139-143; 15 heavy windows). Earlier results:
+  - run 94's 460.8 MHz windows: 157 ns;
+  - run 94 and run 93 at 307.2 MHz: 151-152 ns;
+  - the instrumented build: 227 ns.
+
+  About -11 % at the same clock, and the lowest of any session; the earlier cross-session spread was 3 %.
+- **Load-matched frame time, Gungan levels** (`private/session-tools/pair_runs.py`, new). Frames are binned by draw count and compared with run 94's 460.8 MHz state.
+  - **Heavy (1300+ draws):** -10.2 % frame time, +11.4 % speed (90 %: -30.7 to -0.6 % frame time; 2787 against 1489 frames). Unmatched means: 30.0 against 28.0 FPS.
+  - **Medium (700-1299 draws):** -0.7 % (90 %: -16.5 to +3.4 %; 158 frames on run 94's side). No measurable change. These frames are probably GPU-limited at 460.8 MHz.
+  - **The tool's checks:** run 94's v against its base state gives +10.1 % heavy, as reported then (+9.7 %). Run 93 against run 94's base state (same build and clock) gives +0.7 % heavy.
+- **Caveat:** one session against another. The heavy gain matches the main-thread CPU gain, as expected now that heavy frames are CPU-limited at 460.8 MHz. Gungan B and C were played here, and only B in run 94. No errors in the log.
+- **Kept:** the PGO build is the build to stage from now on. Changed functions lose their counts (shown as coverage-mismatch warnings) until a new counting session, so the counts should be renewed after large changes. The instrumented build of the same code is `-DLSW_PGO=generate` in `build-pgo`.

@@ -565,3 +565,21 @@ Techniques only, no code taken. Checked against this port:
 | Localized copies with changed-only write-backs, inlined callees, direct dispatch (bejeweled3-nx's machine track) | main thread 21-25 to 16-18.5 ms (part of it the scene) | Our inlining try (run 64) gained nothing. A copy mainly wins where it swallows calls | Large tool work; after PGO |
 | Sampling profiler by flag file (`perfil_pilas.flag`) | | `LSWTCS_HWPROF=2` does this | Have it |
 | SaltyNX overlay compatibility, sys-botbase, debug server, Ryujinx fork, controller applet | tooling | Controller applet exists (L+R+Plus). The others are installs on the tester's console or PC: their call | Not ours to install |
+
+## Update after run 97 (6 November 2026)
+
+- **Done:**
+  - 460.8 MHz in handheld by default (run 94: +9.7 % heavy).
+  - PGO (run 97: -11 % main-thread CPU per guest call, +11 % heavy frames at 460.8 MHz; one session against another).
+  - `-O3` and the one-TBL vector reversal: neutral, kept.
+- **Where frames stand in handheld:**
+  - Heavy Gungan frames are about 30 FPS and limited by the main thread.
+  - Medium frames did not move with PGO, so they are probably limited by the GPU at 460.8 MHz.
+- **Next, by size:**
+  1. **Wider PGO counts.** The counts cover the map, Gungan and PodSprint only. A second counting session on other episodes (the same log94 instrumented NRO, nothing to build) is merged by `tools/pgo_merge.py`. It should spread the gain to other levels. It costs the tester one slow session.
+  2. **Resolves without copies** (about 2 ms of GPU a frame): for the GPU-limited medium frames.
+  3. **Localized copies / direct dispatch** (bejeweled3-nx's machine track): the largest CPU item left, and large tool work.
+  4. **Small:** FPCR switches (2.4 %), dead ctx writes, read-only constants.
+  5. **Not speed:**
+     - the movie through FFmpeg's WMV3 decoder (ISSUES #3);
+     - our own options screen (clock and other choices).

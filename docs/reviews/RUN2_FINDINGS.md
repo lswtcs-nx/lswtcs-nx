@@ -3594,3 +3594,18 @@ In C the r10 loop keeps the register in a host register (the reload is gone; one
 - **Load-matched FPS, Gungan:** against run 94's 460.8 MHz state, heavy +6.7 % (90 %: -4.2 to +41) and medium +4.7 %. One session against another; run 98 showed that such comparisons move by ±10 %.
 - **Behaviour:** normal, the tester reports: no camera moving by itself and no change in audio pitch (run 78's faults). So `-fno-strict-aliasing` fixed what run 78 showed, and log96 becomes the build to play.
 - **Next:** log97, the instrumented NRO of log96's code (`build-nvpgo`, counts to `private/pn`), for the wide counting session. Then log98, log96's code optimised with those counts.
+
+## Log 97: `0.0.99-log97nvg`, the instrumented NRO of log96's code, for the wide counting session
+
+- **Build:** `build-nvpgo`, `-DLSW_PGO=generate`, `RECOMP_OUTPUT` = `output_nv`, counts to `private/pn`.
+  - The same options as `build-nv` (PCH on, units of 5); the 633 unity files are identical.
+  - The longest `.gcda` name is 257 characters (the folder name is 2 characters longer than `build-pgo`'s).
+- **SD:**
+  - `switch/lswtcs.nro` = log96 (title `LSWTCS`), the build to play;
+  - `switch/lswtcs-contagem-pgo.nro` = log97, under its own title `LSWTCS contagem PGO` (the same ELF repacked with that NACP name; `6e7ca985011aaccc`, ELF `private/lswtcs-log97nvg.elf`).
+  - The log95 fallback is gone: log96 behaved normally.
+- **Test, when the tester has time (slow, 15-20 minutes, any mode):**
+  - several episodes, vehicle levels, bonus levels, the hub, cutscenes, and Gungan too: these counts start from zero;
+  - close from HOME;
+  - bring back `lswtcs/pgo/` and the logs.
+- **Then:** `python tools/pgo_merge.py <streams> --profile-dir private/pn`, `build-nvpgo` reconfigured with `-DLSW_PGO=use` (log98nvp), and a normal measuring session.

@@ -3498,3 +3498,23 @@ One launch, the usual route (the hub, `Gungan_A`, `Gungan_B`'s heavy part, the h
 - First snapshot after 1 minute, then every 2 minutes (was 3). Closing from HOME loses at most the last 2 minutes.
 - Only `lsw_pgo.cpp` and the NACP version changed; the game code and the rest of the runtime are the same objects, so the counts fit the `use` build of the same folder.
 - **Test:** play as in run 95, at least 10 minutes; closing from HOME is fine. Bring back `lswtcs/pgo/` with the logs. The log should show `rc=0x0` and `[PGO] snapshot 1 (periodic): 657 objects, ...` about a minute in.
+
+## Run 96: log94 instrumented NRO, 8.8 minutes in handheld; counts written
+
+- **The snapshot thread ran:** `rc=0x0`, then 4 snapshots of 657 objects, 24.2-24.4 MB each. The first took 40.6 s (new file); the others took 6-12 s, on core 2 at the lowest priority.
+- **Played:** the map, Gungan A, B, C and E (Episode I), and PodSprint A (a vehicle level). Closed from HOME, so the last 1-2 minutes are not in the counts.
+- **460.8 MHz again steady:** memory at 1331.2 MHz in all 105 samples; SoC 40.6 to 45.2 °C.
+- **Merging, two fixes in `tools/pgo_merge.py`:**
+  - **Long paths.** Under `private/pgo/profile`, 9 runtime objects' `.gcda` names were 256 to 264 characters long, and the Windows tools do not write past 259. The compiler would not read them either. The profile folder is now `private/pp`: the tool rewrites each name in a copy of the stream (`private/pp-streams`) before `merge-stream`. The longest name is now 255 characters, and all 657 files are written.
+  - **Empty summary.** The stream path writes the object summary as zeros, `sum_max` as well as `runs`. GCC sets its hot threshold from `sum_max`, so with 0 every block would count as hot. Each summary now gets `runs = 1` and `sum_max` = the largest arc count over all objects: 11.3 billion (probably a wait loop), stored in 32 bits as 4294967295.
+
+## Log 95: `0.0.99-log95pgo`, build 3 of 3: optimised with run 96's counts
+
+- **Build:** `build-pgo` reconfigured with `-DLSW_PGO=use`, so the profile folder is `private/pp`. Full rebuild of the game code and runtime; the same sources as log94 apart from the PGO hooks. About 33 minutes with 2 jobs.
+- **Warnings:** the use flags are now `-Wmissing-profile -Wno-error=coverage-mismatch` (were silenced). The build printed no warning: every object found its `.gcda` and no function's checksum changed.
+- **The profile is applied:**
+  - `.text` is 109.8 MB, against 103.6 MB in `build-mesa` (not PGO).
+  - Game-code objects change size by -2 % to +4 %.
+  - `gl_backend.o` has 104 hot or cold sections, against 8 without PGO.
+  - Guest functions are not split into hot and cold sections. With `-fprofile-partial-training`, functions that never ran keep the normal optimisation.
+- **Test (handheld, the usual route; 460.8 MHz is the default):** nothing to switch. Compare with run 94's 460.8 MHz windows: 157 ns per guest call (`guest_call_cost.py`), and FPS in the heavy and medium scenes (medium 44.2). Gameplay outside the counted levels (the map, Gungan, PodSprint) may gain less, or lose a little.

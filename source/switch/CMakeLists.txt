@@ -262,8 +262,11 @@ endif()
 # must be the SAME build folder (build-pgo): the .gcda names hold the object paths. (-fprofile-prefix-path would need the folder
 # with backslashes, as GCC compares Windows paths, which does not survive make.) The counts are game-derived:
 # LSW_PGO_DIR is under private/. Changing game or runtime code after the counting session drops the counts of what changed.
+# Keep LSW_PGO_DIR short: each .gcda path is the folder + build-pgo's own path + the object's mangled path, and Windows tools
+# stop at 260 characters (run 96: under private/pgo/profile, 9 of 657 runtime objects did not fit). tools/pgo_merge.py
+# retargets the names in the streams to this folder.
 set(LSW_PGO "" CACHE STRING "Profile-guided optimisation: generate, use, or empty")
-get_filename_component(_pgo_default "${CMAKE_CURRENT_SOURCE_DIR}/../../private/pgo/profile" ABSOLUTE)
+get_filename_component(_pgo_default "${CMAKE_CURRENT_SOURCE_DIR}/../../private/pp" ABSOLUTE)
 set(LSW_PGO_DIR "${_pgo_default}" CACHE PATH "Folder of the .gcda files")
 if(LSW_PGO STREQUAL "generate")
     set(_pgo -fprofile-generate=${LSW_PGO_DIR} -fprofile-update=single
@@ -275,7 +278,9 @@ if(LSW_PGO STREQUAL "generate")
     target_link_options(lswtcs PRIVATE -fprofile-generate=${LSW_PGO_DIR})
 elseif(LSW_PGO STREQUAL "use")
     set(_pgo -fprofile-use=${LSW_PGO_DIR} -fprofile-correction
-        -fprofile-partial-training -fno-profile-values -Wno-missing-profile -Wno-coverage-mismatch)
+        -fprofile-partial-training -fno-profile-values -Wmissing-profile -Wno-error=coverage-mismatch)
+    # Warnings, not silence: a missing .gcda or a changed function shows in the build output. platform_switch.cpp's main()
+    # differs from the instrumented build (the PGO hooks), so its mismatch there is expected.
     target_compile_options(GameCode PRIVATE ${_pgo})
     target_compile_options(lswtcs PRIVATE ${_pgo})
 elseif(NOT LSW_PGO STREQUAL "")
@@ -345,6 +350,8 @@ else()
         set(LSW_NACP_VERSION "0.0.99-log93")
         if(LSW_PGO STREQUAL "generate")
             set(LSW_NACP_VERSION "0.0.99-log94pgo")   # the instrumented NRO (log94: snapshot thread fixed)
+        elseif(LSW_PGO STREQUAL "use")
+            set(LSW_NACP_VERSION "0.0.99-log95pgo")   # build 3: optimised with run 96's counts
         endif()
     endif()
     nx_generate_nacp(lswtcs.nacp NAME "LSWTCS" AUTHOR "LSWTCS port" VERSION "${LSW_NACP_VERSION}")

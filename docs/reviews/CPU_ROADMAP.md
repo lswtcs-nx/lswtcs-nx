@@ -635,3 +635,24 @@ So every change goes into one instrumented build, played widely, and the PGO bui
 - Deko3D.
 
 The cutscene fault from run 95 waits for the tester's description.
+
+## The plan, checked against the code (6 November 2026, same day)
+
+Every build-1 item was checked before writing code. Most were smaller than planned, or not possible as planned:
+
+| Item | What the code and run 97's profile show | Verdict |
+| --- | --- | --- |
+| Turn sharing | `[SCHEDPROF]`: the audio thread (`827DB318`) holds the turn about 1 % of the time with 25-30 % CPU, and id 11 about 1.5 % with 37-42 %. Both already run off the turn. The main thread's 12 % without the turn is frame-boundary waits: `VdSwap` waiting for the off-turn walker (`walk_wait_other`, 5.2 % of main-thread samples) and present waiting for the previous frame (5.6 %) | No item. Dropping `VdSwap`'s wait means handing the frame's publication to the walker, a redesign (state Y covers only the old W path; WY was -11.5 % when last measured) |
+| Walker join woken instead of polled | `async_walk_join`'s 20 µs sleeps are the wait for the walker itself (1.3 %), not a cost on top of it | Dropped |
+| Flush-mode flow | The switches are needed: they sit between scalar float work and vector work. A flow proof removes only the cached checks, plus the calls before plain moves (`fmr`, `lfd`, `stfd`) | Under about 0.5 %; dropped |
+| Single precision without the double round trip | 39,704 `double(float(a op b))` sites. Exact only when both operands are single values, which needs a dataflow proof; 2.0 % of game-code samples sit near conversions, and many conversions stay anyway | Dropped for now |
+| Resolve hand-over | Render targets are `w` x 2048 (`kRtH`) and the copies' destinations 1280x704. A handed-over texture would be taller than the fetch, and `resolved_view` would copy it again. It needs a coordinate scale in every translated fetch of a handed-over texture | A renderer change of its own; not in this build |
+| **Top game functions** (`sub_8231ED30` 4.7 %, `sub_82320328` 3.3 %) | Their hottest loops load, increment and store an argument register in `ctx` (`ldr`/`add`/`str [x19, #64]`) every iteration. GCC's loop store motion gives up on loops with `volatile` accesses, and argument registers r3-r10 live in `ctx` | **The largest CPU lever found:** argument registers as locals between calls (written back before calls and returns, read back after). Generator work, with no PC check of behaviour. Next cycle, with its own A/B builds |
+
+**Revised plan:**
+- **Test 1 needs no new code.** Wide counts on the same instrumented build as run 96 (`0.0.99-log94pgo`, repacked from its ELF: the same hash, `e2561f900de01a28`), on levels other than Gungan and PodSprint. The streams of both sessions merge.
+- **Build 2:** PGO use with both sessions' counts; the same code as log95. Measured as planned.
+- **The next cycle's candidates:**
+  - argument registers as locals;
+  - the resolve hand-over with a fetch scale;
+  - `VdSwap` without waiting for the walker.

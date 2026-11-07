@@ -3572,3 +3572,12 @@ In C the r10 loop keeps the register in a host register (the reload is gone; one
 - **Test (handheld, normal speed, the usual route: the hub, Gungan A and B's heavy part, back to the hub):**
   - Watch for run 78's faults (the camera moving by itself, a lower audio pitch) and anything else unusual. If one shows, close it and use the log95 NRO.
   - From the logs: ns per guest call against 157 (run 94 at 460.8 MHz, the same code with volatile, no PGO), and load-matched FPS against run 94's v state (`pair_runs.py`).
+
+## Run 98: log95 (PGO) again, not log96; the PGO CPU gain repeats, its FPS gain is smaller than run 97 showed
+
+- **Not log96.** The boot line reads `volatile loads and stores (normal build)`, and the profiler's code range (89.4 MB) is log95's. Both NROs showed in sphaira under the same name, `LSWTCS`, so the fallback was launched. It is now `lswtcs-reserva-log95.nro`, titled `LSWTCS reserva log95` (the same ELF repacked).
+- **Played:** the hub, Gungan A, B and C; handheld at 460.8 MHz. No errors. SoC at most 40.8 °C.
+- **CPU per guest call: 141 ns** (90 %: 140-144), against run 97's 140 with the same build. The PGO CPU gain repeats (run 94 at 460.8 MHz without PGO: 157).
+- **FPS between sessions is noisy.** The same build against run 97, load-matched: heavy -6.1 % (90 %: -21 to +2), medium +12.1 %. Against run 94's 460.8 MHz state, heavy +3.1 % (90 %: -4.4 to +12.5), not run 97's +11.4 %.
+- **Correction to run 97:** PGO's main-thread gain (-10 % CPU per guest call) is solid. Its heavy-frame FPS gain is somewhere between about +3 and +11 %. One session against another cannot place it closer.
+- **Method:** ns per guest call is the measure to trust across sessions (±1 % here). Cross-session FPS needs in-run A/B, or several sessions.

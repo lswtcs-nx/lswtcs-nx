@@ -3592,5 +3592,5 @@ In C the r10 loop keeps the register in a host register (the reload is gone; one
 
   So log96 gains about as much as PGO did, without it.
 - **Load-matched FPS, Gungan:** against run 94's 460.8 MHz state, heavy +6.7 % (90 %: -4.2 to +41) and medium +4.7 %. One session against another; run 98 showed that such comparisons move by ±10 %.
-- **Behaviour:** waiting on the tester (run 78 had the camera moving by itself and a lower audio pitch).
+- **Behaviour:** normal, the tester reports: no camera moving by itself and no change in audio pitch (run 78's faults). So `-fno-strict-aliasing` fixed what run 78 showed, and log96 becomes the build to play.
 - **Next:** log97, the instrumented NRO of log96's code (`build-nvpgo`, counts to `private/pn`), for the wide counting session. Then log98, log96's code optimised with those counts.

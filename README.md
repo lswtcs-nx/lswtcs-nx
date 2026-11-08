@@ -1,5 +1,48 @@
 # TCS360 collaborator handoff
 
+## Update, 8 November 2026: performance work since this handoff (read first)
+
+The handoff below is the **1 November** snapshot and still describes the project as it was then. Since then the
+collaborator's work (runs 10-102 on a real Switch) changed the runtime, the renderer and the build. Start here:
+
+- **[CPU roadmap](docs/reviews/CPU_ROADMAP.md):** the summary for whoever takes over. Its last section, "State on 8
+  November 2026", has the current figures per mode, what limits each mode, the next candidates and the open issues.
+- **[Run-by-run findings](docs/reviews/RUN2_FINDINGS.md):** every build and hardware session, newest last, with the
+  evidence behind each decision.
+- **[Build guide](docs/BUILDING.md):** "The current build (log98)" gives the recipe of the build to play.
+- **[Player profile](profiles/player.env):** `env.txt` without diagnostics. `profiles/hardware-ab.env` is the test
+  profile used in the sessions.
+- **Other reviews** in [docs/reviews](docs/reviews/): `BO2_OPTIMIZATION_PATHS.md`, `BO_OWNERSHIP_REVIEW.md`,
+  `PORT_RESEARCH.md`, `FRESH_BUILD_NOTES.md`.
+
+**Measured on the Gungan route (hub, Episode I chapter 2):**
+
+| | Handheld | Docked |
+| --- | --- | --- |
+| Average FPS, whole session | 41.6 | 48.9 |
+| Heavy combat frames | ~29 FPS | ~31 FPS |
+| Main-thread CPU per recompiled guest call | 157 ns before, 127 ns now | 162 ns before, 124 ns now |
+
+Other levels were not measured.
+
+**Decisions for the owner.** Each is in the current build and can be undone:
+1. **The handheld GPU runs at 460.8 MHz by default.** It is the official configuration `0x92220008`, not an
+   overclock; the memory clock is checked and the setting reverts if it moves. This handoff's rule was stock clocks.
+   `LSWTCS_GPUBOOST=0` restores 307.2 MHz. In-session A/B: +9.7 % FPS in heavy frames, +27 % in medium ones.
+2. **Guest memory without `volatile`**, with `-fno-strict-aliasing` and compiler barriers on guest memory only:
+   about -11 % main-thread CPU. It behaved normally in three sessions, all in Episode I.
+3. **Profile-guided optimisation:** about -10 % more. The counts come from a session on the instrumented build and
+   are not included (game-derived). Rebuild them with one 15-20 minute session, or build without PGO and keep the
+   gain of item 2.
+
+**Open:**
+- the title-screen movie (issue 3 below);
+- a block of binary bytes in `stdout.log`, seen only with the current build;
+- a floating-point contraction note (`-ffp-contract`) that needs the owner's review.
+
+Details are in the roadmap's last section.
+
+
 Prepared **1 November 2026** for an initial collaboration. Last documented game
 development/test checkpoint: **26 October 2026**. No GitHub account is needed to
 review this folder or return a patch. No message, repository or upload was made

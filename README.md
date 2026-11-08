@@ -12,6 +12,9 @@ collaborator's work (runs 10-102 on a real Switch) changed the runtime, the rend
 - **[Build guide](docs/BUILDING.md):** "The current build (log98)" gives the recipe of the build to play.
 - **[Player profile](profiles/player.env):** `env.txt` without diagnostics. `profiles/hardware-ab.env` is the test
   profile used in the sessions.
+- **[GitHub setup](docs/GITHUB_SETUP.md):** how to put this on GitHub with each person's commits credited, whoever
+  sets it up and from whatever they start with (this folder, the zip, the history bundle), and what must never be
+  pushed.
 - **Other reviews** in [docs/reviews](docs/reviews/): `BO2_OPTIMIZATION_PATHS.md`, `BO_OWNERSHIP_REVIEW.md`,
   `PORT_RESEARCH.md`, `FRESH_BUILD_NOTES.md`.
 
@@ -41,6 +44,10 @@ Other levels were not measured.
 - a floating-point contraction note (`-ffp-contract`) that needs the owner's review.
 
 Details are in the roadmap's last section.
+
+**Credits:** the performance work, hardware testing and documentation since 1 November 2026 are by Gabriel B
+(GitHub `g-brrzzn`), done with Claude (Anthropic) as a coding assistant. The port itself and everything before that
+are the owner's.
 
 
 Prepared **1 November 2026** for an initial collaboration. Last documented game

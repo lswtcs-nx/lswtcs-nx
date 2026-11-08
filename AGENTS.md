@@ -1,5 +1,10 @@
 # Collaborator execution rules
 
+**Since 8 November 2026, read first:** `README.md`, section "Update, 8 November 2026" (what changed since this
+snapshot, and the owner's open decisions); `docs/reviews/CPU_ROADMAP.md`, last section "State on 8 November 2026";
+`docs/BUILDING.md`, "The current build (log98)"; and `docs/GITHUB_SETUP.md` before any repository or Git-history
+work. The rules below still apply.
+
 Read README.md, docs/CURRENT_STATUS.md, docs/ARCHITECTURE.md and the revision2
 docs/TCS360_DEKO_IMPLEMENTATION_PLAN.md before implementation. The DEKO filename
 is historical: Mesa is primary, Deko experimental/inactive in the main queue.

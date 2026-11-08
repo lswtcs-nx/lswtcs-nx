@@ -1,5 +1,7 @@
 # CPU roadmap after run 25, 2 November 2026
 
+**Latest state: the section "State on 8 November 2026" at the end of this file.** The sections between are history, newest last.
+
 The state of the CPU work for whoever takes it over. It summarizes what runs 10-23 measured, what was tried and dropped, and the
 two routes left: guest threads on several cores, and faster generated code. The run-by-run evidence is in `RUN2_FINDINGS.md`, and
 the earlier survey of bo2-360-nx techniques is in `BO2_OPTIMIZATION_PATHS.md`. Numbers are from one handheld console at stock
@@ -656,3 +658,47 @@ Every build-1 item was checked before writing code. Most were smaller than plann
   - argument registers as locals;
   - the resolve hand-over with a fetch scale;
   - `VdSwap` without waiting for the walker.
+
+## State on 8 November 2026 (after run 102)
+
+**The build to play:** log98 (`0.0.99-log98nvp`). It is guest memory without `volatile` plus PGO, built in `build-nvpgo` from `output_nv`; the steps are in `docs/BUILDING.md`, "The current build (log98)". 460.8 MHz is the handheld GPU default.
+
+**Measured, Gungan route (hub, `Gungan_A` to `C`):**
+
+| | Handheld (run 101) | Docked (run 102) |
+| --- | --- | --- |
+| CPU per guest call | 127 ns (157 before both changes) | 124 ns (run 71: 162) |
+| Average FPS, whole session | 41.6 | 48.9 |
+| Heavy frames (1300+ draws) | 29.0 FPS | 31.1 FPS |
+| `Gungan_B` | 35.0 FPS | 39.3 FPS |
+| What limits heavy frames | The GPU: no idle gap between frames | The chain from the game's frame to the GPU, not one thread |
+
+In the docked heavy frames:
+- the main thread works 16-20 ms of a 28-35 ms frame;
+- the GPU draws about 22 ms, idle 3-6 ms;
+- the render thread replays for 13-16 ms of CPU, and Mesa's worker 10-12 ms;
+- the main thread waits about 7 % in `VdSwap` for the off-turn walker, and 6 % in present.
+
+**Lessons that change how to measure:**
+- **ns per guest call** (`private/session-tools/guest_call_cost.py`) is the cross-session CPU measure: ±1 % between sessions of one build.
+- **FPS between sessions** moves by ±10 % even load-matched (run 98). Use in-run A/B for FPS, or `private/session-tools/pair_runs.py` with care.
+- **Neither mode is main-thread-bound any more**, so a CPU-only change will not show as FPS. Check `[GLSPAN]`'s idle gap and `[THREADCPU]` before predicting.
+
+**Candidates, by what they move:**
+- **Handheld heavy FPS (GPU):**
+  - the resolve hand-over, about +5-7 %; it needs a coordinate scale in translated fetches (render targets are 2048 rows tall);
+  - quality changes (internal resolution, effects) would give +15-25 %; that is the author's and the tester's call, not a default.
+- **Docked FPS (the frame chain):**
+  - `VdSwap` handing the frame to the walker instead of waiting;
+  - a cheaper render-thread replay;
+  - deko3d, whose lower per-draw CPU cost is now on the docked critical path. This revises the earlier estimate, which assumed docked was main-thread-bound.
+- **CPU:** the profile is flat (top function 3.7 %). What is left is small:
+  - flush-mode checks, under 0.5 %;
+  - single-precision round trips, up to about 2 %, only where provably exact;
+  - argument registers r3-r10 kept in `ctx`; log96 already removed the worst of it in loops.
+
+**Open issues:**
+- **Binary block in `stdout.log`:** 1-2.5 KB of high-entropy bytes. It appears only in log98's two sessions, mid `Gungan_B`, right before the same `[OBJACT] class 1 obj 967CD550` burst. Its source is unknown.
+- **The title-screen movie (ISSUES #3):** the FFmpeg WMV3 route is described in "rc-guide material study". It is not started, and it only affects the idle demo and a trailer.
+- **The `-ffp-contract` correctness note** ("renut-nx, katamari-nx and mkdd-nx study"): it needs the author's review.
+- **A possible end-of-level transition glitch (run 95):** one frame only, and the tester has not described it yet.

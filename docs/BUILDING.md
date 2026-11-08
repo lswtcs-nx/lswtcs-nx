@@ -209,6 +209,43 @@ check. Link/static success is not hardware acceptance. Use
 autostart/keys/settings. `GAMEROOT=X:/none/` disables fallback lookup only; movies
 in the data working directory still resolve. No movie skip is intended.
 
+## The current build (log98): guest memory without volatile, plus PGO
+
+The build played since run 101 (`0.0.99-log98nvp`) differs from `build-mesa` in two ways. Each was measured on its own and
+they add up: CPU per guest call is 157 ns with neither, 139 ns with the first, 140 ns with the second, and 127 ns with both
+(`docs/reviews/RUN2_FINDINGS.md`, runs 97-102).
+
+1. **Guest memory without `volatile`**, in a copy of the generated output:
+   ```sh
+   python source/switch/tools/make_nonvolatile_output.py "source/Convert 360/LSWTCS/output" "source/Convert 360/LSWTCS/output_nv"
+   ```
+   - Rerun this after any change to `output`.
+   - First apply the tools that must stay applied (`fill_tcs360_movie_ops.py`, `tune_tcs360_context.py --fold-fast --vec-rev`);
+     `tune_tcs360_context.py --check` lists their state.
+   - With `-DLSW_GUEST_NONVOLATILE=ON -DRECOMP_OUTPUT=<output_nv>`, GameCode is built with `-fno-strict-aliasing`.
+     Without that flag, run 78 showed wrong game behaviour.
+   - The copy puts a compiler barrier on guest memory only at every loop header and guest fence.
+2. **PGO, in one build folder** (`build-nvpgo`). Generate and use must share the folder, because the `.gcda` names hold it.
+   - Configure as in `build-nv`, adding `-DLSW_PGO=generate -DLSW_PGO_DIR=<repo>/private/pn`. Keep the folder names short:
+     Windows tools stop at 259 characters, and the longest `.gcda` name is now 257.
+   - The instrumented NRO streams counts to `sdmc:/lswtcs/pgo/lswtcs_<run>.stream`: after one minute, then every two
+     minutes (`source/switch/source/lsw_pgo.cpp`). Closing from HOME is fine.
+   - Play one varied session of 15-20 minutes, then on the PC:
+     ```sh
+     python tools/pgo_merge.py <folder with the .stream files> --profile-dir private/pn
+     ```
+     This retargets the names in the streams to the profile folder and fills the object summary (`runs`, `sum_max`).
+   - Reconfigure the same folder with `-DLSW_PGO=use` and rebuild.
+   - Change no game or runtime code between generate and use: a changed function loses its counts. The game code and the
+     runtime compile with `-w`, so missing or mismatched profiles print no warning. Check instead that objects which ran
+     changed size against a build without PGO.
+   - The counts and streams are derived from the game; keep them under `private/`.
+3. **One `.nro` per SD folder.** sphaira lists every `.nro` directly in `switch/`. In a subfolder it shows only
+   `<folder>/<folder>.nro`, or else the first `.nro` it finds (run 98 launched the wrong build this way).
+   - Keep `switch/lswtcs/lswtcs.nro` for the build to play.
+   - Give a test build its own folder and NACP title. Repack an ELF with `nacptool --create "<title>" "LSWTCS port" <version>`
+     and `elf2nro <elf> <nro> --icon=/opt/devkitpro/libnx/default_icon.jpg --nacp=<nacp>`.
+
 ## Deko and desktop
 
 The source contains `LSW_DEKO_BACKEND=ON`, the shared model and host shader tools,

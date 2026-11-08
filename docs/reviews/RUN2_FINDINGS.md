@@ -3636,3 +3636,28 @@ In C the r10 loop keeps the register in a host register (the reload is gone; one
   - log95's 140-141, which has PGO but uses volatile.
 
   How much of the two gains adds up is unknown.
+
+## Run 101: log98 (log96's code plus PGO) in handheld: 127 ns per guest call; handheld heavy frames are now GPU-limited
+
+- **It was log98:** the boot line is log96's, but the profiler's code range (0x5387000) matches log98's `.text` (0x53869b0); no `[PGO]` lines.
+- **Played:** the hub, Gungan A and B; 3.5 minutes, 14 heavy windows. SoC at most 37.3 °C.
+- **CPU per guest call: 127 ns** (90 %: 126-130). The two gains add up:
+
+  | Build | ns per guest call |
+  | --- | --- |
+  | Run 94 at 460.8 MHz: volatile, no PGO | 157 |
+  | log95 (PGO) | 140-141 |
+  | log96 (no volatile) | 139 |
+  | **log98 (both)** | **127, about -19 %** |
+
+- **Heavy-frame FPS did not move,** load-matched:
+  - +2.7 % against run 94's 460.8 MHz state;
+  - 0.0 % against run 98;
+  - -5 % against run 99.
+
+  The reason is in `[GLSPAN]`: in heavy windows the GPU's idle gap between frames is 0.0 ms in every run (draws about 27-28 ms of a 30-33 ms frame). At 460.8 MHz the handheld GPU is the limit in heavy Gungan frames, so CPU gains no longer show there. They should show docked, where the GPU runs at 768 MHz and the main thread was the limit (run 71). They also cut power: SoC 37.3 °C here against 44.4 in run 99, on a shorter route.
+- **Unexplained:** 987 bytes of high-entropy binary data in `stdout.log`, between two ordinary lines (after line 2665). The surrounding lines are intact and swap numbers continue. Earlier logs have none (their one flagged line is an em dash). Either a card write fault or a runtime print of a raw buffer; to watch in the next logs.
+- **log98 becomes the build to play:** `switch/lswtcs/lswtcs.nro`, title `LSWTCS`, version `0.0.99-log98nvp` (the same ELF repacked with that title). The test folder is gone.
+- **Next:**
+  - a docked session on log98, to see the CPU gain in FPS;
+  - in handheld, only GPU work raises heavy-frame FPS: resolve copies, pixel cost.

@@ -11,7 +11,7 @@ are actions a person takes; a coding agent prepares commands and does not run th
 
 - **The zip** (`lswtcs-*.zip`): every tracked file at the latest commit, without Git history. It also carries
   `_history/lswtcs-history.bundle`.
-- **The history bundle** (`lswtcs-history.bundle`): the full Git history of this work. It has 153 commits:
+- **The history bundle** (`lswtcs-history.bundle`): the full Git history of this work:
   - the first imports the owner's 1 November 2026 handoff snapshot;
   - the rest are Gabriel's work since then, authored `g-brrzzn <136928835+g-brrzzn@users.noreply.github.com>`.
 

@@ -3609,3 +3609,30 @@ In C the r10 loop keeps the register in a host register (the reload is gone; one
   - close from HOME;
   - bring back `lswtcs/pgo/` and the logs.
 - **Then:** `python tools/pgo_merge.py <streams> --profile-dir private/pn`, `build-nvpgo` reconfigured with `-DLSW_PGO=use` (log98nvp), and a normal measuring session.
+
+## Run 100: log97 (instrumented log96), the counting session for log96's code
+
+- **Played:** the map, PodSprint A and Episode III's Dogfight A; 17 minutes in handheld. Eight snapshots, all 657 objects, 24.2-24.5 MB each, 3.6-19.5 s per write. No errors.
+- **Merged:** `tools/pgo_merge.py private/pgo/streams-nv --profile-dir private/pn`. 657 `.gcda` files; the longest name is 257 characters. Largest arc count 29.3 billion, stored as 4294967295.
+- **The card still held run 96's stream:** that one is from the volatile code, so it was left out.
+- **Coverage against run 96 (Gungan, map, PodSprint).** Function ids are the same in both code versions (809,466), so the sets compare:
+  - functions that ran: 8,346 in run 96, 8,250 here, 8,019 in both;
+  - the functions only run 96 ran hold 0.53 % of its arc counts.
+
+  So the Gungan route is covered although Gungan was not played. Game-code objects that ran: 276 of 633 here, against 275.
+- **Next:** log98 (`0.0.99-log98nvp`): `build-nvpgo` with `-DLSW_PGO=use`, then a measuring session on the usual route.
+
+## Log 98: `0.0.99-log98nvp`, log96's code optimised with run 100's counts
+
+- **Build:** `build-nvpgo` reconfigured with `-DLSW_PGO=use` (`private/pn`); the same sources as log96 and log97.
+  - `.text` is 107.9 MB, against 101.6 MB for log96.
+  - 317 of the 633 game-code objects changed; the 316 unchanged ones never ran in run 100.
+  - `gl_backend.o` has 129 hot or cold sections.
+- **SD, one folder per build:** sphaira lists every `.nro` directly in `switch/`. In a subfolder it shows `<folder>/<folder>.nro` alone, or else only the first `.nro`; that hid the counting NRO, and very likely caused run 98.
+  - `switch/lswtcs/lswtcs.nro`: log96 (`LSWTCS`), the build to play;
+  - `switch/lswtcs-log98/lswtcs-log98.nro`: log98 (`LSWTCS log98 teste`). ELF `private/lswtcs-log98nvp.elf`.
+- **Test (handheld, normal speed, the usual route):** compare with:
+  - log96's 139 ns per guest call (run 99), which has no PGO;
+  - log95's 140-141, which has PGO but uses volatile.
+
+  How much of the two gains adds up is unknown.

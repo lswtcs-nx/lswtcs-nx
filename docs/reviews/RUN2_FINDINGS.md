@@ -3661,3 +3661,27 @@ In C the r10 loop keeps the register in a host register (the reload is gone; one
 - **Next:**
   - a docked session on log98, to see the CPU gain in FPS;
   - in handheld, only GPU work raises heavy-frame FPS: resolve copies, pixel cost.
+
+## Run 102: log98 docked: the main thread is 23 % cheaper but no longer the limit; docked FPS barely moves
+
+- **Build and mode:** log98 (code range 0x5387000), docked: GPU 768 MHz, memory 1600 MHz, in all 54 `[CLOCK]` samples.
+- **Played:** the hub, Gungan A, B and C; 4.4 minutes.
+- **CPU per guest call: 124 ns** (90 %: 122-127), against run 71's 162 (log71, the last docked session).
+- **Main thread per heavy frame (`[THREADCPU]` windows of 100k+ calls):** 16-20 ms, against 23-27 ms in run 71. Frame time stayed about 28-35 ms in both.
+- **FPS, load-matched against run 71:** heavy +2.2 % (90 %: -4.9 to +6.9), medium +2.3 %. Unmatched averages:
+
+  | | Run 102 | Run 71 |
+  | --- | --- | --- |
+  | Whole session | 48.9 FPS | 50.5 FPS (different route mix) |
+  | Heavy frames | 31.1 FPS | 30.0 FPS |
+  | `Gungan_B` | 39.3 FPS | 37.3 FPS |
+  | `Gungan_C` | 56.8 FPS | 52.5 FPS |
+- **What limits docked heavy frames now.** Not the main thread (16-20 ms of a 28-35 ms frame). Not the GPU either: its draws take about 22 ms, and `[GLSPAN]` shows a 3-6 ms idle gap per frame.
+  - **The render path:** the render thread spends 13-16 ms of CPU per heavy frame on the replay, and Mesa's worker 10-12 ms, about as in run 71.
+  - **The main thread's frame-boundary waits:** 6.9 % of its heavy-band samples in `VdSwap` waiting for the off-turn walker, and 5.7 % in present waiting for the previous frame.
+
+  So a docked heavy frame is now set by the chain from the game's frame to the GPU (walk, replay, driver), not by any one thread.
+- **What this changes:**
+  - **deko3d.** CPU cost per draw on the render thread and in the driver is now on the docked critical path. That is the cost deko3d removes (no GL front end, no glthread round trips). The earlier estimate, that docked is limited by the main thread and so a GPU API cannot raise it, no longer holds.
+  - **Mesa.** On Mesa, the render thread's replay cost and the frame hand-over (`VdSwap` waiting for the walker) are the levers.
+- **The binary block again:** 2,512 bytes of high-entropy data in `stdout.log`, after a `[GLSTEP]` line and right before the same `[OBJACT] ... class 1 obj 967CD550` burst as in run 101. It is seen in both log98 sessions, and in none of runs 97-99. `objlog_name` prints only printable bytes, and the async log ring looks correct, so the source is open.

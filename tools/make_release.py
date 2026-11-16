@@ -41,6 +41,15 @@ NOTES_TEMPLATE = """{changes}
    **CPU Cores** to **4** and **Address Space** to **39-bit**, then choose **Create Forwarder**.
 4. Start the game from its icon on the HOME menu.
 
+## Reporting a problem
+
+The zip also puts `env-testing.txt` in `sdmc:/lswtcs/`. To send us detailed logs: rename it to `env.txt` (in sphaira's
+file browser or on a PC), play until the problem happens, close the game from the HOME menu, zip the newest folder in
+`sdmc:/lswtcs/logs/` and attach it to a
+[bug report](https://github.com/lswtcs-nx/lswtcs-nx/issues/new?template=bug_report.yml). Rename the file back to
+`env-testing.txt` afterwards to stop the logs. Step by step: the README's
+[Reporting a problem](https://github.com/lswtcs-nx/lswtcs-nx#reporting-a-problem).
+
 ## Update
 
 Replace `sdmc:/switch/lswtcs/lswtcs.nro` with the one in this release (or extract the zip again). Saves and the game

@@ -10,10 +10,14 @@ sdmc:/
   switch/lswtcs/lswtcs.nro     the app you build
   lswtcs/
     env.txt                    the settings profile (below)
-    game.DAT  game1.DAT        from your own copy of the game
-    Movies/   audio/           from your own copy of the game
-    image.bin  pristine.bin  xex_header.bin   prepared from your own copy (BUILDING.md, "Game data needed at runtime")
+    default.xex                from your own disc of the game
+    game.DAT  game1.DAT        from your own disc of the game
+    Movies/   audio/           from your own disc of the game
 ```
+
+The game checks these files at start. If one is missing, has the wrong size, or `default.xex` is not the USA/Europe
+Rev 1 release, a screen names it; press Plus to close. A card set up before log107 with `image.bin`, `pristine.bin`
+and `xex_header.bin` instead of `default.xex` still works.
 
 Keep the NRO at `switch/lswtcs/lswtcs.nro`. sphaira shows only `<folder>/<folder>.nro` inside a subfolder, and a
 forwarder points at that exact path.

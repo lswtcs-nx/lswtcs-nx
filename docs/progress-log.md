@@ -4088,3 +4088,31 @@ the `gh release create --draft` command) and a bug-report form. The NACP takes `
 `xex_header.bin` moved to another folder. Expected: `[XEX] ... matches the PC check`, `[PRISTINE] .data is the clean
 image from default.xex`, `[IMPORTS] all 13 variable slots backed`, and play, CPU per guest call and FPS as in run 111.
 Then one boot without `env.txt`: `[NX] no sdmc:/lswtcs/env.txt: N built-in player settings`.
+
+## Run 113: `0.0.99-log107`, handheld, the image from `default.xex`
+
+Run 113 (`run113-log107`, 92 s) ran from the 4-core forwarder (mask 0xF) with `default.xex` on the card and the testing
+`env.txt`. Handheld: GPU 460.8, memory 1331.2 MHz. Route: the hub, `Gungan_A`, the start of `Gungan_B`, the hub.
+
+**The image came from `default.xex` and matches the PC check.**
+- `[XEX] image from default.xex: 0x1460000 bytes at 0x82000000, 333 import thunks, 346 records; read 208 ms, built
+  68 ms; image sha256 eaa95225… (matches the PC check)`.
+- From guest memory mapped to image ready: 325 ms, against 278 ms for `image.bin` in run 111. The `.data` overlay read
+  is gone.
+- Every boot line from `[INIT]` to `[IMPORTS]` equals run 111's, except the three that were expected:
+  - `[PRISTINE] .data is the clean image from default.xex` in place of the overlay;
+  - the host-pointer scan zeroes 80,776 words against 80,773: the three kernel-variable records Xenia had filled with
+    0xFFCA… addresses;
+  - `0x83290B90` reads 0 before its patch, against 0xFFCAE000; the patch writes 0x830CB7E4 in both.
+- `[IMPORTS] all 13 variable slots backed` with the header from memory (16,384 bytes).
+
+**Play:** no crash, 2 save commits, levels loaded. The session is too short for a CPU or FPS comparison (no heavy
+window); none is expected, since the guest's memory at boot is the same.
+
+**Not tested yet:** a boot without `env.txt` (the built-in player settings). The README still has the player copy
+`profiles/player.env` until that is seen on hardware.
+
+**Small fix in the source** (next build): `[INIT] Loaded ...` named `image.bin` on the `default.xex` path too.
+
+**Documentation:** the README, `docs/playing.md` and `docs/BUILDING.md` now list the disc's files (`default.xex`,
+`game.DAT`, `game1.DAT`, `Movies/`, `audio/`) in place of `image.bin`, `pristine.bin` and `xex_header.bin`.

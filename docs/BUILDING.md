@@ -154,9 +154,16 @@ source, PCH, objects and binaries remain private.
 
 ## Game data needed at runtime
 
-For ordinary full-content play the app needs your own `game.DAT`, `game1.DAT`,
-`Movies/`, `audio/`, `image.bin`, `pristine.bin` and `xex_header.bin` under
-`/lswtcs`. Preserve the same native application/save identity and existing saves.
+Since log107 the app needs only your own disc's files under `/lswtcs`: `default.xex`,
+`game.DAT`, `game1.DAT`, `Movies/` and `audio/`. It builds the game image from
+`default.xex` at boot (`LSWTCSRuntime/source/lsw_xex_image.cpp`): the clean loader
+image with the XEX import table resolved as Xenia resolved it, which gives the guest
+the same memory as the old `image.bin` snapshot. `tests/xex_image_check.py` checks
+that on a PC against reference files. Preserve the same native application/save
+identity and existing saves.
+
+The files below are what cards before log107 used, and what the PC check compares
+against. The runtime still loads them when there is no `default.xex`.
 
 - `workspace-tools/prepare_tcs360_header.py --xex ... --output ...` extracts the
   private header and refuses overwrite.

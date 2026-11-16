@@ -32,17 +32,16 @@ and Python 3. In outline:
 3. **Build Mesa for the Switch** with the port's changes: `source/switch/tools/build_mesa.sh`.
 4. **Build the NRO** with CMake from `source/switch`. The current recipe (guest memory without `volatile`, plus an
    optional profile-guided build) is in "The current build" in [docs/BUILDING.md](docs/BUILDING.md).
-5. **Prepare `image.bin`, `pristine.bin` and `xex_header.bin`** from your copy ([docs/BUILDING.md](docs/BUILDING.md),
-   "Game data needed at runtime").
+
+The game's own files need no preparation: the app reads them from your disc's files on the SD card.
 
 ## How to install
 
-There is no ready-made download yet. With `lswtcs.nro` and the files from [Building](#building):
+There is no ready-made download yet. With `lswtcs.nro` from [Building](#building):
 
 1. **Copy the app** to `sdmc:/switch/lswtcs/lswtcs.nro`.
-2. **Copy your game's files** to `sdmc:/lswtcs/`:
-   - `game.DAT`, `game1.DAT`, `Movies/` and `audio/` from your copy;
-   - `image.bin`, `pristine.bin` and `xex_header.bin`, prepared during the build.
+2. **Copy from your own disc** to `sdmc:/lswtcs/`: `default.xex`, `game.DAT`, `game1.DAT`, `Movies/` and `audio/`.
+   The game checks them at start and names any file that is missing or from another version.
 3. **Copy the settings profile** [`profiles/player.env`](profiles/player.env) to `sdmc:/lswtcs/env.txt`.
 4. **Make a forwarder** in sphaira, so the game gets all four CPU cores (from the Homebrew Menu it gets three):
    highlight *LEGO Star Wars: The Complete Saga*, press **X**, choose **Install Forwarder**, set **CPU Cores** to
@@ -56,8 +55,7 @@ sdmc:/
   switch/lswtcs/lswtcs.nro
   lswtcs/
     env.txt
-    game.DAT  game1.DAT  Movies/  audio/
-    image.bin  pristine.bin  xex_header.bin
+    default.xex  game.DAT  game1.DAT  Movies/  audio/
 ```
 
 **Updating:** replace `sdmc:/switch/lswtcs/lswtcs.nro`. The forwarder starts the new build without being made again,

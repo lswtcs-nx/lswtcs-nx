@@ -1360,7 +1360,7 @@ int main() {
     }
     if (f) fclose(f);
     lsw_boot_mark("image read");
-    printf("[INIT] Loaded image.bin: 0x%zX bytes\n", nread);
+    printf("[INIT] Loaded %s: 0x%zX bytes\n", image_from_xex ? "the image from default.xex" : "image.bin", nread);
     lsw_text_patch_image(g_base + PPC_IMAGE_BASE, nread);   // log65: the console's name in the save messages (kernel_stubs.cpp)
     lsw_boot_mark("image loaded");
 

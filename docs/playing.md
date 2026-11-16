@@ -22,7 +22,8 @@ Keep the NRO at `switch/lswtcs/lswtcs.nro`. sphaira shows only `<folder>/<folder
 forwarder points at that exact path.
 
 The game adds its own files under `sdmc:/lswtcs/`:
-- `glprogs2/`: the shader programs it has seen, so the next boot prepares them early;
+- `glprogs2/`: the shader programs it has seen, so the next boot prepares them early, and (since log109)
+  `xlate.bin`, the shaders' translations, so the next session does not translate them again;
 - `bopool.bin`: the texture memory it needs per level;
 - `logs/`: one folder per session.
 

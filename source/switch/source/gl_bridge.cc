@@ -34,6 +34,7 @@
 #include "lsw_glsl_fold.h"
 #include "lsw_gpu_bridge.h"
 #include "lsw_spirv_glsl.h"
+#include "lsw_xlate_cache.h"
 #define XXH_INLINE_ALL
 #include "third_party/xxhash/xxhash.h"
 extern uint64_t g_geom_swaps_pub;   // kernel_stubs.cpp: swaps seen ([SHADERNEW])
@@ -106,6 +107,7 @@ Bridge& bridge() {
       SpirvShaderTranslator::lsw_structured_loops = l && l[0] == '1';
     }
     b->translator = std::make_unique<SpirvShaderTranslator>(f, false, false, false);
+    lsw_xlate_cache_open();   // translations saved by earlier sessions (gl_xlate_cache.cc)
     b->vs_float.reserve(512 * 4);
     b->ps_float.reserve(512 * 4);
     return b;
@@ -153,15 +155,18 @@ SpirvShader* get_shader(Bridge& b, xenos::ShaderType type, const uint32_t* ucode
     raw = it->second.get();
   } else {
     // The Shader constructor byte-swaps from guest (big-endian) order.
+    const auto t0 = std::chrono::steady_clock::now();
     auto sh = std::make_unique<SpirvShader>(type, key, ucode_be, dwords);
     sh->AnalyzeUcode(b.disasm_buffer);
     {   // DIAG: every new guest shader under Xenia's name for it (pipeline_cache.cc: XXH3_64bits of the guest bytes,
         // dump files shader_<hash>.ucode.*), with the swap it first appeared at: the shaders a room draws in the
         // port and not in Xenia (dump_shaders) belong to effects the port switches on by itself (Episode 2 hub
-        // jukebox already lit, 2026-10-10).
-        printf("[SHADERNEW] swap %llu %s %016llX (%u dwords)\n", (unsigned long long)g_geom_swaps_pub,
+        // jukebox already lit, 2026-10-10). Since log109 also the time of the analysis, which the translation cache
+        // (gl_xlate_cache.cc) does not save.
+        printf("[SHADERNEW] swap %llu %s %016llX (%u dwords), analysis %.2f ms\n", (unsigned long long)g_geom_swaps_pub,
                type == xenos::ShaderType::kPixel ? "PS" : "VS",
-               (unsigned long long)XXH3_64bits(ucode_be, size_t(dwords) * 4u), dwords);
+               (unsigned long long)XXH3_64bits(ucode_be, size_t(dwords) * 4u), dwords,
+               std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
     }
     raw = sh.get();
     b.shaders.emplace(key, std::move(sh));
@@ -206,11 +211,74 @@ double ms_since(std::chrono::steady_clock::time_point t0) {
   return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
 }
 
-// Translation of `shader` with `modification` as GLSL plus its texture units (cached).
+// The translation cache's identity of (shader, modification): Xenia's name for the guest microcode plus our own hash.
+LswXlateId xlate_id(const SpirvShader& shader, uint64_t modification, LswGlStage stage) {
+  std::vector<uint32_t> be(shader.ucode_data().begin(), shader.ucode_data().end());   // host order since the constructor
+  for (uint32_t& w : be) w = __builtin_bswap32(w);
+  LswXlateId id;
+  id.ucode_xxh = XXH3_64bits(be.data(), be.size() * 4u);
+  id.ucode_hash = shader.ucode_data_hash();
+  id.modification = modification;
+  id.dwords = uint32_t(shader.ucode_dword_count());
+  id.stage = uint32_t(stage);
+  return id;
+}
+
+// [XLATE]: every translation a session needs, where it came from and what it cost (log109; ~150 lines per session).
+void xlate_log(const LswXlateId& id, const char* how, double ms, double spirv_ms) {
+  if (spirv_ms >= 0)
+    printf("[XLATE] %s %016llX_%016llX %u dw: %s %.2f ms (SPIR-V %.2f)\n", id.stage == kLswGlPixel ? "PS" : "VS",
+           (unsigned long long)id.ucode_xxh, (unsigned long long)id.modification, id.dwords, how, ms, spirv_ms);
+  else
+    printf("[XLATE] %s %016llX_%016llX %u dw: %s %.2f ms\n", id.stage == kLswGlPixel ? "PS" : "VS",
+           (unsigned long long)id.ucode_xxh, (unsigned long long)id.modification, id.dwords, how, ms);
+}
+
+// Translation of `shader` with `modification` as GLSL plus its texture units (cached for the session, and on the SD
+// card since log109: gl_xlate_cache.cc).
 const LswGlShader* get_glsl(Bridge& b, SpirvShader& shader, uint64_t modification, LswGlStage stage) {
   const uint64_t key = shader.ucode_data_hash() ^ (modification * 0x9E3779B97F4A7C15ull);
   auto it = b.gl.find(key);
   if (it != b.gl.end()) return it->second.get();
+  const auto t_start = std::chrono::steady_clock::now();
+  const LswXlateId id = xlate_id(shader, modification, stage);
+  LswXlateEntry saved;
+  const bool have_saved = lsw_xlate_cache_find(id, saved);
+  if (have_saved && !lsw_xlate_cache_check_next()) {
+    // Saved by an earlier session: the GLSL and units as they were, and the bindings the translation would have set
+    // on the shader (SpirvShaderTranslator::PostTranslation) if it is the shader's first.
+    std::vector<SpirvShader::TextureBinding> textures(saved.textures.size());
+    std::vector<SpirvShader::SamplerBinding> samplers(saved.samplers.size());
+    for (size_t i = 0; i < textures.size(); ++i) {
+      SpirvShader::TextureBinding& tb = textures[i];
+      std::memset(&tb, 0, sizeof tb);   // hashed and compared with memcmp (spirv_shader.h)
+      const uint32_t v = saved.textures[i];
+      tb.fetch_constant = v & 31u;
+      tb.dimension = xenos::FetchOpDimension((v >> 5) & 3u);
+      tb.is_signed = (v >> 7) & 1u;
+    }
+    for (size_t i = 0; i < samplers.size(); ++i) {
+      SpirvShader::SamplerBinding& sb = samplers[i];
+      std::memset(&sb, 0, sizeof sb);
+      const uint32_t v = saved.samplers[i];
+      sb.fetch_constant = v & 31u;
+      sb.mag_filter = xenos::TextureFilter((v >> 5) & 3u);
+      sb.min_filter = xenos::TextureFilter((v >> 7) & 3u);
+      sb.mip_filter = xenos::TextureFilter((v >> 9) & 3u);
+      sb.aniso_filter = xenos::AnisoFilter((v >> 11) & 7u);
+    }
+    shader.LswSetBindings(textures, samplers);
+    auto out = std::make_unique<LswGlShader>();
+    out->stage = stage;
+    out->key = key;
+    out->glsl = std::move(saved.glsl);
+    out->units = std::move(saved.units);
+    const LswGlShader* raw = out.get();
+    b.gl.emplace(key, std::move(out));
+    g_gl_count.store(uint32_t(b.gl.size()), std::memory_order_relaxed);
+    xlate_log(id, "saved", ms_since(t_start), -1);
+    return raw;
+  }
   std::unique_ptr<LswGlShader> out;
   const bool dump = ucode_dump_on();
   if (dump) ucode_dump(shader, modification, stage);
@@ -218,7 +286,8 @@ const LswGlShader* get_glsl(Bridge& b, SpirvShader& shader, uint64_t modificatio
   double xlate_ms = 0;
   auto* t = shader.GetOrCreateTranslation(modification);
   if (!t->is_translated()) b.translator->TranslateAnalyzedShader(*t);
-  if (dump) { xlate_ms = ms_since(t0); t0 = std::chrono::steady_clock::now(); }
+  xlate_ms = ms_since(t0);
+  t0 = std::chrono::steady_clock::now();
   if (!t->is_valid()) {
     log_once(key, stage == kLswGlPixel ? "PS SPIR-V translation failed" : "VS SPIR-V translation failed", nullptr);
   } else {
@@ -284,8 +353,26 @@ const LswGlShader* get_glsl(Bridge& b, SpirvShader& shader, uint64_t modificatio
         u.sampler = {sampler_fetch, mag, min, mip, aniso};
         out->units.push_back(u);
       }
+      // For the SD card: everything the next session needs instead of translating (packed as in lsw_xlate_cache.h).
+      LswXlateEntry fresh;
+      fresh.glsl = out->glsl;
+      fresh.units = out->units;
+      for (size_t i = 0; i < counts.textures; ++i) {
+        uint32_t fetch = 0, dimension = 0;
+        bool is_signed = false;
+        b.translator->LswLastTextureBinding(i, fetch, dimension, is_signed);
+        fresh.textures.push_back((fetch & 31u) | (dimension & 3u) << 5 | uint32_t(is_signed) << 7);
+      }
+      for (size_t i = 0; i < counts.samplers; ++i) {
+        uint32_t fetch = 0, mag = 0, min = 0, mip = 0, aniso = 0;
+        b.translator->LswLastSamplerBinding(i, fetch, mag, min, mip, aniso);
+        fresh.samplers.push_back((fetch & 31u) | (mag & 3u) << 5 | (min & 3u) << 7 | (mip & 3u) << 9 | (aniso & 7u) << 11);
+      }
+      if (have_saved) lsw_xlate_cache_checked(id, saved, fresh);
+      else lsw_xlate_cache_put(id, fresh);
     }
   }
+  xlate_log(id, !out ? "failed" : have_saved ? "checked" : "translated", ms_since(t_start), xlate_ms);
   const LswGlShader* raw = out.get();
   b.gl.emplace(key, std::move(out));
   g_gl_count.store(uint32_t(b.gl.size()), std::memory_order_relaxed);

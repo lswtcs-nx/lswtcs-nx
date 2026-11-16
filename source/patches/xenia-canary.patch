@@ -274,6 +274,34 @@ index fe8127509..7974ee3e9 100644
  #define ImageOperandsLodMask ImageOperandsMask::Lod
  #define ImageOperandsMaskNone ImageOperandsMask::MaskNone
  
+diff --git a/src/xenia/gpu/spirv_shader.h b/src/xenia/gpu/spirv_shader.h
+index 7eba372fa..7e207e8a4 100644
+--- a/src/xenia/gpu/spirv_shader.h
++++ b/src/xenia/gpu/spirv_shader.h
+@@ -63,6 +63,23 @@ class SpirvShader : public Shader {
+     return sampler_bindings_;
+   }
+ 
++  // LSWTCS: the bindings of a translation loaded from the Switch build's
++  // translation cache (switch/source/gl_xlate_cache.cc) instead of translated,
++  // set as PostTranslation sets them when no translation has set them yet.
++  // False if one already did.
++  bool LswSetBindings(const std::vector<TextureBinding>& textures,
++                      const std::vector<SamplerBinding>& samplers) {
++    if (bindings_setup_entered_.test_and_set(std::memory_order_relaxed)) {
++      return false;
++    }
++    texture_bindings_ = textures;
++    sampler_bindings_ = samplers;
++    for (const TextureBinding& binding : textures) {
++      used_texture_mask_ |= UINT32_C(1) << binding.fetch_constant;
++    }
++    return true;
++  }
++
+  protected:
+   Translation* CreateTranslationInstance(uint64_t modification) override;
+ 
 diff --git a/src/xenia/gpu/spirv_shader_translator.cc b/src/xenia/gpu/spirv_shader_translator.cc
 index 83ba94461..4e459abc0 100644
 --- a/src/xenia/gpu/spirv_shader_translator.cc

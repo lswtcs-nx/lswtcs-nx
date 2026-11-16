@@ -213,7 +213,8 @@ add_library(lsw_spirv STATIC
     "${SPIRV_CROSS}/spirv_cross.cpp" "${SPIRV_CROSS}/spirv_parser.cpp"
     "${SPIRV_CROSS}/spirv_cross_parsed_ir.cpp" "${SPIRV_CROSS}/spirv_cfg.cpp" "${SPIRV_CROSS}/spirv_glsl.cpp"
     "${LSW_ROOT}/LSWTCSRuntime/xenos_dxbc/lsw_gpu_texture.cc"
-    source/lsw_spirv_glsl.cc source/xe_gpu_stubs.cc source/gl_bridge.cc source/gl_geometry.cc)
+    source/lsw_spirv_glsl.cc source/xe_gpu_stubs.cc source/gl_bridge.cc source/gl_xlate_cache.cc
+    source/gl_geometry.cc)
 # gl_geometry.cc: Xenia's Vulkan geometry-shader generator body, extracted at configure time.
 set(LSW_GEN "${CMAKE_CURRENT_BINARY_DIR}/gen")
 set(XE_GS_SRC "${XG}/vulkan/vulkan_pipeline_cache.cc")
@@ -369,7 +370,7 @@ else()
         if(LSW_PGO STREQUAL "generate")
             set(LSW_NACP_VERSION "0.0.99-log97nvg")   # log97: the instrumented NRO of log96's code (wide counts)
         elseif(LSW_PGO STREQUAL "use")
-            set(LSW_NACP_VERSION "0.0.99-log108")   # log107: the image from default.xex, built-in player settings, file checks; log108: log text
+            set(LSW_NACP_VERSION "0.0.99-log109")   # log107: the image from default.xex, built-in player settings, file checks; log108: log text; log109: shader translations saved on the SD card
         endif()
     else()
         set(LSW_NACP_VERSION "0.0.99-log93")

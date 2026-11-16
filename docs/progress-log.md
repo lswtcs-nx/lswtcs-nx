@@ -4161,3 +4161,44 @@ Run 115 (`run115-v0.1.0`, about 95 s) booted the published `lswtcs.nro` with onl
 
 The release behaves as runs 113-114 did. The NACP version is not logged; the NRO on the card was the release's
 (`d099bb6c…`).
+
+## Log 109: shader translations saved on the SD card
+
+**What still stutters (runs 111-113, with the saved program list warm):** the long frames left in the hub are
+`[GSPIKE]` frames whose time is in `prepare`, 0.4-0.9 s, two or three per session. Each falls on a burst of new guest
+shaders (`[SHADERNEW]`):
+- the same 46 shaders (7254 dwords) on the hub's first frames made an 822-886 ms frame in all three runs;
+- bursts of 11-19 shaders made 436-723 ms.
+
+That is about 18-58 ms per shader, spent translating Xenos microcode to SPIR-V and then GLSL on the thread that
+prepares draws. `gl_bridge.cc` kept translations for the session only, so every session paid again (119-136 new
+shaders each). Program builds are not in these frames: the saved list builds them at boot. The other long frames are
+area entries (`[GLSTALL]` 0.26-0.37 s, mostly texture uploads) and the boot.
+
+**Change:** `source/switch/source/gl_xlate_cache.cc`.
+- Each translation (GLSL, texture units, the translator's bindings) is appended to `sdmc:/lswtcs/glprogs2/xlate.bin`
+  by a background thread. The next session loads the file when the first draw is prepared and uses a saved
+  translation instead of translating.
+- The bindings: Xenia sets a shader's texture and sampler bindings in its first translation, and every draw reads them
+  for the texture signs and swizzles (`GetUsedTextureMaskAfterTranslation`). A saved translation sets them through
+  `SpirvShader::LswSetBindings` (new in the Xenia patch), as the translation would have.
+- The file is started over when the NRO's build ID differs (any rebuild) or a setting that changes the GLSL does:
+  `LSWTCS_GLVIEWSWZ`, `GLFMZ`, `GLTEXBIAS`, `GLFWDCF`, `GLFWDLOOPS`, `GLPSPRECISE`, `GLFETCHFOLD`, `VFETCHCLAMP`.
+  The build ID is read from the NRO header at the module's start (`_start`; switch.ld's `__start__` is an absolute 0 in
+  this position-independent binary and would have read address 0).
+- A record cut short by closing the game from the HOME menu is dropped at the next load.
+- The first 8 saved translations a session uses are also translated and compared (`LSWTCS_GLXLATECHECK`, default 8;
+  they come at boot, where a translation is not seen). A difference stops the cache for the session and starts the
+  file over. `LSWTCS_GLXLATE=0` turns the cache off.
+- Log lines: `[XLATECACHE]` (load, checks); `[XLATE]` for each translation a session needs (`saved`, `translated` with
+  its SPIR-V part, `checked`, `failed`) with its time; `[SHADERNEW]` now adds the microcode analysis time, which the
+  cache does not save.
+- Host check: `python tests/xlate_cache_check.py` (saved and found intact, checks, cut record, another build or
+  setting): PASS.
+- Only the `lsw_spirv` library changed, which is built without PGO; the PGO-built code was linked unchanged.
+
+**Build:** `0.0.99-log109` (`build-nvpgo`), NRO `cd5ee28b…`, ELF kept privately. Not tested on hardware yet.
+
+**Test:** two sessions in a row on the same build, the same route through the hub. The first fills the file and should
+stutter as before; in the second, the hub's 46-shader frame should lose the translation time and keep only the
+analysis and the rest of the draw preparation.

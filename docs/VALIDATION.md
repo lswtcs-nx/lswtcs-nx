@@ -52,6 +52,19 @@ It builds the runtime's `lsw_xex_image.cpp` for the PC and checks that its image
 as `image.bin` with `LSWTCS_PRISTINE=1`. Expected: `PASS` and image SHA-256 `eaa95225…`, the value the Switch logs in
 `[XEX]` (run 113).
 
+## Check the shader translation cache's file handling
+
+Needs a host clang++ (xxHash comes from the pinned xenia-canary checkout):
+
+```sh
+python tests/xlate_cache_check.py
+```
+
+It builds `source/switch/source/gl_xlate_cache.cc` (log109) for the PC and runs sessions in a temporary folder:
+translations saved and found intact, the first hits flagged for checking, a differing check starting the file over,
+a record cut short at the end dropped, and the file started over for another build ID or translation setting.
+Expected: `PASS`.
+
 ## Patch-chain validation already performed
 
 - The cumulative XenonRecomp and Xenia diffs were applied to exact local pinned

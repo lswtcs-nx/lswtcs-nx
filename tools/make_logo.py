@@ -3,8 +3,8 @@
 Writes, from one geometry:
   assets/logo.svg            for the README and the repository
   assets/logo-512.png        for an organisation or repository avatar
-  source/switch/icon.jpg     256x256, the NRO's icon (HOME menu, sphaira, forwarders made from the NRO)
-Needs Pillow for the PNG and the JPG. Usage: python tools/make_logo.py
+The NRO's icon comes from the game's cover instead (tools/make_icon.py).
+Needs Pillow for the PNG. Usage: python tools/make_logo.py
 """
 import os
 
@@ -85,8 +85,7 @@ def main():
     os.makedirs(os.path.join(ROOT, 'assets'), exist_ok=True)
     write_svg(os.path.join(ROOT, 'assets', 'logo.svg'), rects)
     raster(rects, 2, True).save(os.path.join(ROOT, 'assets', 'logo-512.png'))
-    raster(rects, 1, False).save(os.path.join(ROOT, 'source', 'switch', 'icon.jpg'), quality=95)   # square: the HOME menu rounds it
-    print('assets/logo.svg, assets/logo-512.png, source/switch/icon.jpg written')
+    print('assets/logo.svg, assets/logo-512.png written')
 
 
 if __name__ == '__main__':

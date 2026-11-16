@@ -79,9 +79,9 @@ on the HOME menu that starts the NRO, and it can ask the system for all four.
   - The session log shows which case you got: `[NX] process core mask 0xF` means four cores, `0x7` three.
 - **Updating the game:** replace `sdmc:/switch/lswtcs/lswtcs.nro`. The forwarder opens that path, so it starts the
   new build without being made again.
-- **Name and icon:** a forwarder copies the NRO's title and icon when you make it. Builds from log106 (16 November 2026) on are
-  titled *LEGO Star Wars: The Complete Saga* with the project's icon. A forwarder made from an older NRO shows
-  "LSWTCS" until you make it again.
+- **Name and icon:** a forwarder copies the NRO's title and icon when you make it. Current builds are titled
+  *LEGO Star Wars: The Complete Saga*, with the game's cover as the icon. A forwarder made from an older NRO keeps
+  its old name and icon until you make it again.
 
 ## Saves, and what uninstalling removes
 

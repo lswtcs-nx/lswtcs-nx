@@ -24,4 +24,5 @@ profiling approaches) were reimplemented here; no code was copied from them.
 
 **Game content.** LEGO Star Wars: The Complete Saga belongs to its rights holders. You need your own copy of the
 Xbox 360 game to build and run this port. Files made from it (generated code, data, saved shader lists, PGO counts)
-stay on your machine and SD card.
+stay on your machine and SD card. The README's logo and the app's icon (`source/switch/icon.jpg`, cut from the
+cover by `tools/make_icon.py`) are the game's artwork, shown to identify it.

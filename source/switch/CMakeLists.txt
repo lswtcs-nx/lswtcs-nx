@@ -362,7 +362,7 @@ else()
             set(LSW_NACP_VERSION "0.0.99-log95pgo")   # build 3: optimised with run 96's counts
         endif()
     endif()
-    # The title the HOME menu, sphaira and a forwarder made from this NRO show; the icon is the project's own (tools/make_logo.py).
+    # The title the HOME menu, sphaira and a forwarder made from this NRO show; the icon is cut from the game's cover (tools/make_icon.py).
     nx_generate_nacp(lswtcs.nacp NAME "LEGO Star Wars: The Complete Saga" AUTHOR "LSWTCS NX port" VERSION "${LSW_NACP_VERSION}")
 endif()
 nx_create_nro(lswtcs NACP lswtcs.nacp ICON "${CMAKE_CURRENT_SOURCE_DIR}/icon.jpg")

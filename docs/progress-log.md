@@ -4218,3 +4218,14 @@ Two handheld sessions in a row on log109, the same route through the hub (`run11
   (`[GLSTALL]` 1889 ms). No earlier run has a wait over 300 ms there; session 2 has none. One sample; watch for it.
 
 The cache stays on by default. Translation time is now paid once per build and per new area.
+
+## v0.2.0: the translation cache
+
+- **Code:** log109's, built as the play build (guest memory without `volatile`, PGO) with
+  `-DLSW_RELEASE_VERSION=0.2.0`, so the NACP version is `0.2.0`. `validate_tcs360_switch.py` passed on the build folder.
+- **Hardware:** this exact NRO was not booted before publishing. It differs from log109, booted in runs 116-117, only in
+  the NACP version. Its build ID differs, so a player's first session on it fills `xlate.bin` again.
+- **Files:** `lswtcs-v0.2.0.zip`, `lswtcs.nro` (`ac6cbe63…`) and `SHA256SUMS.txt`; notes from `CHANGELOG.md`. The ELF
+  is kept privately for crash reports.
+- **Docs:** the README's Performance list and `known-issues.md` ("First visit to a level stutters briefly") describe the
+  cache and what runs 116-117 measured.

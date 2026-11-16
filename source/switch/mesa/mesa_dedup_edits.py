@@ -15,6 +15,11 @@ output and compute programs are not cached. At most 16 MB of snapshots (code and
 Every 8th reuse (LSWTCS_SHADERDEDUPCHECK, 0 = never) the stage is also translated again and compared word for word (code, header,
 registers, tables); a difference is logged as [NVC0DEDUP] and the fresh translation is used. LSWTCS_SHADERDEDUP=0 turns the reuse
 off. lsw_nvc0_dedup_stats() reports hits, misses, checks and mismatches for [GLPROG].
+Run 110 (log103dd): 1805 reuses against 1360 translations, worker time per program 278 -> 153 ms, no render stall of 250 ms or
+more. 36 of 225 checks "differed", all pixel shaders with the same code size: the check compared the tables with memcmp, and
+FixupEntry (8-byte pointer + 4-byte field) and RelocEntry (int8 then enum) carry padding bytes nv50_ir never writes. From log104
+the tables are compared field by field and the log says which part differed (bit mask: 1 code size, 2 code, 4 header, 8 registers
+/ flags, 16 vertex fields, 32 pixel fields, 64 relocations, 128 fixups) and how many code words.
 Applied after the other edits. Usage: python mesa_dedup_edits.py <mesa-src-dir>"""
 import sys, os
 root = sys.argv[1]
@@ -54,6 +59,35 @@ nv50_ir_fixup_bytes(const void *fixupData)
    return sizeof(*info) + info->count * sizeof(nv50_ir::FixupEntry);
 }
 
+/* Field by field: the entries have padding bytes that are never written. */
+int
+nv50_ir_reloc_equal(const void *a, const void *b)
+{
+   const nv50_ir::RelocInfo *x = reinterpret_cast<const nv50_ir::RelocInfo *>(a);
+   const nv50_ir::RelocInfo *y = reinterpret_cast<const nv50_ir::RelocInfo *>(b);
+   if (x->count != y->count || x->codePos != y->codePos || x->libPos != y->libPos || x->dataPos != y->dataPos)
+      return 0;
+   for (unsigned i = 0; i < x->count; ++i) {
+      const nv50_ir::RelocEntry &e = x->entry[i], &f = y->entry[i];
+      if (e.data != f.data || e.mask != f.mask || e.offset != f.offset || e.bitPos != f.bitPos || e.type != f.type)
+         return 0;
+   }
+   return 1;
+}
+
+int
+nv50_ir_fixup_equal(const void *a, const void *b)
+{
+   const nv50_ir::FixupInfo *x = reinterpret_cast<const nv50_ir::FixupInfo *>(a);
+   const nv50_ir::FixupInfo *y = reinterpret_cast<const nv50_ir::FixupInfo *>(b);
+   if (x->count != y->count)
+      return 0;
+   for (unsigned i = 0; i < x->count; ++i)
+      if (x->entry[i].apply != y->entry[i].apply || x->entry[i].val != y->entry[i].val)
+         return 0;
+   return 1;
+}
+
 void
 nv50_ir_get_target_library(uint32_t chipset,
 """),
@@ -87,6 +121,8 @@ nvc0_program_symbol_offset(const struct nvc0_program *prog, uint32_t label)
 """/* LSWTCS mesa_dedup_edits.py: translations kept for identical stages (see the script's header). */
 size_t nv50_ir_reloc_bytes(const void *relocData);
 size_t nv50_ir_fixup_bytes(const void *fixupData);
+int nv50_ir_reloc_equal(const void *a, const void *b);
+int nv50_ir_fixup_equal(const void *a, const void *b);
 
 struct lsw_dedup_entry {
    struct lsw_dedup_entry *next;
@@ -154,21 +190,39 @@ lsw_dedup_copy(struct nvc0_program *dst, const struct nvc0_program *src)
    return true;
 }
 
-static bool
-lsw_dedup_same(const struct nvc0_program *a, const struct nvc0_program *b)
+/* 0 when the two translations are the same; else a mask of what differs (see the script's header). */
+static unsigned
+lsw_dedup_diff(const struct nvc0_program *a, const struct nvc0_program *b, unsigned *code_words)
 {
-   if (a->code_size != b->code_size || a->num_gprs != b->num_gprs || a->need_tls != b->need_tls ||
-       memcmp(a->hdr, b->hdr, sizeof(a->hdr)) || memcmp(a->flags, b->flags, sizeof(a->flags)) ||
-       memcmp(&a->vp, &b->vp, sizeof(a->vp)) || memcmp(&a->fp, &b->fp, sizeof(a->fp)) ||
-       (a->code_size && memcmp(a->code, b->code, a->code_size)) || !a->relocs != !b->relocs || !a->fixups != !b->fixups)
-      return false;
-   if (a->relocs && (nv50_ir_reloc_bytes(a->relocs) != nv50_ir_reloc_bytes(b->relocs) ||
-                     memcmp(a->relocs, b->relocs, nv50_ir_reloc_bytes(a->relocs))))
-      return false;
-   if (a->fixups && (nv50_ir_fixup_bytes(a->fixups) != nv50_ir_fixup_bytes(b->fixups) ||
-                     memcmp(a->fixups, b->fixups, nv50_ir_fixup_bytes(a->fixups))))
-      return false;
-   return true;
+   unsigned m = 0, i;
+   *code_words = 0;
+   if (a->code_size != b->code_size)
+      m |= 1;
+   else
+      for (i = 0; i < a->code_size / 4; ++i)
+         if (a->code[i] != b->code[i])
+            ++*code_words;
+   if (*code_words)
+      m |= 2;
+   if (memcmp(a->hdr, b->hdr, sizeof(a->hdr)))
+      m |= 4;
+   if (a->num_gprs != b->num_gprs || a->need_tls != b->need_tls || memcmp(a->flags, b->flags, sizeof(a->flags)) ||
+       a->num_barriers != b->num_barriers)
+      m |= 8;
+   if (a->vp.clip_mode != b->vp.clip_mode || a->vp.clip_enable != b->vp.clip_enable || a->vp.cull_enable != b->vp.cull_enable ||
+       a->vp.num_ucps != b->vp.num_ucps || a->vp.edgeflag != b->vp.edgeflag || a->vp.need_vertex_id != b->vp.need_vertex_id ||
+       a->vp.need_draw_parameters != b->vp.need_draw_parameters || a->vp.layer_viewport_relative != b->vp.layer_viewport_relative)
+      m |= 16;
+   if (a->fp.early_z != b->fp.early_z || a->fp.colors != b->fp.colors || a->fp.color_interp[0] != b->fp.color_interp[0] ||
+       a->fp.color_interp[1] != b->fp.color_interp[1] || a->fp.sample_mask_in != b->fp.sample_mask_in ||
+       a->fp.force_persample_interp != b->fp.force_persample_interp || a->fp.flatshade != b->fp.flatshade ||
+       a->fp.reads_framebuffer != b->fp.reads_framebuffer || a->fp.post_depth_coverage != b->fp.post_depth_coverage)
+      m |= 32;
+   if (!a->relocs != !b->relocs || (a->relocs && !nv50_ir_reloc_equal(a->relocs, b->relocs)))
+      m |= 64;
+   if (!a->fixups != !b->fixups || (a->fixups && !nv50_ir_fixup_equal(a->fixups, b->fixups)))
+      m |= 128;
+   return m;
 }
 
 bool
@@ -211,15 +265,17 @@ nvc0_program_translate(struct nvc0_program *prog, uint16_t chipset,
          fresh.type = prog->type;
          fresh.vp.num_ucps = prog->vp.num_ucps;
          if (nvc0_program_translate_uncached(&fresh, chipset, debug)) {
-            const bool same = lsw_dedup_same(prog, &fresh);
+            unsigned words = 0;
+            const unsigned diff = lsw_dedup_diff(prog, &fresh, &words);
+            const bool same = diff == 0;
             pthread_mutex_lock(&lsw_dedup_lock);
             ++lsw_dedup_checks;
             if (!same)
                ++lsw_dedup_mismatches;
             pthread_mutex_unlock(&lsw_dedup_lock);
             if (!same) {
-               printf("[NVC0DEDUP] type %u: reused translation differs from a fresh one (code %u / %u bytes); fresh one used\\n",
-                      prog->type, prog->code_size, fresh.code_size);
+               printf("[NVC0DEDUP] type %u: reused translation differs from a fresh one (what 0x%X, %u of %u code words); "
+                      "fresh one used\\n", prog->type, diff, words, prog->code_size / 4);
                fflush(stdout);
                FREE(prog->code); FREE(prog->relocs); FREE(prog->fixups);
                *prog = fresh;

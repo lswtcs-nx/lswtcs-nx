@@ -3894,3 +3894,53 @@ Run 109 (`run109-log102c3`, 210 s) took the same Gungan route from the 4-core fo
 - **Test:** the same route from the forwarder.
   - Read `[NVC0DEDUP]` (reuse rate, 0 differences) and the worker ms per program against run 109's 137/228 ms.
   - Read the queue drain time and look for any visual defect.
+
+## Run 110: `0.0.99-log103dd`, nvc0 translations reused
+
+Run 110 (`run110-log103dd`, 198 s) took the same Gungan route from the 4-core forwarder.
+
+**Reuse:** 1805 stage translations reused against 1360 made, so 57 % of stages skipped nv50_ir. 5.8 MB kept.
+
+**Shader compile cost:**
+
+| | Run 110 | Run 109 |
+|---|---|---|
+| Worker time per program | 153 ms (230.7 s for 1504) | 278 ms (400.2 s for 1442) |
+| Worker 0, median | 66 ms | 137 ms |
+| `compile_1` on core 3, median | 109 ms | 228 ms |
+
+The saved-program queue was empty by replay ~5000, about 2 minutes in. Run 109 emptied at ~9500, and run 105 still held 514 at the end.
+
+**Stalls:** none of 250 ms or more, against 0.9 s in run 109 and 2.9 s in run 105. This is the first run on this route without one.
+
+**Audio:** 2.6 s of silence in 182 s.
+
+**FPS:** `Gungan_B` 38.0, within noise. No visual defect reported.
+
+**Main thread:** 131 ns per guest call (90 % 129-132), against 128 in run 109 and 125 in run 105.
+
+**Checks:** 36 of 225 reported a difference.
+- All were pixel shaders (type 1), and every logged case had the same code size.
+- The check used `memcmp` on the relocation and fixup tables. `FixupEntry` (an 8-byte pointer and a 4-byte field) and `RelocEntry` (an `int8` before an enum) carry padding bytes that nv50_ir never writes, so the compare can fail on garbage.
+- The differing translations were replaced by fresh ones, so no wrong one was used after a check. The unchecked 7 of 8 reuses are only as safe as this reading.
+
+## Log 104: `0.0.99-log104dd`
+
+- The check compares the tables field by field.
+- On a difference it logs a mask of what differed:
+
+| Bit | Part |
+|---|---|
+| 1 | code size |
+| 2 | code |
+| 4 | header |
+| 8 | registers / flags |
+| 16 | vertex fields |
+| 32 | pixel fields |
+| 64 | relocations |
+| 128 | fixups |
+
+  It also logs how many code words differ.
+- **Expected:** 0 differences, which confirms padding was the cause.
+- If code (2) differs, the reuse is suspect (nondeterministic or missing key input) and goes off by default until explained.
+- **Test:** the same route. Read `[NVC0DEDUP]` and look for visual defects.

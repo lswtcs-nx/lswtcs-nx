@@ -26,6 +26,8 @@ GAME_FILES_NOTE = """Copy these from your own Xbox 360 disc of LEGO Star Wars: T
   audio/
 
 Then make a forwarder in sphaira for the app (CPU Cores: 4, Address Space: 39-bit) and start the game from it.
+
+env-testing.txt turns on detailed logs for reporting a problem: rename it to env.txt, play, then rename it back.
 """
 
 NOTES_TEMPLATE = """{changes}
@@ -107,6 +109,7 @@ def main():
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as z:
         z.writestr("switch/lswtcs/lswtcs.nro", nro)
         z.writestr("lswtcs/PUT-YOUR-GAME-FILES-HERE.txt", GAME_FILES_NOTE)
+        z.write(ROOT / "profiles" / "hardware-ab.env", "lswtcs/env-testing.txt")
     shutil.copyfile(nro_path, out / "lswtcs.nro")
     if elf_path.exists():
         shutil.copyfile(elf_path, out / f"lswtcs-v{args.version}.elf")   # private: for crash reports, never uploaded

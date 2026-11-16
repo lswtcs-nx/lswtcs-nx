@@ -43,8 +43,8 @@ OpenGL on Mesa/Nouveau).
 The game also starts from the Homebrew Menu without a forwarder, but there it gets only three CPU cores and stutters
 more in its first minutes, while it prepares shaders.
 
-The settings for play are built in, so no settings file is needed. Testers add one to get logs
-([docs/playing.md](docs/playing.md), "Testing").
+The settings for play are built in, so no settings file is needed. The zip also puts `env-testing.txt` in
+`sdmc:/lswtcs/`: it turns on logs when you want to report a problem (see [Reporting a problem](#reporting-a-problem)).
 
 The finished SD card:
 
@@ -53,6 +53,7 @@ sdmc:/
   switch/lswtcs/lswtcs.nro
   lswtcs/
     default.xex  game.DAT  game1.DAT  Movies/  audio/
+    env-testing.txt
 ```
 
 **Updating:** download the new release and replace `sdmc:/switch/lswtcs/lswtcs.nro` with its `lswtcs.nro` (or
@@ -80,6 +81,25 @@ play they keep the Xbox 360 positions: the bottom button (B on the Switch) jumps
   the title screen idle.
 
 The full list, with the technical detail for contributors, is in [docs/known-issues.md](docs/known-issues.md).
+
+## Reporting a problem
+
+The game can write detailed logs that show us what happened. To turn them on and send them:
+
+1. **Turn the logs on:** rename `sdmc:/lswtcs/env-testing.txt` to `env.txt`. You can do it on the Switch, in sphaira's
+   file browser, or on a PC. (On Windows, check the name does not end up as `env.txt.txt`.)
+2. **Play** until the problem happens. When it does, hold **ZL + ZR and click the left stick**: it marks that moment in
+   the log.
+3. **Close the game** from the HOME menu.
+4. **Zip the newest folder** in `sdmc:/lswtcs/logs/`. Ten minutes of play make a zip of about 4 MB; GitHub takes up
+   to 25 MB, so short sessions are best.
+5. **Open a [bug report](https://github.com/lswtcs-nx/lswtcs-nx/issues/new?template=bug_report.yml)**, fill in the form (handheld or docked, where in the game, what you saw or heard)
+   and attach the zip.
+6. **Turn the logs off:** rename `env.txt` back to `env-testing.txt`. The logs take about 120 MB of the card per hour.
+
+Never send the game's files, saves or keys. `stdout.log` names the console user that loaded the save; remove that line
+if you prefer. If your card has no `env-testing.txt` (installs before the release zip had it), save
+[this file](https://github.com/lswtcs-nx/lswtcs-nx/raw/main/profiles/hardware-ab.env) as `sdmc:/lswtcs/env-testing.txt`.
 
 ## Performance
 
@@ -145,8 +165,8 @@ The game's own files need no preparation: the app reads them from your disc's fi
 
 ## How to collaborate
 
-- **Test and bring logs:** play with the testing profile and send the session's folder from `sdmc:/lswtcs/logs/`
-  ([docs/playing.md](docs/playing.md), "Testing").
+- **Test and bring logs:** see [Reporting a problem](#reporting-a-problem); [docs/playing.md](docs/playing.md) has the
+  details.
 - **Change the code:** read [CONTRIBUTING.md](CONTRIBUTING.md). Then the end of [docs/progress-log.md](docs/progress-log.md)
   has the newest state, and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) the code map.
 - **Coding assistants** follow [AGENTS.md](AGENTS.md).

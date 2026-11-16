@@ -37,7 +37,7 @@ to change a setting:
 | Profile | For | What it does |
 | --- | --- | --- |
 | [`profiles/player.env`](../profiles/player.env) | Playing | The built-in settings: tuned, diagnostics off. The game writes only a short `stdout.log`. No file needed. |
-| [`profiles/hardware-ab.env`](../profiles/hardware-ab.env) | Testing and bringing logs | The same settings plus the diagnostics: frame log, sampling profiler, GPU timings, render reports, capture combos. It runs slightly slower and writes about 120 MB of logs per hour. |
+| [`profiles/hardware-ab.env`](../profiles/hardware-ab.env) (`env-testing.txt` in the release zip) | Testing and bringing logs | The same settings plus the diagnostics: frame log, sampling profiler, GPU timings, render reports, capture combos. It runs slightly slower and writes about 120 MB of logs per hour. |
 
 Both use the same fixes, the same shader and texture handling and the fourth core when it is available. Results
 from a test session therefore apply to the player profile.
@@ -101,14 +101,19 @@ on the HOME menu that starts the NRO, and it can ask the system for all four.
 
 ## Testing: how to bring logs
 
-1. Use the testing profile (`profiles/hardware-ab.env` as `env.txt`).
+1. Rename `sdmc:/lswtcs/env-testing.txt` (from the release zip) to `env.txt`, in sphaira's file browser or on a PC.
+   Without that file, save [`profiles/hardware-ab.env`](../profiles/hardware-ab.env) as `sdmc:/lswtcs/env.txt`.
+   On Windows, check the name does not end up as `env.txt.txt`.
 2. Play normally. Use the mark combo when something goes wrong.
 3. Close the game from the HOME menu. The game has no quit option, and closing it this way is safe for the logs.
-4. Copy the newest folder from `sdmc:/lswtcs/logs/` and send it, with a few words:
+4. Zip the newest folder from `sdmc:/lswtcs/logs/` and attach it to a [bug report](https://github.com/lswtcs-nx/lswtcs-nx/issues/new?template=bug_report.yml), with a few words.
+   Ten minutes of play make a zip of about 4 MB and GitHub takes up to 25 MB, so short sessions are best:
    - handheld or docked;
    - launched from a forwarder or the Homebrew Menu;
    - where you played;
    - what you saw or heard.
+
+5. Rename `env.txt` back to `env-testing.txt` when you are done: the logs take about 120 MB of the card per hour.
 
 `stdout.log` names the console user that loaded the save. Remove that line if you prefer. Never send the game files,
 `glprogs2/`, saves or keys.

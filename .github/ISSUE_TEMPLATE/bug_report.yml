@@ -49,9 +49,9 @@ body:
     attributes:
       label: Logs
       description: |
-        Zip the session's folder from `sdmc:/lswtcs/logs/` and attach it. For the most detail, play with the testing
-        profile (`profiles/hardware-ab.env` copied as `sdmc:/lswtcs/env.txt`). `stdout.log` names the console user;
-        remove that line if you prefer.
+        Rename `sdmc:/lswtcs/env-testing.txt` to `env.txt`, play until the problem happens, close the game from the
+        HOME menu, then zip the newest folder in `sdmc:/lswtcs/logs/` and attach it (ten minutes of play make about
+        4 MB). `stdout.log` names the console user; remove that line if you prefer.
   - type: checkboxes
     id: copy
     attributes:

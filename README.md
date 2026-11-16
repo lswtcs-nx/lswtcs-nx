@@ -4,21 +4,25 @@
 
 <h1 align="center">LEGO Star Wars: The Complete Saga for Nintendo Switch</h1>
 
-An unofficial native port of the Xbox 360 version of *LEGO Star Wars: The Complete Saga* to the Nintendo Switch, as
-homebrew. It is not an emulator. The game's PowerPC code is recompiled ahead of time to ARM64 with XenonRecomp, and a
-runtime written for the Switch provides the Xbox 360 services:
-- memory and threads;
-- files and saves;
-- input and audio;
-- graphics, through OpenGL on Mesa/Nouveau.
+Play the Xbox 360 version of *LEGO Star Wars: The Complete Saga* on your Nintendo Switch, as homebrew: the story,
+two-player co-op and saves. It is not an emulator. The game's own code was converted to run directly on the Switch's
+processor, so it runs as a native app.
+
+Under the hood: the game's PowerPC code is recompiled ahead of time to ARM64 with XenonRecomp, and a runtime written
+for the Switch provides the Xbox 360's services (memory, threads, files, saves, input, audio, and graphics through
+OpenGL on Mesa/Nouveau).
 
 ## Requirements
 
 - **A Switch that runs homebrew** (custom firmware such as Atmosphère), with
   [sphaira](https://github.com/ITotalJustice/sphaira) to make a HOME-menu forwarder.
 - **About 6 GB free on the SD card:** the game's data (about 5.8 GB) plus the app.
-- **Your own copy of the Xbox 360 game:** the USA/Europe Rev 1 multilingual release (1.1). Its checksums are in
-  [`provenance/expected-inputs.json`](provenance/expected-inputs.json).
+- **Your own copy of the Xbox 360 game**, this exact release:
+  - *LEGO Star Wars: The Complete Saga*, Xbox 360, **USA/Europe**, **Rev 1** (version 1.1), one disc, region free;
+  - title ID **4C4107D7**, media ID **5E486FF7** (Xbox 360 ISO tools and game databases show both).
+
+  The game checks your `default.xex` when it starts and tells you on screen if it is another version. Checksums for
+  developers: [`provenance/expected-inputs.json`](provenance/expected-inputs.json).
 - **A PC to build the app** from your copy (see [Building](#building)).
 
 ## Building
@@ -37,15 +41,21 @@ The game's own files need no preparation: the app reads them from your disc's fi
 
 ## How to install
 
-There is no ready-made download yet. With `lswtcs.nro` from [Building](#building):
+There is no ready-made download yet. With `lswtcs.nro` from [Building](#building) (`sdmc:/` below is the root of
+your SD card):
 
 1. **Copy the app** to `sdmc:/switch/lswtcs/lswtcs.nro`.
-2. **Copy from your own disc** to `sdmc:/lswtcs/`: `default.xex`, `game.DAT`, `game1.DAT`, `Movies/` and `audio/`.
-   The game checks them at start and names any file that is missing or from another version.
-3. **Make a forwarder** in sphaira, so the game gets all four CPU cores (from the Homebrew Menu it gets three):
+2. **Copy the game's files** to `sdmc:/lswtcs/`: `default.xex`, `game.DAT`, `game1.DAT`, `Movies/` and `audio/`.
+   They are at the root of your disc. If you have a backup of your disc as an ISO file, open it with an Xbox 360 ISO
+   extractor (for example [extract-xiso](https://github.com/XboxDev/extract-xiso)) and copy those five items. The game
+   checks them at start and names any file that is missing or from another version.
+3. **Make a forwarder** in sphaira, so the game gets all four CPU cores: in sphaira's list of homebrew apps,
    highlight *LEGO Star Wars: The Complete Saga*, press **X**, choose **Install Forwarder**, set **CPU Cores** to
    **4** and **Address Space** to **39-bit**, then choose **Create Forwarder**.
 4. **Start the game** from its new icon on the HOME menu.
+
+The game also starts from the Homebrew Menu without a forwarder, but there it gets only three CPU cores and stutters
+more in its first minutes, while it prepares shaders.
 
 The settings for play are built in, so no settings file is needed. Testers add one to get logs
 ([docs/playing.md](docs/playing.md), "Testing").
@@ -67,11 +77,13 @@ and the saves are kept.
 
 ## Controls
 
-The game shows its Xbox 360 button icons, but confirm and back follow the Switch: A confirms, B goes back. In play the
-face buttons keep the 360 positions, so the bottom button jumps. Plus is Start, Minus is Back, and L/R and ZL/ZR are
-the bumpers and triggers.
-- **L + R + Minus** switches the face-button layout.
-- **Plus** on a second controller joins player 2; **L + R + Plus** opens the controller screen.
+The game shows Xbox 360 button icons. In menus, the buttons work as on the Switch: A confirms and B goes back. In
+play they keep the Xbox 360 positions: the bottom button (B on the Switch) jumps, as A did on the 360.
+- **Plus** pauses (the 360's Start), **Minus** is the 360's Back.
+- **L / R** and **ZL / ZR** are the 360's bumpers and triggers.
+- **L + R + Minus** switches how the face buttons are read: by position (as on the 360), by letter (as on the
+  Switch), or both, as above.
+- **Player 2:** press **Plus** on a second controller. **L + R + Plus** opens the Switch's controller screen.
 
 [docs/playing.md](docs/playing.md) has every control, the testing profile, forwarders, saves, and how to send logs.
 

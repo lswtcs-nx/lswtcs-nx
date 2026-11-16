@@ -21,9 +21,23 @@ runtime written for the Switch provides the Xbox 360 services:
   [`provenance/expected-inputs.json`](provenance/expected-inputs.json).
 - **A PC to build the app** from your copy (see [Building](#building)).
 
+## Building
+
+The build makes Switch code out of your copy of the game. Tested on Windows with devkitPro (devkitA64, libnx), CMake
+and Python 3. In outline:
+
+1. **Get the dependencies** at the pinned versions ([`provenance/dependencies.json`](provenance/dependencies.json)):
+   XenonRecomp, Xenia Canary, SPIRV-Cross, SIMDe.
+2. **Generate the game code** from your `default.xex` with XenonRecomp, and apply the port's patch to the output.
+3. **Build Mesa for the Switch** with the port's changes: `source/switch/tools/build_mesa.sh`.
+4. **Build the NRO** with CMake from `source/switch`. The current recipe (guest memory without `volatile`, plus an
+   optional profile-guided build) is in "The current build" in [docs/BUILDING.md](docs/BUILDING.md).
+5. **Prepare `image.bin`, `pristine.bin` and `xex_header.bin`** from your copy ([docs/BUILDING.md](docs/BUILDING.md),
+   "Game data needed at runtime").
+
 ## How to install
 
-There is no ready-made download: the app is built from your own copy of the game. Once you have `lswtcs.nro`:
+There is no ready-made download yet. With `lswtcs.nro` and the files from [Building](#building):
 
 1. **Copy the app** to `sdmc:/switch/lswtcs/lswtcs.nro`.
 2. **Copy your game's files** to `sdmc:/lswtcs/`:
@@ -71,45 +85,50 @@ The full list, with the technical detail for contributors, is in [docs/known-iss
 
 ## Performance
 
-Measured on a real Switch, on the Gungan route (hub, Episode I chapter 2):
+What the port does to run well on the Switch. Every change was measured on a real Switch; its session and evidence are
+in [docs/progress-log.md](docs/progress-log.md).
 
-| | Handheld | Docked |
-| --- | --- | --- |
-| Average FPS, whole session | about 42 | about 49 |
-| Heavy combat frames (1300+ draws) | about 30 FPS | about 31 FPS |
-| What limits heavy frames | the GPU | the chain from game frame to GPU |
-| Render stalls of 250 ms or more, per 3-minute session | 0-0.65 s (was 2.9 s) | not measured yet |
+**Game code (CPU)**
+- Guest memory accessed without `volatile`, with `-fno-strict-aliasing` and compiler barriers only at guest sync
+  instructions and loop headers.
+- Profile-guided optimisation (GCC), with counts from a play session on an instrumented build.
+- Guest addresses translated by one bit fold instead of a region-table load per access.
+- Float compares without flag side effects, and argument registers kept in locals inside hot loops.
+- Together these cut the main thread's CPU per recompiled call from 157 to 127 ns.
 
-- **GPU clock.** The handheld GPU runs at 460.8 MHz, Nintendo's own handheld configuration `0x92220008`, not an
-  overclock. `LSWTCS_GPUBOOST=0` keeps 307.2 MHz.
-- **What made the game code faster:**
-  - guest memory without `volatile`;
-  - profile-guided optimisation.
+**Threads**
+- The Xbox 360 GPU command stream (PM4) is walked on its own thread, off the guest's turn. GPU kicks hand the ring to
+  it, and ring-space waits end at the walker's published position.
+- XMA audio decoding and LZ2K decompression run on worker threads, beside the game, as the 360's hardware decoder does.
+- The XAudio mixing work runs off the guest's turn, with a native mixer that matches the game's result bit for bit.
+- Guest spinlocks are real compare-and-swap locks, and audio threads come first in the guest scheduler.
+- With four cores, core 3 runs work no frame waits for: the log writer, XMA, file reads and a second shader compiler.
+  A meter sends them back if core 3 gets busy.
 
-  Together they cut the main thread's CPU per recompiled call from 157 to about 127 ns.
-- **Shader preparation:**
-  - Mesa now reuses the translation of a shader stage it has already compiled. This cut the cost per program by about
-    45 %; checked word for word on hardware.
-  - With four cores, a second compiler on the fourth core handles the saved list.
-- **Next:** we are studying a move from OpenGL on Mesa to deko3d, the Switch's native graphics library, for a broader
-  gain.
+**Rendering (OpenGL on Mesa/Nouveau)**
+- The world is drawn once per frame, not once per EDRAM tile. Tile groups are merged, and resolves go straight into
+  the stitched target.
+- A draw's preparation is reused while no register changed, and the command walk skips guest pages unchanged for 8
+  frames. Both keep a sampled check that turns them off at the first difference.
+- Shader variants are specialised: alpha test, gamma, output bias, and fetch scale and LOD bias become constants.
+  Fetch constants come from one block per draw.
+- Mesa: unchanged constant-buffer binds are skipped, quads are drawn as indexed triangles instead of through a
+  geometry shader, and 2x MSAA surfaces render at one sample per pixel.
+- The handheld GPU runs at 460.8 MHz, Nintendo's official handheld configuration, not an overclock
+  (`LSWTCS_GPUBOOST=0` keeps 307.2 MHz).
 
-Every number has its session and evidence in [docs/progress-log.md](docs/progress-log.md). What could come next is in
-the last section of [docs/reviews/CPU_ROADMAP.md](docs/reviews/CPU_ROADMAP.md).
+**Shaders and textures (stutter)**
+- Every shader program the game used is saved on the SD card. Later boots prepare the list in the background, the
+  current level's programs first.
+- Mesa reuses the nvc0 translation of an identical shader stage, which cut the cost per program by about 45 %; a
+  sample is re-translated and compared.
+- Two shader compilers; with four cores, the second takes only programs nothing is waiting for.
+- New textures are made before the draw loop, decoded on three threads and uploaded as each one is ready. Texture
+  storage is pooled, and uploads are staged from Mesa's GART suballocator.
+- Large allocations come from newlib's allocator and small ones from rpmalloc, so freed large blocks merge.
 
-## Building
-
-The build makes Switch code out of your copy of the game. Tested on Windows with devkitPro (devkitA64, libnx), CMake
-and Python 3. In outline:
-
-1. **Get the dependencies** at the pinned versions ([`provenance/dependencies.json`](provenance/dependencies.json)):
-   XenonRecomp, Xenia Canary, SPIRV-Cross, SIMDe.
-2. **Generate the game code** from your `default.xex` with XenonRecomp, and apply the port's patch to the output.
-3. **Build Mesa for the Switch** with the port's changes: `source/switch/tools/build_mesa.sh`.
-4. **Build the NRO** with CMake from `source/switch`. The current recipe (guest memory without `volatile`, plus an
-   optional profile-guided build) is in "The current build" in [docs/BUILDING.md](docs/BUILDING.md).
-5. **Prepare `image.bin`, `pristine.bin` and `xex_header.bin`** from your copy ([docs/BUILDING.md](docs/BUILDING.md),
-   "Game data needed at runtime").
+**Next:** we are studying a move from OpenGL on Mesa to deko3d, the Switch's native graphics library, for a broader
+gain.
 
 ## How to collaborate
 
@@ -126,9 +145,9 @@ is built on, and their licences, are listed in [THIRD_PARTY_NOTICES.md](THIRD_PA
 
 **Disclaimer.** This is a fan project, not affiliated with or endorsed by the LEGO Group, Lucasfilm, TT Games,
 Microsoft or Nintendo. *LEGO Star Wars: The Complete Saga*, its logo and its content belong to their owners. The
-repository contains none of the game's data. Use your own legally obtained copy.
+repository contains none of the game's data. Use your own legally obtained copy. Made by fans, for fans. Thanks for
+playing.
 
-<p align="center">
-  Made by fans, for fans. Thanks for playing.<br>
-  <em>And may the Force be with you.</em>
-</p>
+<br>
+
+<p align="center"><em>And may the Force be with you.</em></p>

@@ -1,7 +1,7 @@
 # Putting this project on GitHub
 
-A guide for both collaborators (the port's owner and Gabriel B / `g-brrzzn`), and for any coding agent working for
-either of them. Use it whoever sets the repository up, and from whatever you start with: this folder with its Git
+A guide for the collaborators (Tnes and Gabriel B / `g-brrzzn`), and for any coding agent working for either of
+them. Use it whoever sets the repository up, and from whatever you start with: this folder with its Git
 history, the zip, or a repository that already exists.
 
 Nothing here has been done yet. Creating an account, organisation or repository, pushing, and making anything public
@@ -12,7 +12,7 @@ are actions a person takes; a coding agent prepares commands and does not run th
 - **The zip** (`lswtcs-*.zip`): every tracked file at the latest commit, without Git history. It also carries
   `_history/lswtcs-history.bundle`.
 - **The history bundle** (`lswtcs-history.bundle`): the full Git history of this work:
-  - the first imports the owner's 1 November 2026 handoff snapshot;
+  - the first imports the 1 November 2026 handoff snapshot;
   - the rest are Gabriel's work since then, authored `g-brrzzn <136928835+g-brrzzn@users.noreply.github.com>`.
 
   A GitHub noreply address links those commits to Gabriel's GitHub profile without exposing a personal email.
@@ -38,19 +38,16 @@ what is listed.
 
 ## Decide before the repository is public
 
-- **Owner and visibility.** A GitHub organisation owned by both collaborators avoids the repository belonging to one
+- **Organisation and visibility.** A GitHub organisation owned by both collaborators avoids the repository belonging to one
   person. Start it **private**, and make it public only when both agree.
-- **Licence.** The port's own code is GPL-3.0 (`LICENSE`); the original port's CC BY-NC-SA text is kept in
-  `provenance/`, and its author's confirmation of the change is pending (see `notices/README.md`). Bundled third-party code keeps its own
+- **Licence.** The port's own code keeps the original port's CC BY-NC-SA 4.0 (`LICENSE`, `notices/README.md`). Bundled third-party code keeps its own
   licences and notices: FFmpeg, SIMDe, SPIRV-Cross, XenonRecomp, xenia-canary, xxHash, rpmalloc. Do not put one
   blanket licence over the whole tree.
-- **The owner's decisions on the current build** (listed in `README.md`, "Update, 8 November 2026"): the 460.8 MHz
-  handheld GPU default, guest memory without `volatile`, and PGO.
 
-## Case 1: Gabriel sets it up and pushes his history (simplest)
+## Case 1: Gabriel sets it up and pushes this history (simplest)
 
 1. Create the organisation and an empty **private** repository in it. Add no README or licence, so the push is not
-   rejected. Invite the other collaborator as an owner.
+   rejected. Invite the other collaborator as an organisation owner.
 2. In Gabriel's folder:
    ```sh
    git status                      # must be clean
@@ -58,10 +55,10 @@ what is listed.
    git remote add origin <repository URL>
    git push -u origin main
    ```
-3. The owner then clones it (`git clone <repository URL>`) and works from there. Each person's commits carry their
+3. The other collaborator then clones it (`git clone <repository URL>`) and works from there. Each person's commits carry their
    own identity.
 
-## Case 2: the owner sets it up from the zip, keeping the history
+## Case 2: the other collaborator sets it up from the zip, keeping the history
 
 1. Create the organisation and an empty private repository, and invite Gabriel.
 2. Unpack the zip. In the folder that holds `_history/lswtcs-history.bundle`:
@@ -74,9 +71,9 @@ what is listed.
    ```
 3. Check that the cloned folder matches the zip: the bundle's last commit is the one the zip was made from.
 
-## Case 3: the owner already has a repository with his own history
+## Case 3: an existing repository with its own history
 
-If his main branch's content is the 1 November snapshot, replay Gabriel's commits on top of it and skip the import
+If its main branch's content is the 1 November snapshot, replay Gabriel's commits on top of it and skip the import
 commit:
 
 ```sh
@@ -88,7 +85,7 @@ git merge --ff-only gabriel-work
 git push
 ```
 
-If his main branch has moved on, resolve conflicts during the rebase file by file. The largest changed files are
+If its main branch has moved on, resolve conflicts during the rebase file by file. The largest changed files are
 `source/switch/source/gl_backend.cpp` and `source/LSWTCSRuntime/source/kernel_stubs.cpp`.
 
 ## Case 4: the zip's files without any history

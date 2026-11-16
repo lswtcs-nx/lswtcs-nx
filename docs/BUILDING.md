@@ -8,10 +8,9 @@ enough. No game, Switch SDK, emulator, keys or firmware are needed. Follow
 
 **Full game build:** requires your own matching game, locally generated GameCode,
 the pinned dependencies and an appropriate toolchain. This export does not install
-or fetch them. Any setup on the owner's machine needs their explicit approval
-after purpose, size and location; none is requested or performed by this handoff.
+or fetch them.
 
-The owner's incremental Mesa012 build passed. A fresh generator invocation and
+The 1 November baseline's incremental Mesa012 build passed. A fresh generator invocation and
 complete build of this exported folder have **not** been run. The patch-chain
 qualification below is narrower and explicit.
 
@@ -78,7 +77,7 @@ That is the patch recorded for the original folded baseline. Do not apply both.
 The baseline hash check below decides whether your generation actually matches;
 if it does not, stop and report the difference instead of forcing the game patch.
 
-The owner built the reference generator with LLVM20.1.8/clang-cl and VS2022 tools.
+The reference generator was built with LLVM20.1.8/clang-cl and VS2022 tools.
 MSVC alone and LLVM18 with that installed STL were not suitable. The recorded
 CMake settings were Release, clang-cl, C flags `/clang:-msse2`, and C++ flags
 `/clang:-mmmx /clang:-msse2`. Build with one job initially, at most two here.
@@ -95,7 +94,7 @@ These are observed historical versions, not a recommendation to update globally.
    path to `lswtcs_locals.toml` and to `XenonUtils/ppc_context.h` as its two inputs.
 4. Run `python source/switch/tools/fold_recomp_output.py <output_locals_raw>`.
    The historically named "raw" folder is now the **folded baseline**.
-5. Check it, then copy it into a new `output/` folder. The existing owner checkout
+5. Check it, then copy it into a new `output/` folder. An existing working checkout
    is not a place to experiment with full regeneration or overwrite build objects.
 
 ```sh
@@ -174,7 +173,7 @@ an asset bundled in this handoff. Do not share your outputs or keys back.
 
 ## Switch Mesa build
 
-The owner used devkitPro's MSYS2 tools, devkitA64/GCC, libnx and the project's
+The baseline was built with devkitPro's MSYS2 tools, devkitA64/GCC, libnx and the project's
 patched Mesa20.1.0-rc3. At the recorded setup, SDK package versions included
 devkitA64r30-1, libnx4.12.0-1, switch-libdrm_nouveau1.0.1-2 and
 switch-glad0.1.27-1. The project's custom Mesa exports are required; stock Mesa
@@ -200,7 +199,7 @@ cmake --build build-mesa --target lswtcs_nro --parallel 1
 ```
 
 Preserve completed GameCode objects/PCH; do not clean/reconfigure another backend
-tree casually. Original full rebuilds were expensive. The owner's incremental
+tree casually. Original full rebuilds were expensive. The baseline's incremental
 012 build compiled only two changed units; a new machine must build its own code.
 
 `workspace-tools/validate_tcs360_switch.py --help` describes the static artifact

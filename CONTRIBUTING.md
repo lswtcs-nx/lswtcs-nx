@@ -19,6 +19,7 @@ what it showed, and the build that followed.
 1. **Start from the current state:**
    - the end of [docs/progress-log.md](docs/progress-log.md);
    - the last section of [docs/reviews/CPU_ROADMAP.md](docs/reviews/CPU_ROADMAP.md) for what limits each mode;
+   - [docs/known-issues.md](docs/known-issues.md) for what is still open;
    - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the code map.
 
    For anything larger than a fix, open an issue first, so two people do not change the same files.
@@ -62,9 +63,9 @@ Never commit any of these:
 
 ## Code from other projects
 
-Keep the notices of every component ([THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)). The repository is GPL-3.0, like
-bo2-360-nx, rr6-nx and mk9-nx: code from them can be used, with their copyright notices kept in the file and a line in
-THIRD_PARTY_NOTICES.md. Code under a licence that GPL-3.0 cannot take in stays out.
+Keep the notices of every component ([THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)). GPL-3.0 projects (bo2-360-nx,
+rr6-nx, mk9-nx) are a source of ideas only, while this repository's licence differs from theirs: reimplement, do not
+copy.
 
 ## Rules for coding assistants
 

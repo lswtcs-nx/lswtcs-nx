@@ -201,7 +201,7 @@ give how long each took. Audio speed by mean draws in the window, windows over 3
 | 5, `log3` | 67 % (10) | | |
 | 6, `log5` | 73 % (15) | 81 % (17) | 58 % (8) |
 
-Window counts in brackets. This is the owner's audio jitter on a number, and it looks worse since merging or
+Window counts in brackets. This is the reported audio jitter on a number, and it looks worse since merging or
 early-Z. **That is not established**: the runs differ in scene and FPS is up, so an A/B at one spot is needed.
 Guest threads were still about 30 % idle on average in these scenes (`[SCHEDPROF]`), so plain CPU saturation
 does not explain it.
@@ -226,7 +226,7 @@ and in heavy scenes a scheduler round holds a main-thread slice of about 2 ms an
 turns in a row, so two spinning audio threads cannot starve the others.
 
 **A/B during one session.** `LSWTCS_ABCYCLE=20` with `LSWTCS_ABSTATES=MA,MAW,M,A,MAV` changes settings every 20 s (profile
-`profiles/hardware-ab.env`). Defaults are unchanged without it, so nothing has been switched on for the owner's build.
+`profiles/hardware-ab.env`). Defaults are unchanged without it, so nothing has been switched on for the default build.
 `tools/analyze_run.py` compares the states by draw band: FPS, audio speed, empty device time, replay, GPU wait.
 
 **Merged against unmerged, automatically.** In `V` states the frame is drawn merged, unmerged and merged again every 60
@@ -279,7 +279,7 @@ The picture stopped for good 25 s after that freeze: from replay 9574 every repl
 resolved, rows below it stale, hence the seam at row 320 in `shot_10267`), for 87 s until the session ended, while audio and
 guest threads ran and guest swaps kept counting. No earlier session did this, and it began right after `W`. One occurrence: very
 likely, not proved. The mechanism was not found. `W` also gave the best audio at 1900+ draws (92 %), which does not matter now.
-It is gone from the profile, so the owner's faults are not explained by it: no earlier run used it.
+It is gone from the profile, so the earlier faults are not explained by it: no earlier run used it.
 
 **Merging did not change the picture in the checks.** 12 checks on frames of 1,425-5,476 records: at most 2 pixels differ,
 noise 0, none flagged. A small sample, in this level only. It does not cover early-Z, and run 6's faults remain unexplained.
@@ -292,7 +292,7 @@ noise 0, none flagged. A small sample, in this level only. It does not cover ear
 | 1900+ | 47 % | 60-65 % | 11.8 | 8.6-9.1 |
 
 The cycle order was fixed and the scene moves, so the FPS cost is an indication. With `M` the highest in its neighbourhood in each
-cycle it looks real. So this is a trade-off for the owner rather than a plain fix, and even with priority audio stays under
+cycle it looks real. So this is a trade-off rather than a plain fix, and even with priority audio stays under
 real time above 1900 draws.
 
 **This level is limited by the guest CPU, not the GPU.** Heavy frames: swap to swap 99 ms, of which GPU 54 ms and GPU idle 47 ms.
@@ -463,7 +463,7 @@ without the turn, on core 1 below the render thread. If the game relied on a kic
 straight to their row, which keeps the rule that the newest resolve of a row wins. A part read on its own, or a composite of another size, gets its rows copied back first. State V's comparison now also resolves and
 composes the old way in its unmerged pass, so it checks S too.
 
-**H: page hash per frame.** The hash is 8.6 % of the turn. The source comment rejects page age as proof that a page has not changed, for a good reason, so this is not on by default and needs the owner's judgement even if it
+**H: page hash per frame.** The hash is 8.6 % of the turn. The source comment rejects page age as proof that a page has not changed, for a good reason, so this is not on by default and needs proof even if it
 measures well. Only in this state, a page unchanged for 8 frames and already hashed this frame skips later epochs, except one in 16, and `[GPUPAGES]` counts what those samples would have missed.
 
 **Always on:**
@@ -518,18 +518,18 @@ differing index. Until then the mismatch stands. Before it, 67 to 79 % of draws 
 
 **S works.** Heavy frames went from 28.9 to about 15.6 blits and 11.79 to about 7 Mpx, close to the 5 Mpx estimated. `[GLGPU]` texsrc blits fell from about 2.5 ms to 0.00 with S. `[UNTILECHECK]`: 19 checks, none flagged, at most 4 pixels different. A comparison only covers the frames it sampled.
 
-**H looks effective, and is still the owner's decision.** Heavy frames hashed 1312 pages against 2168, re-hashed 105 against 1140, walk 15.8 against 18 ms, record 12 against 14 ms. Sampled misses: 0 in the session, a small sample at one in 16. Other pages still change mid-frame about 0.9 times per frame. Stays off by default for the reason in the source comment.
+**H looks effective, and stays off by default.** Heavy frames hashed 1312 pages against 2168, re-hashed 105 against 1140, walk 15.8 against 18 ms, record 12 against 14 ms. Sampled misses: 0 in the session, a small sample at one in 16. Other pages still change mid-frame about 0.9 times per frame. Stays off by default for the reason in the source comment.
 
 **Fetch fold: compiles, cost one recompile.** No compile or link failure on Mesa, 352 programs. Worker time was 196 s against 49 s, which is not the fold being slower to compile: run 8 hit Mesa's disk cache (`shader_cache_read_program`), and the rewritten text missed it. Front-end samples (GLSL IR and TGSI) rose from 661 to 7918, while the nv50 backend, which runs either way, only went from 2458 to 2753.
 Disk cache writes rose from 310 to 3848 samples. So a second session of this build should fall back near 49 s; that is an inference, not measured. Also one-time: about 20 % of the render thread's freeze samples were file operations in `program()`, from `program_list_save` rewriting the list, which runs on the render thread and should move to the background writer.
 The queue drained around replay 2068, right after the first capture, so capture 1957's 5.9 s gap had both writers competing. The fold's own FPS effect cannot be separated from the rest here.
 
 **GPU.** `[GLGPU]`, few samples per band: under 300 draws 3.8 ms; 300 to 1300 draws 32.6 ms (plain 18.5, rects 4.9, resolves 3.0, quads 2.6); 1300 to 2500 draws 37.4 ms (plain 21.8, rects 5.9, resolves 5.7). One sample at about 5000 draws, replay 10800: 94 ms, of which 62.95 ms quads and 61.08 ms a single pixel shader, `CEF661992D489E4B`, over 83 draws. It has one texture and alpha test branches, which suggests smoke or fog overdraw. So the heaviest spot is limited by the GPU too, while `gpuwait` reads 0.
-One sample decides nothing, and any reduction in that effect is a quality decision for the owner.
+One sample decides nothing, and any reduction in that effect is a visible quality change.
 
 **Levels.** `[LEVEL]` works; `note_level` leaves a trailing `\ai` that should go.
 
-## Smoke in Episode I chapter 2: what is known, and options for the owner
+## Smoke in Episode I chapter 2: what is known, and options
 
 **Corrected by run 11, below: the 61 ms was not this shader's steady cost.** It costs about 4 to 7 ms in settled frames, and the heaviest band is limited by the CPU. The fill estimate and the table here stay as the record of what was assumed, and no reduction is needed for now.
 
@@ -547,7 +547,7 @@ The tester sees it in `Gungan_C`, as fog and smoke sheets near the waterfall and
 
 **Rough scale, an estimate.** 61 ms at the GPU's likely fill of 0.5 to 1.2 Gpixel/s would be 30 to 75 Mpx, or 30 to 80 layers of the whole screen. That is why it is cheap on the 360, whose blending happens in eDRAM, and expensive here. What limits it (shader, texture cache, blending or memory) is unknown. `0.0.17-log11` measures pixels per program in those frames (`LSWTCS_GLGPUPIX`) and samples frames of 4000 draws or more every 120 frames instead of every 600, which should answer the first question: nanoseconds per pixel of this shader against costlier ones.
 
-**Options, none implemented.** Each depends on that measurement, and all but the first change or may change the picture, so they are the owner's decision. A rule keyed to this shader would also be the kind of per-content exception `AGENTS.md` rules out unless the owner accepts it.
+**Options, none implemented.** Each depends on that measurement, and all but the first change or may change the picture, so none can be silent. A rule keyed to this shader would also be the kind of per-content exception `AGENTS.md` rules out.
 
 | Option | Expected effect | Visual risk | Effort, problem |
 |---|---|---|---|
@@ -591,7 +591,7 @@ Fix: notify without the mutex. A wakeup lost in the small window before the wait
 **Captures.** The save windows are gone: 99 to 104 MB of images in 13.9 to 15.6 s (23 to 31 MB on the card), against about 100 s. Writing takes 2.1 to 3.4 s and opening, sizing and closing 3.6 to 5.3 s; the rest is mostly encoding. The session's frames of 500 ms or more: 12, against 101 in run 10. What remains is one freeze of 2 to 4.4 s at the moment of each capture, on the render thread's read-backs, which is the tool's own cost.
 The pause between writes shows nothing: frames of 200 ms or more in the following 16 s were 6, 4 and 2, 3, 6 across paced and unpaced, on different scenes, and the two kinds overlap. Since the kick waits above no longer point to the file system, the starvation hypothesis has lost its evidence, though this does not disprove it. The pause should go. Only 5 `[CAPSAVE]` lines for 6 captures: the session ended inside the last save or it merged with another; not checked.
 
-**H.** Hashed 1276 against 2107 pages, re-hashed 99 against 1090, sampled misses 0 again. Walk and record did not clearly improve over MAPXS here (16.3 and 11.3 against 15.6 and 12.0), while XXH3 is 8.9 % of the heavy turn. Still the owner's decision.
+**H.** Hashed 1276 against 2107 pages, re-hashed 99 against 1090, sampled misses 0 again. Walk and record did not clearly improve over MAPXS here (16.3 and 11.3 against 15.6 and 12.0), while XXH3 is 8.9 % of the heavy turn. Still off by default.
 
 **Shader cache.** 32 s of worker time against 196 s, as inferred from run 10, and no compile failure.
 
@@ -632,17 +632,17 @@ So the game's own code is about a third of the turn. The rest is this port's ove
 | XMA kick without a lock | up to 20 % | Low | `0.0.18-log12` |
 | PM4 walk off the turn (W) | up to about 30 % | High: rejected in run 7, cause unknown | Second, separate session in `0.0.18-log12` |
 | Not re-walking repeated tile IBs | perhaps 5 % | Medium: a wrong viewport in a later tile | `0.0.18-log12` measures it (`repeat tiles` in `[GPUPAGES]`); replaces the 2 % guessed for `0.0.16-log10` |
-| Page hash per frame (H) | up to about 4 % | Owner's: can miss a page changed mid-frame | In A/B, sampled misses 0 in two runs |
+| Page hash per frame (H) | up to about 4 % | Can miss a page changed mid-frame | In A/B, sampled misses 0 in two runs |
 | Page hashes on a helper core, valid for the epoch they ran in | up to about 5 % | Medium, complex: most epochs are short | Not started. Sound only with the walk on the turn |
 | Native audio mixers `sub_827E51D0`, `sub_827F5990` | 2 to 3 % | Low with a compare mode; `tools/gen_native_reverb.py` is the pattern | Next batch, if audio stays heavy |
 | LTO, then direct calls, PGO | about 3 % of the frame, if bo2-360-nx's 10 % holds on the guest third | Build memory, a retrain per change | After the host overhead |
 | Plain guest memory instead of volatile | unknown, bo2-360-nx's 5.8 % was shared with other changes | Medium to high | After an audit |
-| Guest threads truly in parallel | largest | Largest: the scheduler keeps this game stable | Owner's decision, not routine work |
-| Higher CPU clock | direct | None technical; run conditions change | Owner's decision |
+| Guest threads truly in parallel | largest | Largest: the scheduler keeps this game stable | Not routine work |
+| Higher CPU clock | direct | None technical; run conditions change | A visible setting |
 
 **One caution on the lock.** Audio runs at about 52 % of real time in the heaviest band. Its work is per second of sound, so as it catches up it takes back part of what the lock frees: better audio, and less FPS than the 20 % suggests.
 
-**Why W is worth one more look, and why apart.** Run 7's trial ran on core 2 with shader compiles and Mesa's worker on a cold cache, and the walk assumed memory cannot change inside an epoch, which is false off the turn. Both may explain its faults; neither is shown. `profiles/hardware-walk.env` cycles MAPXS and MAPXSW, on core 1 with a new epoch per IB. It remains a test, not a recommendation, and running guest code beside the walk still needs the owner's view before it could ever be default.
+**Why W is worth one more look, and why apart.** Run 7's trial ran on core 2 with shader compiles and Mesa's worker on a cold cache, and the walk assumed memory cannot change inside an epoch, which is false off the turn. Both may explain its faults; neither is shown. `profiles/hardware-walk.env` cycles MAPXS and MAPXSW, on core 1 with a new epoch per IB. It remains a test, not a recommendation, and running guest code beside the walk still needs a full review before it could ever be default.
 
 **`0.0.18-log12`:** the kick notifies without the mutex, the capture pause is gone, `LSWTCS_WALKOFF_CORE` and the repeat-tile timer are added. Next run: lock share, FPS and audio by band against run 11, repeat-tile time; then W's session: black rows in history frames, `[GSPIKE]`, FPS against MAPXS.
 
@@ -681,13 +681,13 @@ Rows of run 12 with under 10 s (2500-4000) are indications. As expected, part of
 - So W does not just draw wrongly: once the walk has run beside guest threads, an event the command thread waits for is lost or never set. Candidates, none checked: a GPU interrupt or a fence write (`pm4_gpu_write`) racing a guest thread that tests the fence and then waits, or the order of `walk_wait_other` and the walker's rejoin.
 - The capture, taken after the stop, shows the stuck hub frame without a band; the band itself was not captured.
 
-W stays out. Moving the walk off the turn would need the waits and interrupts of the command thread understood first, which is a scheduler change for the owner to weigh, not a setting to try.
+W stays out. Moving the walk off the turn would need the waits and interrupts of the command thread understood first, which is a scheduler change to weigh, not a setting to try.
 
 ### Next
 
 1. Print why walk-time tile skipping rejects ring-level IBs in this level, with counters per frame. If the repeats can be skipped safely, it is the largest CPU gain left that keeps one guest thread at a time.
 2. Native audio mixers `sub_827E51D0` and `sub_827F5990`, with a compare mode: about 5 % of the heavy turn now.
-3. H remains the owner's decision.
+3. H stays off by default.
 
 ## `0.0.19-log13`: repeated tiles checked draw by draw (state T), not yet run on hardware
 
@@ -704,7 +704,7 @@ W stays out. Moving the walk off the turn would need the waits and interrupts of
 
 **A/B.** `MAPXS,MAPXST,MAPXSTV,MAPXSH,MAPXSTH`. MAPXST against MAPXS measures the gain; MAPXSTV checks the picture with T on; MAPXSTH is both CPU savings together.
 
-**Reading the next run.** `repeat tiles` and `walk`/`record` per frame by state; `[TILESKIP]` false matches must stay 0; FPS and audio by band against run 12. If T holds, the next candidates are the native audio mixers (about 5 % of the turn) and, larger and harder, page hashing (about 10 %): either H, which is the owner's decision, or tracking guest writes to vertex pages with memory protection, which would replace hashing by proof but is a large change.
+**Reading the next run.** `repeat tiles` and `walk`/`record` per frame by state; `[TILESKIP]` false matches must stay 0; FPS and audio by band against run 12. If T holds, the next candidates are the native audio mixers (about 5 % of the turn) and, larger and harder, page hashing (about 10 %): either H, which stays off by default, or tracking guest writes to vertex pages with memory protection, which would replace hashing by proof but is a large change.
 
 ## Run 13: `0.0.19-log13`, 2 November 2026
 
@@ -742,11 +742,11 @@ Handheld at stock clocks, 10,290 frames in 403 s, levels `Map\Map`, `Gungan_A/B/
 - Medians of heavy `[GPUPAGES]` lines by state, about 20 samples each: walk 20.1 ms with T against 19.2 without (MAPXST against MAPXS), record 13.7 against 14.0. No gain, and FPS by state shows none either.
 - So in this level the repeated tiles are not where the walk's time goes. Telling which repeats would be safe draw by draw needs to know which registers each draw reads, which is not worth it for what is left.
 
-**H is now the clearest CPU gain.** Same medians: walk 12.4 ms and record 8.4 ms with H (MAPXSH) against 19.2 and 14.0 without, pages hashed 1,080 against 2,550. Sampled misses are 0 again, as in every run since `0.0.16-log10`. The state slices land on different scenes, so the size is an indication. The decision stays the owner's: H trusts a page unchanged for 8 frames, which the source comment rejects as proof, and the sampled misses only bound how often that would be wrong.
+**H is now the clearest CPU gain.** Same medians: walk 12.4 ms and record 8.4 ms with H (MAPXSH) against 19.2 and 14.0 without, pages hashed 1,080 against 2,550. Sampled misses are 0 again, as in every run since `0.0.16-log10`. The state slices land on different scenes, so the size is an indication. It stays off by default: H trusts a page unchanged for 8 frames, which the source comment rejects as proof, and the sampled misses only bound how often that would be wrong.
 
 **FPS** against run 13 is the same within noise in every band (12.5 against 12.4 at 5000+).
 
-**Next.** Native audio mixers (about 5 % of the turn), then a trial of LTO on the runtime and generated code. Take H to the owner with the measurements from runs 10 to 14.
+**Next.** Native audio mixers (about 5 % of the turn), then a trial of LTO on the runtime and generated code. H has the measurements from runs 10 to 14.
 
 ## What the 360 version targets, and the fourth core
 
@@ -762,7 +762,7 @@ Why a game that ran on the previous generation is heavy here: the 360 runs its t
 - A meter moves everything back if those threads use more than 85 % of core 3 for 2 s. Its author reports a Switch Lite hard freeze from system services starved on that core, which is why the meter exists.
 - Measured there: +16 % on a Lite, +11.9 % on an OLED.
 
-Here the limit is the guest turn on core 0, which core 3 does not lift by itself. What could move there is the XMA worker, the audio output and the profiler, now on core 2 beside Mesa's worker. That would help the render side and Mesa, not the turn. Installing a forwarder title and risking a freeze are the owner's and the tester's decisions. `0.0.21-log15` only logs the process core mask (`[NX] process core mask`) so that each session records its launch route.
+Here the limit is the guest turn on core 0, which core 3 does not lift by itself. What could move there is the XMA worker, the audio output and the profiler, now on core 2 beside Mesa's worker. That would help the render side and Mesa, not the turn. Installing a forwarder title and risking a freeze need their own test. `0.0.21-log15` only logs the process core mask (`[NX] process core mask`) so that each session records its launch route.
 
 ## `0.0.21-log15`: native audio mixer (state N), not yet run on hardware
 
@@ -783,13 +783,13 @@ Handheld at stock clocks, 10,020 frames in 389 s, levels `Map\Map`, `Gungan_A/B/
 
 ## `0.0.22-log16`: H against Q, the fourth core ready, not yet run on hardware
 
-- **H protects itself.** H (per-frame page hash, measured since run 10: walk 19.2 to 12.4 ms, record 14 to 8.4 ms, no sampled miss in any run) now turns itself off for the session at its first sampled miss and prints `[GPUPAGES] H MISS: page ... H off for this session`, as P and N do. Making H the default stays the owner's decision; this makes trying it safe in long sessions.
+- **H protects itself.** H (per-frame page hash, measured since run 10: walk 19.2 to 12.4 ms, record 14 to 8.4 ms, no sampled miss in any run) now turns itself off for the session at its first sampled miss and prints `[GPUPAGES] H MISS: page ... H off for this session`, as P and N do. H stays off by default; this makes trying it safe in long sessions.
 - **State Q: a guest thread switch every 4th quantum.** Run 15's heavy band handed the guest turn over about 1,600 times a second, each a kernel wake and sleep with no guest code running. Q stretches the quantum fourfold (`lsw_quantum_div_set`, the same path as `LSWTCS_QDIV`). Its risk is audio latency: if the audio thread waits longer for the turn, `[AUDIO]` fill falls. A still gives audio the turn first.
 - **A/B:** `MAPXSN,MAPXSHN,MAPXSNQ,MAPXSHNQ`, N on everywhere (exact in run 15). Two factors crossed, so H and Q are each read across two states.
 - **Fourth core, inert on a homebrew launch.** `lsw_core3_begin` (platform_switch.cpp) moves the calling host thread to core 3 at the lowest priority when `LSWTCS_CORE3=1` and the process mask includes core 3. The XMA worker, the log writer and the background file thread call it. A meter on core 2 sends them all home if they use more than 85 % of core 3 for 2 s, and prints `[CORE3]`. With mask `0x7` it does nothing. A launch with core 3 needs a forwarder title, which this repository does not build and which the tester or owner would install themselves.
 - **Reading it:** `[GPUPAGES]` for an H miss; FPS per band by state; the guest-turn handoff rate and `[AUDIO]` fill under Q; `[NX] process core mask` and `[CORE3]`.
 
-**Guest threads on several cores: not attempted, and why.** All guest threads take one turn on core 0 (the cooperative scheduler). Letting two run at once looks possible in part: guest atomics are real compare-and-swap, and guest critical sections map to host mutexes. But the kernel stubs (events, semaphores, thread state, the GPU ring) assume only one guest thread runs, and the recompiled code relies on the turn for memory ordering the 360 gave by `lwsync`/`sync`. Lifting that is an audit of every kernel stub and of barrier translation, with data races that show up only as rare corruption. It is an architectural decision for the owner. The least risky first step would be one thread that touches little shared state, the audio thread (12 % of the heavy turn), on its own core.
+**Guest threads on several cores: not attempted, and why.** All guest threads take one turn on core 0 (the cooperative scheduler). Letting two run at once looks possible in part: guest atomics are real compare-and-swap, and guest critical sections map to host mutexes. But the kernel stubs (events, semaphores, thread state, the GPU ring) assume only one guest thread runs, and the recompiled code relies on the turn for memory ordering the 360 gave by `lwsync`/`sync`. Lifting that is an audit of every kernel stub and of barrier translation, with data races that show up only as rare corruption. It is an architectural change. The least risky first step would be one thread that touches little shared state, the audio thread (12 % of the heavy turn), on its own core.
 
 ## `0.0.23-log17` (draft): why W stopped the picture, and the fix
 
@@ -988,7 +988,7 @@ C costs audio and gives nothing, and is dropped. R and G are within noise of tod
 
 **R and G, runs 23-25 together.** In the heavy bands, R and RG are about 10-15 % faster than today's placement, and the audio is about that much worse. It is one trade-off, not a free gain: the XAudio thread shares the one guest turn, and whatever runs the game faster leaves it less. `[PARALLEL]` matches run 24 (the main thread waits about 50 % of the time).
 
-**Default left as it is.** Audio is one of the owner's first priorities, so trading it for frame rate is the owner's call. The route that removes the trade-off is moving the XAudio thread to a core of its own (route 1 in `CPU_ROADMAP.md`). The profile stays `MAPXSHN,MAPXSHNR,MAPXSHNRG` until then, to gather more of the same.
+**Default left as it is.** Audio is a first priority, so it is not traded for frame rate silently. The route that removes the trade-off is moving the XAudio thread to a core of its own (route 1 in `CPU_ROADMAP.md`). The profile stays `MAPXSHN,MAPXSHNR,MAPXSHNRG` until then, to gather more of the same.
 
 ## `0.0.31-log25`: first guest code off the turn (state U)
 
@@ -1169,7 +1169,7 @@ state says what to fix; without a simple fix, route 2. A count stuck in phase 2 
 
   So L costs 0-10 % of FPS at most, in the pass that also compiles shaders, and audio is clearly fuller. The two are not separated cleanly: pass order
   and the stale count both differ. L's pass had 4 frames of 500 ms or more (max 1554 ms) against none; cause not checked, but no lock wait comes near that.
-- **Decision:** L is sound, so route 1 continues. Making L the default is the owner's call; it stays in the test profile.
+- **Decision:** L is sound, so route 1 continues. L stays in the test profile for now.
 
 ## `0.0.36-log30`
 
@@ -1244,7 +1244,7 @@ The device's 2x MSAA comes from the video mode (`sub_8248CE98`, present paramete
 
 **Comparing:** draw counts fall, so load matching by draws does not hold across runs. Compare by level with `phase_compare.py` against run 31's L pass (`Gungan_B` 21.3 FPS, `C` 23.3, `E` 31.7, 5000+ draws 13.5) and run 32's states without U. U and A still compare within the session with `ab_factorial.py`.
 
-**What run 33 decides:** picture right and FPS up: keep it, and propose it to the owner as the default. Picture wrong in specific passes: read those passes and decide per target set. No FPS gain: the time is not where the profile suggests; go on with the walk itself.
+**What run 33 decides:** picture right and FPS up: keep it, and make it the default. Picture wrong in specific passes: read those passes and decide per target set. No FPS gain: the time is not where the profile suggests; go on with the walk itself.
 
 ## Run 33: `0.0.39-log33`, 2 November 2026: one tile is the largest gain so far
 
@@ -1266,7 +1266,7 @@ The device's 2x MSAA comes from the video mode (`sub_8248CE98`, present paramete
 - **U per tick works here.** At 5000+ equivalent: 17.6-18.8 FPS without U (6-12 s each), 23.2-23.3 with it (7-12 s each), audio 98-100 % in all. Load-matched at 1300+ draws in this session: U +18.5 % (90 %: +4.4 to +29.7, 10 visits only); over all frames -4.4 % (-10.0 to +1.6). So U helps where the turn is the limit and may cost a little elsewhere. 740 calls a second, 0.26 ms of work, 0.53 ms with the handoffs; 32 returns to the turn, all for `KeSetEvent`. No forced wait, so the give-way fix held.
 - **A off:** no measurable change (load-matched -1.5 %, -7.9 to +5.0), audio 99-100 % either way.
 - **What limits now:** GPU `draws..present` is about 30-36 ms at any load, so about 30 FPS is the ceiling at these clocks, and `[GLGPU]` was sampled too rarely here to say more. Heavy scenes are still turn-limited (turn held 95 %, main thread 86 % of it: 59 % guest, 27 % PM4 and record, 6.5 % XXH3).
-- **Picture:** the tester reports it unchanged from earlier runs. So `ONETILE` stays on; the default for the port is the owner's call.
+- **Picture:** the tester reports it unchanged from earlier runs. So `ONETILE` stays on.
 
 ## `0.0.40-log34`
 
@@ -1377,7 +1377,7 @@ Same build, one state, one pass. Docked: GPU 768 MHz, memory 1600 MHz, no clock 
 - **Quads without a geometry shader is dropped:** with pixels off quads cost 1.4 of 4.7 ms, so that change could save little.
 - **The constant cost is not the old barrier.** `mesa_cbflush_edits.py` already flushes only after a write, and heavy frames make 5 shared memory copies, so few barriers remain. Heavy frames change about 3200 bindings. What remains is the bind or the constant cache reload after it, not separated. If it is the reload, Deko pays it too with bound buffers.
 
-**Decision:** recommend not building Deko now. The owner decides. All shaders compile (run 35), so the option stays open, but the ceiling is about +23 % in the heaviest scenes and needs a GPU saving Deko has not shown. The profile is back to `GLGPUSPLIT=0`, `GLGPUPROF=300`, `GLGPUPIX=1`.
+**Decision:** recommend not building Deko now. All shaders compile (run 35), so the option stays open, but the ceiling is about +23 % in the heaviest scenes and needs a GPU saving Deko has not shown. The profile is back to `GLGPUSPLIT=0`, `GLGPUPROF=300`, `GLGPUPIX=1`.
 
 ## Log 37: `0.0.42-log37`, three measurements in one pass
 
@@ -1566,7 +1566,7 @@ Handheld again. No fault, no dropped interrupt, and audio was fine.
 - **FPS does not move handheld.** Load-matched, I was -0.5 % over all frames (90 %: -8.2 to +7.4) and -2.1 % at 1300+ draws (-16.5 to +12.8). So run 44's +9 % was noise. Handheld waits on the GPU: the bench's plain heavy frame takes 49 ms (41.8-73.5), the same as the 21 FPS measured.
 - **The bench repeats run 42.** Resolve copies cost 5.5 ms, forced early tests 7.4 ms, and B 0.4 ms. With pixels off, the frame takes 33 ms less.
 - **Program costs.** From the per-draw stamps of heavy frames, two programs take 38 % of the GPU time: `CA8722BD02CAB82B` (6 textures, 72 draws) and `6F9BED73E5CE1620` (alpha tested, 207 draws). Neither shows waste. They have no dynamic register indexing and no loops, and texture sampling is cheap (+tex off: 0.6 ms).
-- **Scale.** At 307 MHz, the Tegra X1 does about 157 GFLOPS against about 240 for the 360's GPU (peak figures, rough). The 360 holds about 30 FPS here. Handheld holds 21 at heavy load, close to that ratio. So shader code has little left to give handheld. Clock is the lever: 460.8 MHz is about 236 GFLOPS. That is the owner's decision.
+- **Scale.** At 307 MHz, the Tegra X1 does about 157 GFLOPS against about 240 for the 360's GPU (peak figures, rough). The 360 holds about 30 FPS here. Handheld holds 21 at heavy load, close to that ratio. So shader code has little left to give handheld. Clock is the lever: 460.8 MHz is about 236 GFLOPS. That is a visible setting.
 - **Next.** I needs a docked run of the same build, where the main thread limits. Until then it stays a letter. The next GPU item would be resolves drawn straight into their destination. That saves at most part of the 5.5 ms, and only on passes that meet several conditions.
 
 ## Run 46: `0.0.51-log45` docked, 3 November 2026: I helps where the main thread limits
@@ -1733,7 +1733,7 @@ h was -8.4 % load-matched (90 %: -17.6 to -0.1).
   - The turn is idle 17-20 % of the time, and frames still take about 35 ms.
   - The state-tagged profile shows where the main thread blocks: in the present path (`gpu_d3d12_present` under `lswtcs_gil_blocking`), waiting for the render thread to take the frame.
   - The render thread's replay takes 19.6 ms of wall time for about 12 ms of CPU, on core 1. The walker (13 ms per frame) shares that core at a higher priority (0x2D against 0x3B).
-- **CPU per heavy frame in I with k and h:** main 24 ms, walker 13, render 12, Mesa's worker 11, the XAudio guest thread 10-12, XMA 3-4. That is about 75 ms over three cores, so about 25 ms per core at perfect balance. The fourth core (owner's decision) would give the most room.
+- **CPU per heavy frame in I with k and h:** main 24 ms, walker 13, render 12, Mesa's worker 11, the XAudio guest thread 10-12, XMA 3-4. That is about 75 ms over three cores, so about 25 ms per core at perfect balance. The fourth core (it needs a forwarder) would give the most room.
 
 ## Log 52
 
@@ -1867,7 +1867,7 @@ Docked, the same forced early test was -4.2 ms of 23.0.
 
 ## Log 55 (for handheld)
 
-- **State z:** the bench's forced early depth test, shown. It is not exact: a pixel the alpha test discards still writes depth, so something drawn later behind a cut-out (leaves, grates, a fading object) can disappear. It is a visual test for the tester, and the author decides on any use.
+- **State z:** the bench's forced early depth test, shown. It is not exact: a pixel the alpha test discards still writes depth, so something drawn later behind a cut-out (leaves, grates, a fading object) can disappear. It is a visual test for the tester, never a silent default.
 - **`[EARLYZ]`** adds a histogram of the alpha test references (0, up to 0.25, 0.5, 0.75, above). If they are 0, the inexact case is only fully transparent texels, which also points at an exact route.
 - **New bench variant:** full-size resolve copies over a quarter of their area. If that still costs most of the 3.1 ms, the cost is the wait around each copy and not the copy.
 - **States:** `MAPXSHNLUBIkhwr,MAPXSHNLUBIkhwrz,MAPXSHNLUBIkhwrf,MAPXSHNLUBIkhwrfz`. I is no longer a state. G is out, and f stays in a 2x2 design with z.
@@ -2584,7 +2584,7 @@ The tester went to the hub twice and started with two detached Joy-Cons, one in 
 
 ## Run 72: `0.0.78-log72` handheld, measurement by place
 
-One session for the author's update: the hub, then `Gungan_A` to `E`, a single player, no captures. FPS counts only frames with 150 or more draws (450 or more for 3-tile builds) and frame times under 1 s. The heavy part is 1300+ draws (3900+ before one tile).
+One session for the performance update: the hub, then `Gungan_A` to `E`, a single player, no captures. FPS counts only frames with 150 or more draws (450 or more for 3-tile builds) and frame times under 1 s. The heavy part is 1300+ draws (3900+ before one tile).
 
 | Place | Run 10 (oldest with level tags) | Run 72 handheld | Run 71 docked |
 | --- | --- | --- | --- |
@@ -3157,7 +3157,7 @@ Diagnostics only. Behaviour is log79's.
 
 ## Run 85 (log82, handheld, 2026-11-06): the title-idle movie freezes on a black screen
 
-**Report:** the tester left the title screen idle. The attract movie (`DEMOINTRO.WMV`, see ISSUES.md #3) started, the screen went black and the game froze. The author says this was a known freeze in his last build. Session: about 200 s, title screen and menu only, no level.
+**Report:** the tester left the title screen idle. The attract movie (`DEMOINTRO.WMV`, see ISSUES.md #3) started, the screen went black and the game froze. This freeze was already known in the 1 November baseline. Session: about 200 s, title screen and menu only, no level.
 
 **From the log:**
 - The last replay is 2277, about 49 s in. It is the movie's first frame: `[ONETILE]` 1280x720, two new shaders, one 1280x720 and two 640x360 single-channel textures (the decoder's Y/U/V planes). No swap or replay follows.
@@ -3165,7 +3165,7 @@ Diagnostics only. Behaviour is log79's.
 - `hwprof.txt`: the main thread waits on `KeWaitForSingleObject` (null timeout) in `sub_82828418` < `sub_823BD3E0` < `sub_82318280` for the rest of the session. `[LONGWAIT]` prints only when a wait ends, so it never printed.
 - The runtime already names this hang (kernel_stubs.cpp, `LSWTCS_IBINT`): XMedia retires its three video surfaces from a GPU interrupt inside the movie's draw IBs (callback `0x82815910`). If that interrupt is dropped, the queue fills and the main thread waits for ever in `sub_82828418` with the movie workers asleep.
 - **Cause in this build:** state I (`MAPXSHNLUBIkhwregdq`, with k) walks the ring on the walker thread, and `pm4_fire_interrupt` drops every interrupt met there (`if (t_async_walker) { ++g_aw_isr_dropped; return; }`), because that thread has no guest context. In-game walks carry no interrupts (run 42; `[ASYNCWALK]` "interrupts dropped 0" in every report of this run), so this never showed in play. With k, every kick of the movie goes to the walker, so each surface-retire interrupt was dropped after the first frame.
-- Not proven: `[ASYNCWALK]` prints only on replays, so no line shows the drops during the movie. The author's freeze (no state I in his build) may have another cause; ISSUES.md #3 also lists corrupt movie pixels and a hang at playback end.
+- Not proven: `[ASYNCWALK]` prints only on replays, so no line shows the drops during the movie. The baseline's freeze (no state I there) may have another cause; ISSUES.md #3 also lists corrupt movie pixels and a hang at playback end.
 
 ## Log 83: `0.0.89-log83`, GPU interrupts from the walker thread
 
@@ -3189,7 +3189,7 @@ Diagnostics only. Behaviour is log79's.
 - **log83 worked as meant.** `[AWISR]`: 27-54 interrupts per 5 s met by the walker, all served by a waiting guest thread (the XAudio thread, the main thread, the NuSound workers), none timed out, none dropped. The walker waited 2-10 ms on average, 41 ms at most.
 - **No hard freeze.** Frames kept coming until the session ended (`frames.log` to replay 2461), but at about 3 a second: from 45 s on, 12-18 frames per 5 s, 260-360 ms each. The movie's video thread (`82826FF8`) held the guest turn 70-83 % of the time and ran 256-309 ms of guest code per frame (`[GSPIKE]`). At that rate the one-minute movie would take about ten. The movie's sound played, with gaps (`[AUDIOQ]` up to 997 ms empty per 10 s).
 - **Why the picture is wrong:** XenonRecomp has no case for some VMX operations. It writes the assembly comment and no code, so the operation does nothing. The whole generated output has about 8,600 such empty operations in 954 functions: mostly `vslh`, `vsrah`, `vsubshs` and `vspltish`, plus conditional traps, which are harmless when empty.
-  - The author's `patch_tcs360_movie_vmx.py` filled the twelve WMV functions that were known.
+  - The baseline's `patch_tcs360_movie_vmx.py` filled the twelve WMV functions that were known.
   - Run 86's profile and the direct-call closure of the three movie thread entries reach 826 functions. 62 of them still have about 1,650 empty operations. They include:
     - `8288B6D0`: `vctuxs`, `vpkswus` and `vpkuhus`, a float to 8-bit conversion, likely the colour output;
     - the `82D9xxxx` and `82DAxxxx` family, likely motion compensation;
@@ -3207,12 +3207,12 @@ Diagnostics only. Behaviour is log79's.
 - Result: 5,153 operations in 164 functions, in 15 generated files. Conditional traps stay empty.
 - Each inserted line ends in `// fill`, and `--revert` removes them. After a revert, `tools/generated_output.py check target` passes again; this was checked. While the fill is applied, that check reports those 15 files as changed.
 - **Register order.** Vector registers hold their bytes reversed, so element-wise operations work lane by lane. Two-source packs take their sources in the opposite order, as the generator's own `vpkshus` does.
-- **Non-volatile registers.** A non-volatile register that only omitted operations used becomes a fresh local, as in the author's `v14` case.
+- **Non-volatile registers.** A non-volatile register that only omitted operations used becomes a fresh local, as in the baseline's `v14` case.
 - **Check on the PC:** `tests/fill_ops_check.py` builds the exact emitted lines with clang. It compares them with a reference written in PowerPC element order on 485 inputs (random values, edge values, and floats with NaN, denormals and out-of-range values), with the destination both separate and equal to a source, plus the compares' CR6 bits. Result: 60 cases, all equal.
 - **Not done:** speed.
   - The video thread's samples, by guest instruction: about 20 % in VMX arithmetic (`vaddshs`, `vsrah`, `vsubshs`, `vslh`, `vcmpgtsh`), about 13 % in byte loops (`lbz`/`stb` in `828C38C0`/`828C2F60`), and 6 % waiting. No single hot spot.
   - A tenfold gap is not something a fill or a micro-optimisation closes. It needs a native decoder or a much faster recompiled path.
-  - The backlog says "no decoder install authorized", so that is a decision for the author and the tester.
+  - The backlog says "no decoder install authorized", so it is not planned.
 - **Test:** handheld. Leave the title screen idle until the movie plays. Check whether the picture is now correct, even though slow, and whether the sound is clean. Then press a button and start a level. The movie will still be slow (about 3 frames a second, unless the garbage itself cost time).
 
 
@@ -3222,7 +3222,7 @@ Diagnostics only. Behaviour is log79's.
 
 **From the log:**
 - The fill changed the picture, from noise everywhere to recognisable shapes. Dark green is what Y = U = V = 0 gives, so much of each displayed frame is zero in all three planes. The history captures (`hist_2374`) show the luma mostly black with decoded pieces.
-- **Timing.** On the 360 an interrupt in the command stream fires after the GPU has executed the commands before it, so XMedia frees a video surface only after the draw that sampled it. Here, since log83, the interrupt runs when the walker reads it. The draw reads the surface later: the render thread decodes textures from guest memory at replay (`get_texture` / `texture_prepass`, `phys = g_base + 0x80000000`). In between, the decoder may already be clearing the surface (`dcbzl`) and decoding the next frame into it. This also fits the author's "moving corrupt pixels": without state I, the interrupt runs in VdSwap's walk, also before the replay.
+- **Timing.** On the 360 an interrupt in the command stream fires after the GPU has executed the commands before it, so XMedia frees a video surface only after the draw that sampled it. Here, since log83, the interrupt runs when the walker reads it. The draw reads the surface later: the render thread decodes textures from guest memory at replay (`get_texture` / `texture_prepass`, `phys = g_base + 0x80000000`). In between, the decoder may already be clearing the surface (`dcbzl`) and decoding the next frame into it. This also fits the reported "moving corrupt pixels": without state I, the interrupt runs in VdSwap's walk, also before the replay.
   - Not proven: remaining decode errors could also cause it. All other VMX operations the movie code uses were reviewed against PowerPC semantics with the reversed register layout, and look right: `vperm`, the merges, the unpacks, `vsldoi`, the splats, the unsigned compares, `lvlx`/`lvrx`/`stvlx`/`stvrx`/`stvewx`, and `dcbzl`.
 - **The skip.** The log ends mid-line at about 105 s, with no `[CRASH]`, `abort()`, `exit()` or throw line, and no `crash.log`. Each of those handlers prints and drains the log first, so the process was ended from outside them, or the system was. Run 86 ended the same way. The candidates:
   - a system fatal, for example `fatalThrow` in Mesa's EGL Switch driver when `nwindowDequeueBuffer`/`QueueBuffer` fail;

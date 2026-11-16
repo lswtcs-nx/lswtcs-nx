@@ -111,7 +111,7 @@ Any link to the guest PCR overwrite (issue 4) stays unproved.
 
 **Read the existing 003 and 009 `crash.log` excerpts.** The handler already writes
 `pc`, `lr`, `far` and `x0`–`x28` (`platform_switch.cpp:229-233`). Cost: no build, no
-run. Needed from the owner, with personal paths removed:
+run. Needed from a crash session, with personal paths removed:
 
 | Value | Expected under H1 | Points elsewhere if |
 | --- | --- | --- |

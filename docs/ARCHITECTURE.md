@@ -66,7 +66,7 @@ draw sequence for EDRAM tiles, then resolves those rows. The GL planner can exte
 the first tile and avoid equivalent later work. It must preserve differing draw
 inputs, scissors, clear ordering, resolve destinations and dependencies.012 fixes
 specific omissions in recorded identity; it does not establish complete resource
-equivalence or identify the owner's screenshots.
+equivalence or explain the reported screenshots.
 
 **Native BO ownership is separate from guest memory.** Mesa/Nouveau BOs have
 their own creation/ref/submission/free lifecycle. Internal pushbuffer references
@@ -75,7 +75,7 @@ refcount; it does not reconstruct a complete reference ledger.
 
 **Audio output and production are different deadlines.** Native output has its
 own48000Hz servicing thread. Guest callbacks/production also depend on the guest
-scheduler. The owner's apparent frame-locked jitter is an observation/hypothesis;
+scheduler. The reported frame-locked jitter is an observation/hypothesis;
 the production/admission/submit starvation boundary is not yet attributed.
 
 ## Shader preparation

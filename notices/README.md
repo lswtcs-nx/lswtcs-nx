@@ -2,9 +2,8 @@
 
 The port baseline is KingDariusStim/LSWTCS-360-to-Switch-Port at
 `92ec175285504455777ccd14d2d0dcf19642694d`, plus the local maintained changes
-represented by this snapshot. It was published under CC BY-NC-SA 4.0, kept at
-`../provenance/ORIGINAL_LICENSE-CC-BY-NC-SA-4.0.txt`; this repository is GPL-3.0 (`../LICENSE`, the original author's
-confirmation pending). The upstream README is retained under provenance.
+represented by this snapshot. Its existing CC BY-NC-SA4.0 license text is retained
+at `../LICENSE`; the upstream README is retained under provenance.
 
 Xenia, XenonRecomp, SPIRV-Cross, SIMDe, FFmpeg, xxHash, rpmalloc, RenderDoc headers
 and other included source components retain their own notices/licenses. Dependency

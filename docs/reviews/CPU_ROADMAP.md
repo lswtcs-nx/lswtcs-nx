@@ -42,7 +42,7 @@ Scenes differ between runs; compare within a session where possible (`LSWTCS_ABC
     priority. Y and D (VdSwap not waiting) did not change that.
   - T (tile copies) gave no walk gain. Q (longer quantum) did not lower the thread switches, which come from guest waits.
   - O (polygon offset) is not used by the faulty stud draws. The polygon offset code stays: it was never applied before log19.
-- **Thread placement, runs 23-25:** R and RG are 10-15 % faster in heavy scenes and cost about as much audio (run 25: today's 13.9 FPS / 96 % filled, R 15.9 / 57 %, RG 15.1 / 80 % at 4000+ draws). The default is unchanged; the trade-off is the owner's. Details below.
+- **Thread placement, runs 23-25:** R and RG are 10-15 % faster in heavy scenes and cost about as much audio (run 25: today's 13.9 FPS / 96 % filled, R 15.9 / 57 %, RG 15.1 / 80 % at 4000+ draws). The default is unchanged; it is a trade-off. Details below.
 - **Thread placement (log23-log24):** guest threads start with mask 7 and priority 0x3B, like the render thread. R (render 0x2C),
   G (guest 0x2E) and C (guest on core 0) are under test; G and C exclude the XAudio thread since log24, because in run 23 they
   emptied the audio buffers (60-65 % filled). `LSWTCS_PLACEGUARD=1` repairs and logs a guest thread left off its core; it fired
@@ -68,22 +68,22 @@ The command thread is 38 % of the turn and almost all native. So compiler work o
 1. **One tile at the source (`LSWTCS_ONETILE`, log33, not yet run).** The game draws its world three times per frame for EDRAM. The engine's layout function decides that, and has a plain path, so log33 makes the layout fit without changing MSAA or
    resolution (`docs/progress-log.md`, "0.0.39-log33"). Heaviest frames: walk about 33 ms, `repeat tiles` 9 ms measured, of a 72 ms frame. A guess of 9-22 ms saved, plus much of `plan` (13 ms on the render thread); no measurement behind it. Run 14's T could not reach this, since each tile's draw state differs.
 2. **The walk and recording themselves.** Native, not guest-thread-safety work, and often switchable in A/B. Recording on a second thread, as bo2-360-nx defers it, moves only native work.
-3. **Fourth core** (bo2-360-nx: +11.9 to +16 %, audio and XMA alone on core 3). Needs a forwarder installed: owner decision.
-4. **Game settings** (bo2-360-nx's main route: half the draws at its very low preset). Product decision of the author, never silent.
+3. **Fourth core** (bo2-360-nx: +11.9 to +16 %, audio and XMA alone on core 3). Needs a forwarder.
+4. **Game settings** (bo2-360-nx's main route: half the draws at its very low preset). A visible setting, never silent.
 5. **XAudio off the turn** (U): about 12 % of the turn at most. Run 33 tests it.
 6. **Compiler work:** late, as above. bo2-360-nx measured a full Direct3D-level renderer at about +2 % at best, so replacing PM4 with D3D hooks is not a route on its own.
 
-## Where this stands after run 34 (stock clocks only, the tester's decision)
+## Where this stands after run 34 (stock clocks only)
 
 **CPU.** One tile and U took the big steps. What is left is flat, and heavy frames are now also GPU-limited, so CPU gains show only in part of the level:
 - guest code: the top function is 3 % of the turn and the top 20 about 25 %, so native rewrites at bo2-360-nx's 1.4-2x would give perhaps 5-8 % for a lot of work;
 - record path and hashes: about 17-27 % of the turn, with no single large item. E, the cheap idea, was rejected;
 - LTO, direct calls and PGO: now reach about 60 % of the turn, so perhaps 5-10 % together, with a large build cost. Unmeasured;
-- fourth core: frees core 2, which Mesa's worker (40 % busy) shares with XMA and U. Needs a forwarder: owner decision.
+- fourth core: frees core 2, which Mesa's worker (40 % busy) shares with XMA and U. Needs a forwarder.
 
 **Mesa is not the CPU limit:** at 1300+ draws (run 34) the render thread is 27 % busy and Mesa's worker 40 %. So Deko's clear win elsewhere, CPU submission (USF4: render thread 18.6 to 2.8 ms), would not raise FPS here by itself. What could is GPU time, where USF4 went from 9.3 to 8.4 ms and TCS has no measurement. GPU `draws..present` in run 34: median 26.5 ms, 34.5 at the 75th percentile, 42-45 at the top.
 
-**Deko.** The harness's gate (`TCS360_DEKO_IMPLEMENTATION_PLAN.md`) asks for a dominant graphics cost after the easy fixes, a bounded benefit and cost, and a thin comparison on existing captures at equal semantics; then an explicit decision. The first part is starting to hold. The rest is not done. Next: list GPU cost by pass on Mesa, try the cheap Mesa items (resolves, then colour compression, `PORT_RESEARCH.md`), and take the same-frame comparison to the owner.
+**Deko.** The harness's gate (`TCS360_DEKO_IMPLEMENTATION_PLAN.md`) asks for a dominant graphics cost after the easy fixes, a bounded benefit and cost, and a thin comparison on existing captures at equal semantics; then an explicit go-ahead. The first part is starting to hold. The rest is not done. Next: list GPU cost by pass on Mesa, try the cheap Mesa items (resolves, then colour compression, `PORT_RESEARCH.md`), and make the same-frame comparison.
 
 ## Route 1: guest threads on several cores
 
@@ -204,7 +204,7 @@ What the main thread does at heavy load, by samples: guest code 56 %, and PM4 wa
 - Quads without a geometry shader, Deko for FPS (`docs/progress-log.md`, run 36).
 - Fourth core: Mesa's worker is not limiting.
 
-**Owner or tester decisions, the largest levers and not to be applied silently:**
+**The largest levers, never to be applied silently:**
 - Handheld GPU clock. 307 MHz is the default. Docked's gains show what more clock buys.
 - Fewer far draws (level of detail). One shader spends 7.5 ms on 1021 draws of about 50 samples each, and every draw also costs the main thread. Needs finding the engine's setting.
 - MSAA or resolution in the main pass.
@@ -307,16 +307,16 @@ The measurements below are from heavy frames (1300+ draws, the start of `Gungan_
 4. **Docked, generated code:** inlining or LTO on the hot units, compared over two sessions with `private/session-tools/run_pair.py`. Runs 58 and 59 in the same state differed by +0.1 % (90 %: -5.2 to +5.5).
 5. **Settle d** in a run where nothing else changes.
 
-### The author's decisions (the largest levers, not ours)
+### The largest levers
 
 - **Handheld render resolution.** Pixels are about 60 % of the handheld GPU frame.
 - **Clocks:** handheld GPU 307 MHz against 384 or 460, and docked CPU.
 - **The fourth core.** It needs a launch from a title whose NPDM allows core 3, and it would relieve the other threads, not the main one.
-- **A Deko3D backend.** That is the author's later priority. It would remove Mesa's CPU cost (render thread and Mesa worker, about 20 ms per docked frame on cores 1-2) and bring ZCULL natively. The study below finds no large gain from it on its own.
+- **A Deko3D backend.** It would remove Mesa's CPU cost (render thread and Mesa worker, about 20 ms per docked frame on cores 1-2) and bring ZCULL natively. The study below finds no large gain from it on its own.
 - **Making the measured states defaults:**
   - Older letters M A P X S H N L U B.
   - Newer letters I k h w r e g.
-  - **h needs the author's review:** it makes the game behave as on a console whose CPU-GPU link trained, as Xenia's stub reports.
+  - **h needs its own review:** it makes the game behave as on a console whose CPU-GPU link trained, as Xenia's stub reports.
 
 ## Deko3D study (3 November 2026)
 
@@ -343,7 +343,6 @@ The measurements below are from heavy frames (1300+ draws, the start of `Gungan_
 - **The prototype is unfinished.** `deko_backend.cpp` (835 lines, 18 headers) reads the same recorder, but cold launch passed 0 of 3, and EDRAM and resource ownership are not done.
 - **No shader compiler on the console.** `uam` is a host program (`tools/bin/uam.exe`), and the prototype stops at any shader it lacks. The game makes variants at run time, and e and g add more: 1017 programs saved now against 509 sources in run 35. Deko needs an offline catalogue that covers every variant, or `uam` built for the console.
 - **The GL-side work would be redone and remeasured:** resolves, fetch fold, epilogues, early depth rules and the walker hand-off.
-- **It is the author's priority and decision.**
 
 **ZCULL on Mesa is smaller than planned.** From deko3d's source (ZLIB; technique and register values only):
 - **The kernel binding is done.** libdrm_nouveau 1.0.1, the installed version, allocates a ZCULL context and binds it to Mesa's channel (`pushbuf.c`, `nvGpuChannelZcullBind`).
@@ -361,7 +360,7 @@ The measurements below are from heavy frames (1300+ draws, the start of `Gungan_
   - pooled render targets reuse addresses at other sizes;
   - GPU faults while the setup is wrong.
 
-**Recommendation:** no migration now. ZCULL on Mesa stays item 1, now without the kernel part. Reopen Deko if log61 shows a large per-draw part that Mesa cannot shed, or if the author chooses it for other reasons (hitches, memory). Even then, handheld gains stop at the CPU wall.
+**Recommendation:** no migration now. ZCULL on Mesa stays item 1, now without the kernel part. Reopen Deko if log61 shows a large per-draw part that Mesa cannot shed, or if other reasons (hitches, memory) make the case. Even then, handheld gains stop at the CPU wall.
 
 ## Update after run 63 (3 November 2026)
 
@@ -379,7 +378,7 @@ The measurements below are from heavy frames (1300+ draws, the start of `Gungan_
 | Resolve texture hand-over | at most about 2 ms handheld | Needs a coordinate scale and edge clamping per fetch. Complex. |
 | Full-screen passes | the costliest is about 3 ms | Gain unmeasured. |
 | CPU wall (docked, and handheld once the GPU drops) | inlining or LTO estimated at 5-10 %; PGO unmeasured | Compared across two sessions with `run_pair.py`. |
-| Author's levers | larger | Handheld resolution and GPU clock. |
+| Settings | larger | Handheld resolution and GPU clock. |
 
 **log64 (CPU wall, first step):** guest calls made inlinable (`LSW_GAME_INLINE`: units along hot calls, weak linkage only for the 80 runtime overrides, `-fno-semantic-interposition`). Code text 6 % smaller. Measured over two docked sessions (log63 against log64). If it pays, the next steps are larger units or LTO over the hot units, then PGO.
 
@@ -398,7 +397,7 @@ mk9-nx (Thorhax, Mortal Kombat Komplete Edition, ReXGlue recompilation on deko3d
 | Guest loads and stores without `volatile`, plus a compiler barrier at every loop header (GCC turns polling loops into infinite loops without it) | +15-20 % FPS in masseffect-nx | Route 2 item 3, not done. Fits a flat profile. Do it on a copy of the generated output; A/B pair, docked. |
 | Read-only image constants folded into the code; float loads straight into the vector unit | 58.8 -> 59.2 FPS | Small; could ride with the item above. |
 | First controller to press Start or A becomes player 1 | fixed a sign-in prompt from a second controller | Fallback for co-op order if log72's Joy-Con merge leaves cases. |
-| Switch button icons drawn over the Xbox icon atlas at texture upload (known atlas by hash, re-encode touched blocks) | all prompts right | Cosmetic; the tester's and the author's call. |
+| Switch button icons drawn over the Xbox icon atlas at texture upload (known atlas by hash, re-encode touched blocks) | all prompts right | Cosmetic. |
 
 **Already here or not useful:** registers as locals (`lswtcs_locals.toml`); `skip_msr`, their largest gain (11 -> 47 FPS), removed a global lock our `mtmsrd` never had (it only stores `ctx.msr`); native sound mixer (our guest audio thread is 2 % of the turn and the reverb is already native); physical allocation scan (ours is a bump allocator); critical section spin (one core under the turn); store cards instead of render-thread hashing (render thread is not the limit, and every guest store pays for them); drawing nothing while a pipeline compiles (they turned it off: coloured triangles; we wait, as they now do); LTO (run 64, no gain).
 
@@ -413,9 +412,9 @@ Runs 73-75 crashed from host memory, and the remaining stutters are texture uplo
 | Shader stutter | Compile time is Mesa's nv50 codegen | `uam` is the same codegen: similar per shader; no link or glthread costs |
 | FPS | Handheld GPU bound, docked guest CPU bound | At most about +20 % handheld (Deko3D study above) |
 
-**Cost:** the live renderer is about 6,700 lines of GL path with months of fixes (tiles, resolves, untiling, EDRAM, ZCULL). `deko_backend.cpp` is 835 lines from the 1 November baseline. A switch is a rewrite, and the author's call ("not now").
+**Cost:** the live renderer is about 6,700 lines of GL path with months of fixes (tiles, resolves, untiling, EDRAM, ZCULL). `deko_backend.cpp` is 835 lines from the 1 November baseline. A switch is a rewrite.
 
-**Recommendation:** fix the two causes found in the Mesa path first (log75), measure, and bring deko3d to the author only if memory or upload costs remain. The case for it would be memory (programs, the 512 MB copy) and upload cost, not FPS.
+**Recommendation:** fix the two causes found in the Mesa path first (log75), measure, and reopen deko3d only if memory or upload costs remain. The case for it would be memory (programs, the 512 MB copy) and upload cost, not FPS.
 
 ## Zoom out after run 79 (4 November 2026)
 
@@ -443,18 +442,18 @@ Runs 73-75 crashed from host memory, and the remaining stutters are texture uplo
 
 **Options, by expected value:**
 
-| Option | Expected | Cost and risk | Whose call |
+| Option | Expected | Cost and risk | Kind |
 | --- | --- | --- | --- |
-| Handheld GPU profile 384 or 460.8 MHz (official, not overclock) | Up to the docked FPS: `Gungan_B` about +17-28 %, hub more | A setting; battery and heat | Author (and tester: stock clocks) |
-| Texture decode off the render thread; pooled storage for small textures | Area-entry and cutscene stalls about halved again | Medium; decode is pure CPU | Ours |
-| Saved programs: queue the current level's first, read the list faster | Fewer first-minutes stalls (run 79's 0.5-0.7 s `bind` frames) | Small | Ours |
-| CPU wall (docked): native rewrites of the hottest guest functions, PGO | 5-10 % each, unmeasured | Medium-large; no single hot function (top one 4.7 %) | Ours |
+| Handheld GPU profile 384 or 460.8 MHz (official, not overclock) | Up to the docked FPS: `Gungan_B` about +17-28 %, hub more | A setting; battery and heat | Setting |
+| Texture decode off the render thread; pooled storage for small textures | Area-entry and cutscene stalls about halved again | Medium; decode is pure CPU | Code |
+| Saved programs: queue the current level's first, read the list faster | Fewer first-minutes stalls (run 79's 0.5-0.7 s `bind` frames) | Small | Code |
+| CPU wall (docked): native rewrites of the hottest guest functions, PGO | 5-10 % each, unmeasured | Medium-large; no single hot function (top one 4.7 %) | Code |
 | Guest memory without volatile (log77 B) | At most 2-5 % per guest call even with unsafe aliasing; a correct build would need `-fno-strict-aliasing` | Wrong behaviour seen (run 78) | Shelved |
-| Deko3D | Memory and upload costs; FPS 0-10 % handheld, capped by docked | Renderer rewrite | Author |
-| Guest threads on several cores (Route 1) | Docked CPU wall | Large; earlier attempts stalled on locks | Ours, later |
+| Deko3D | Memory and upload costs; FPS 0-10 % handheld, capped by docked | Renderer rewrite | Rewrite |
+| Guest threads on several cores (Route 1) | Docked CPU wall | Large; earlier attempts stalled on locks | Code, later |
 
 **Recommendation:**
-- Bring the handheld GPU profile to the author first: it is the only lever that moves handheld FPS by more than noise.
+- Measure the handheld GPU profile first: it is the only lever that moves handheld FPS by more than noise.
 - On our side, finish the stutter work (texture decode, small textures, saved-list order). The port is stable now, and stutters are what the tester notices most.
 
 ## torchlight-nx study (6 November 2026)
@@ -499,11 +498,11 @@ Runs 73-75 crashed from host memory, and the remaining stutters are texture uplo
 | `rlwinm` as shift or extract forms (25,576 rotate-and-mask sites here) | devkitA64 GCC already emits 1-2 instructions for most masks. A rewrite would save about one instruction at some sites; renut measured -0.59 % | Too small to measure |
 | Arguments in registers | renut measured a net loss (+2.8 % cost) once registers are locals | Not done |
 | Localized copies and hand-written natives (katamari: only past a console-profile gate, at least 2 % of the limiting thread, with a removable cost) | Our main-thread profile is flat; the top function is 4.7 % (run 72) | Fails the gate today |
-| PGO (renut: instrumented build, one session, then an optimised build; bo2-360-nx +9 %) | Never tried. Counts must come from the Switch build, so it needs one session on an instrumented NRO, which runs slower | **Candidate; the owner's call** (an extra hardware session) |
-| Four cores (renut: background threads on core 3 when the NPDM grants it) | `LSWTCS_CORE3=1` is set (bo2-360-nx route); whether a launch is granted core 3 is not rechecked in this study. A four-core NPDM needs a forwarder title | **The author's call** (an install) |
+| PGO (renut: instrumented build, one session, then an optimised build; bo2-360-nx +9 %) | Never tried. Counts must come from the Switch build, so it needs one session on an instrumented NRO, which runs slower | **Candidate** (an extra hardware session) |
+| Four cores (renut: background threads on core 3 when the NPDM grants it) | `LSWTCS_CORE3=1` is set (bo2-360-nx route); whether a launch is granted core 3 is not rechecked in this study. A four-core NPDM needs a forwarder title | **Candidate** (a forwarder) |
 | mkdd: present the picture without the final copy; count game frames; switchable changes; measure one change at a time | Our FPS counts guest swaps; every change has an A/B letter or an environment switch | Method already followed |
 
-**Correctness finding, no change made:** GameCode is compiled without `-ffp-contract=off`, so GCC (`-ffp-contract=fast` by default) may fuse a separate guest `fmul` and `fadd` into one FMA, which the 360 would round twice. renut found exactly this ("a correctness fix, not an enhancement"). Here the generator writes the fused `fmadd` family as `a * b + c` (9,019 sites), which is only fused because of that same default. So turning contraction off would make `fmadd` round twice. The right fix is `fma()` for the fused forms plus `-ffp-contract=off`. It changes game arithmetic, so it needs its own test and the author's review. Not related to any open issue so far.
+**Correctness finding, no change made:** GameCode is compiled without `-ffp-contract=off`, so GCC (`-ffp-contract=fast` by default) may fuse a separate guest `fmul` and `fadd` into one FMA, which the 360 would round twice. renut found exactly this ("a correctness fix, not an enhancement"). Here the generator writes the fused `fmadd` family as `a * b + c` (9,019 sites), which is only fused because of that same default. So turning contraction off would make `fmadd` round twice. The right fix is `fma()` for the fused forms plus `-ffp-contract=off`. It changes game arithmetic, so it needs its own test and review. Not related to any open issue so far.
 
 **renut's method rule taken: a do-nothing control in the A/B list.** Their 15 s pairs had about ±1.5 ms of noise and marked items slower that were not. Here every A/B claim is judged by its interval, but the method's own noise was never measured in-run.
 
@@ -523,7 +522,7 @@ Runs 73-75 crashed from host memory, and the remaining stutters are texture uplo
   - if B is faster docked, make the fast fold the default (and retire `LSWTCS_HEAPBYPASS=1`, which it cannot run with);
   - if `[TLBBENCH]` shows no 2 MB blocks, log89's layout can stay (it costs about 6 MB) but its premise is gone;
   - the hand track (katamari) then starts from a profile without these two costs.
-- **PGO** stays the owner's call (one extra session on an instrumented NRO). **Four cores** stay the author's (a forwarder install).
+- **PGO** needs one extra session on an instrumented NRO. **Four cores** need a forwarder.
 
 ## Update after run 93 (6 November 2026)
 
@@ -531,7 +530,7 @@ Runs 73-75 crashed from host memory, and the remaining stutters are texture uplo
 - **To make B the default in the source** (no output copy): apply `--fold-fast` to the main output (the tool refuses that today on purpose), and drop the heap bypass (`LSWTCS_HEAPBYPASS=1`), which B cannot run with. The bypass is already off in env.txt. This is the next small step.
 - **Left on the main thread, heavy frames:** flush-mode switches about 2.4 % of guest-code samples, float compares 1.0 %, the rest spread thin. The largest functions are under 5 %. Further CPU gains need either:
   - a flush-mode flow proof (renut's `flush_mode_flow`: drop switches the control flow proves unneeded; up to about 2 %);
-  - PGO (the owner's call);
+  - PGO (one extra session on an instrumented NRO);
   - katamari's hand track on functions whose samples show a removable cost. None stands out now.
 - **Done (same day):** the fast fold is the default. `tune_tcs360_context.py --fold-fast` is applied to the main output, so `build-mesa` builds what log91 B was. Every hardware profile already had `LSWTCS_HEAPBYPASS=0`. A build with the bypass on refuses to start.
 - **Not yet compared from renut-nx's codegen list,** checked so far only as "registers are locals":
@@ -555,7 +554,7 @@ Techniques only, no code taken. Checked against this port:
 
 | Item | Their result | Here | Verdict |
 | --- | --- | --- | --- |
-| Official handheld performance configuration `0x92220008` (GPU 460.8 MHz, memory 1331.2 MHz) via `apmSetPerformanceConfiguration`. Homebrew starts at 307.2 MHz; nfsmw-nx notes this is not an overclock. Pitfalls: the call returns before the clocks change; IDs are opaque (0x92220007 is memory 1600). | Their largest handheld GPU step (scene 22.3 to about 12 ms, with the sky moved) | Handheld is GPU-bound (about 38 ms GPU per heavy frame). At 1.5x the GPU clock, heavy frames would reach the CPU wall (docked figures: `Gungan_B` heavy about 30-31, hub 55) | **Largest item by far; the tester's and author's decision** (battery and heat) |
+| Official handheld performance configuration `0x92220008` (GPU 460.8 MHz, memory 1331.2 MHz) via `apmSetPerformanceConfiguration`. Homebrew starts at 307.2 MHz; nfsmw-nx notes this is not an overclock. Pitfalls: the call returns before the clocks change; IDs are opaque (0x92220007 is memory 1600). | Their largest handheld GPU step (scene 22.3 to about 12 ms, with the sky moved) | Handheld is GPU-bound (about 38 ms GPU per heavy frame). At 1.5x the GPU clock, heavy frames would reach the CPU wall (docked figures: `Gungan_B` heavy about 30-31, hub 55) | **Largest item by far** (battery and heat) |
 | PGO with one console session; counts streamed to a file every 2 minutes, on HOME and at exit; `-fprofile-correction`, `-fprofile-partial-training` | SA2 about +15 %; nfsmw-nx part of 30.3 to 34 FPS | `gcov-tool` is in devkitA64. The streaming code must be written here. Do it after the last codegen change | **Next CPU step;** costs one extra session on a slower NRO |
 | `-O3` on game code (sa2-nx) | not isolated | GameCode is `-O2` | Cheap to try with the next codegen batch |
 | FFmpeg's WMV3 decoder instead of the game's recompiled one, fed through the game's own data callbacks, planes written where the game expects them | 98 % of a core and 22 FPS, to 7-15 ms a frame; bit-identical in shadow mode | ISSUES #3: about 280 ms a frame here. `vc1dec.c` is in our FFmpeg tree but not compiled | **The concrete route for the movie,** if the tester reopens it |
@@ -631,8 +630,8 @@ So every change goes into one instrumented build, played widely, and the PGO bui
 
 **Outside this cycle:**
 - the movie through FFmpeg's WMV3 decoder (ISSUES #3; large, and only the title-idle demo);
-- four cores (an install, the author's call);
-- the `fp-contract` correctness fix (changes game arithmetic, the author's review);
+- four cores (needs a forwarder);
+- the `fp-contract` correctness fix (changes game arithmetic, needs its own review);
 - localized copies (the profile is flat: no function passes the gate with a removable cost);
 - Deko3D.
 
@@ -687,7 +686,7 @@ In the docked heavy frames:
 **Candidates, by what they move:**
 - **Handheld heavy FPS (GPU):**
   - the resolve hand-over, about +5-7 %; it needs a coordinate scale in translated fetches (render targets are 2048 rows tall);
-  - quality changes (internal resolution, effects) would give +15-25 %; that is the author's and the tester's call, not a default.
+  - quality changes (internal resolution, effects) would give +15-25 %; visible settings, not a default.
 - **Docked FPS (the frame chain):**
   - `VdSwap` handing the frame to the walker instead of waiting;
   - a cheaper render-thread replay;
@@ -700,5 +699,5 @@ In the docked heavy frames:
 **Open issues:**
 - **Binary block in `stdout.log`:** 1-2.5 KB of high-entropy bytes. It appears only in log98's two sessions, mid `Gungan_B`, right before the same `[OBJACT] class 1 obj 967CD550` burst. Its source is unknown.
 - **The title-screen movie (ISSUES #3):** the FFmpeg WMV3 route is described in "rc-guide material study". It is not started, and it only affects the idle demo and a trailer.
-- **The `-ffp-contract` correctness note** ("renut-nx, katamari-nx and mkdd-nx study"): it needs the author's review.
+- **The `-ffp-contract` correctness note** ("renut-nx, katamari-nx and mkdd-nx study"): it needs its own review.
 - **A possible end-of-level transition glitch (run 95):** one frame only, and the tester has not described it yet.

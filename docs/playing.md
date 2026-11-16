@@ -68,8 +68,8 @@ The port maps the Switch controller to the Xbox 360 pad.
 From the Homebrew Menu, a homebrew app gets three of the Switch's four CPU cores. A **forwarder** is a small title
 on the HOME menu that starts the NRO, and it can ask the system for all four.
 
-- **Recommended:** [sphaira](https://github.com/ITotalJustice/sphaira)'s *Install Forwarder* on `lswtcs.nro`, with
-  **CPU Cores: 4**. Leave the other options at their defaults.
+- **Recommended:** in [sphaira](https://github.com/ITotalJustice/sphaira), highlight the game, press **X**, choose
+  **Install Forwarder**, set **CPU Cores: 4** and **Address Space: 39-bit**, then **Create Forwarder**.
 - **One forwarder is enough.** Other forwarder tools also start the game, but without that option it runs on three
   cores.
 - The port adapts: on three cores it runs as before, and on four it moves background work to the fourth core.

@@ -50,5 +50,5 @@ attribute the screenshots or certify full resource equivalence.
 - These checks do not establish a new generator invocation or fresh full build.
   The recipient's own baseline check is a mandatory gate for that route.
 
-The owner's original Mesa012 ARM/static/link checks and source identity are
+The baseline's original Mesa012 ARM/static/link checks and source identity are
 summarized under `../evidence/`; no matching game executable is bundled.

@@ -18,7 +18,7 @@ an emulator or on hardware.
 | `validate_tcs360_switch.py` | Passed; NACP 0.0.12, strict link true |
 | `image.bin` | Captured from Xenia Canary `02d2cb5`; code hash matches; hardware use untested |
 
-The NRO has the owner's exact size, 115,026,117 bytes, but a different hash:
+The NRO has the baseline NRO's exact size, 115,026,117 bytes, but a different hash:
 
 - This NRO SHA256: `79c58c3fe06d2d5e7034bea073f15ab615d0b1f72d95a61855a7b3d05e1412ce`
 - This ELF SHA256: `0cd8229009204c51a54607454e1d8b719d04ebd60b56061732a3e79e8fd49a30`
@@ -51,7 +51,7 @@ MSYS2 Python 3.12.16, CMake 4.4.4 (Windows) and 4.4.5 (MSYS).
 ## Open question for `image.bin`
 
 The capture used the latest official Xenia Canary release, `02d2cb5` (March 2026), which
-differs from the source pin. The owner's Xenia build is not recorded. Its image sits at
+differs from the source pin. The baseline's Xenia build is not recorded. Its image sits at
 host address `0x282000000`, not the old fixed offset, so the capture script now searches
 for the image and accepts it only if the code hash matches. Import thunks come from this
 Xenia build and are not validated by that hash, so they are a suspect if early boot fails.

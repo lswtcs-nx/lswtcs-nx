@@ -39,6 +39,19 @@ The fixture mocks env/MSAA helpers and the uint32 Endian enum around the extract
 SystemConstants declaration. It does not execute shader code, a driver or GPU,
 attribute the screenshots or certify full resource equivalence.
 
+## Check the game image built from `default.xex`
+
+Needs your own `default.xex`, the reference `image.bin`, `pristine.bin` and `xex_header.bin`, and a host clang++
+(tiny-AES-c comes from the pinned XenonRecomp checkout):
+
+```sh
+python tests/xex_image_check.py --xex <default.xex> --data-dir <folder with the reference .bin files>
+```
+
+It builds the runtime's `lsw_xex_image.cpp` for the PC and checks that its image gives the guest the same memory at boot
+as `image.bin` with `LSWTCS_PRISTINE=1`. Expected: `PASS` and image SHA-256 `eaa95225…`, the value the Switch logs in
+`[XEX]` (run 113).
+
 ## Patch-chain validation already performed
 
 - The cumulative XenonRecomp and Xenia diffs were applied to exact local pinned

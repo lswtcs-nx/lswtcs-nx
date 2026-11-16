@@ -24,7 +24,8 @@ what it showed, and the build that followed.
 
    For anything larger than a fix, open an issue first, so two people do not change the same files.
 2. **Build:** [docs/BUILDING.md](docs/BUILDING.md). [docs/VALIDATION.md](docs/VALIDATION.md) has a small regression that
-   needs no game and no Switch toolchain.
+   needs no game and no Switch toolchain. Releases follow [docs/RELEASING.md](docs/RELEASING.md); what changes for
+   players goes in [CHANGELOG.md](CHANGELOG.md).
 3. **Keep a change to one thing**, and make it measurable:
    - Put a switch in `env.txt` (`LSWTCS_...`) when the change could be wrong on hardware.
    - Log what the change does with a tag (`[NAME] ...`), so a session shows whether it worked.

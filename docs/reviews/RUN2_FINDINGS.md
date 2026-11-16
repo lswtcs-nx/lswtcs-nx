@@ -3767,3 +3767,41 @@ Run 106 (`run106-log99c3`, 286 s) took run 105's route (Gungan) from the 4-core 
 - **Test:** the same route from the forwarder.
   - Expect audio silence back at run 105's level, no texture stall while the queue runs, and the queue still about 1.5x faster.
   - Recheck the ns per guest call.
+
+## Run 107: `0.0.99-log100c3`, handheld, fourth core with home priorities
+
+Run 107 (`run107-log100c3`, 221 s) took the Gungan route again from the 4-core forwarder.
+
+**Core 3 placement** (all rc 0; the meter never fired):
+
+| Thread | Priority |
+|---|---|
+| log writer | 0x2C |
+| XMA | 0x2B |
+| file writer | 0x3A |
+| `compile_1` | 0x3F |
+| `texdec_0` | 0x3E |
+
+**What worked:**
+- **Audio is fixed.** 2.6 s of silence in 203 s, against 8.7 s in run 106 and 3.3 s in run 105. XMA now gets up to 19 % of core 3.
+- **The queue is still fast.** 46 programs were left at replay 9000 (run 106: 42; run 105: 701), and the queue was empty by replay 9600.
+
+**New problem, texture pre-pass stalls:**
+- 10 stalls of 0.35-2.9 s, 10.0 s of them in `units`: run 106 had one (3.0 s) and run 105 none. They come at area entries, some with only 3-4 new textures.
+- `texdec_0` used 0.0 % of core 3 for the whole session (`hwprof` agrees: cpu 0.0).
+- The pre-pass ends by waiting until every helper that joined the batch has left it (`active == 0`). That wait is not in any timed part, so it lands in `units`.
+- A helper that joins and is then not run for seconds holds the render thread there without using CPU.
+- Why core 3 delays it at 0x3E is not known: compile_1 at 0x3F still got 26 % of the core. On core 0 (run 105) it never did this.
+
+**Main thread:** 131 ns per guest call (90 % 129-134), with run 106 at 130 and run 105 at 125. Main-thread cost is up about 4 % in both core-3 runs. The likely cause is the second compiler's memory traffic, which runs during the first ~4 minutes; this is not proven.
+
+**FPS:** within noise. `Gungan_B` 38.1 (run 105: 35.6), at lower median draws (1589 against 1718).
+
+## Log 101: `0.0.99-log101c3`
+
+- `texdec_0` is back on core 0 at 0x3B, as in run 105. Core 3 keeps `compile_1` and the steady threads.
+- New render part `decwait`: the pre-pass's end wait for the decode helpers, reported in `[GLSTALL]` and `[GLPROF]`.
+- **Test:** the same route from the forwarder.
+  - Expect no `units` stalls, audio as in run 107 and the queue still fast.
+  - `decwait` should stay near 0.
+  - Check whether ns per guest call stays near 130.

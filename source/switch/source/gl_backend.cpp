@@ -1527,12 +1527,13 @@ GLuint program_early(const LswGlShader* vs, const LswGlShader* ps, const LswGlSh
 // take = gpu_frame_take, plan = plan_dead_work + plan_untile, units = collect_units outside its texture stages,
 // loop = the draw loop's own work (record walk, untiling copies, residency uploads that are not shm copies),
 // tail = after the loop (present source, last-good copy, [GLDRAW] diagnostics, frame log), fence = arena_fence.
+// decwait (log101) = the texture pre-pass waiting, after its last upload, for decode helpers that joined the batch to leave it.
 enum { RP_UPLOAD, RP_SHM, RP_FWAIT, RP_PROGRAM, RP_TEXSRC, RP_TEXKEY, RP_DECODE, RP_TEXUP, RP_SAMPLER, RP_RT, RP_BIND, RP_STATE,
        RP_DRAW, RP_RESOLVE, RP_TAKE, RP_PLAN, RP_UNITS, RP_LOOP, RP_TAIL, RP_FENCE,
-       RP_PRESENT, RP_SWAP, RP_EVICT, RP_GPUWAIT, RP_PIPE, RP_COUNT };
+       RP_PRESENT, RP_SWAP, RP_EVICT, RP_GPUWAIT, RP_PIPE, RP_DECWAIT, RP_COUNT };
 const char* const kRpName[RP_COUNT] = {"upload", "shm", "fwait", "program", "texsrc", "texkey", "decode", "texup", "sampler", "rt",
                                        "bind", "state", "draw", "resolve", "take", "plan", "units", "loop", "tail", "fence",
-                                       "present", "swap", "evict", "gpuwait", "pipewait"};
+                                       "present", "swap", "evict", "gpuwait", "pipewait", "decwait"};
 uint64_t g_rp[RP_COUNT];
 uint64_t g_rp_scoped;   // time inside open stages, inclusive (render thread; racy only with LSWTCS_GLPIPE)
 
@@ -3576,11 +3577,11 @@ void decode_drain(const uint8_t* phys) {
 }
 void decode_helper(int core, int prio) {
     lsw_prof_register(core == 2 ? "texdec_2" : "texdec_0", -1);
-    // log99: the helper meant for core 0 (with the guest, lowest priority) goes to the fourth core when there is one.
-    if (!(core == 0 && lsw_core3_begin_bursty("texdec_0", 0x3E))) {   // above compile_1: the render thread waits for it
-        pin_to_core(core, "texture decode helper");
-        svcSetThreadPriority(CUR_THREAD_HANDLE, prio);
-    }
+    // log99-100 moved the core-0 helper to the fourth core. Runs 106-107: it used 0.0 % of core 3, yet texture pre-passes
+    // stalled 0.3-2.9 s in `units` (10 in run 107, none in run 105 with the helper on core 0): the pass waits at its end for
+    // every helper that joined the batch, and on core 3 the helper was apparently not run for seconds. Back on core 0 (log101).
+    pin_to_core(core, "texture decode helper");
+    svcSetThreadPriority(CUR_THREAD_HANDLE, prio);
     uint64_t seen = 0;
     for (;;) {
         {
@@ -3648,6 +3649,7 @@ void decode_and_upload(std::vector<DecodeJob>& jobs, Upload&& upload) {
         upload(jobs[i]);
     }
     {
+        RpScope rp(RP_DECWAIT);
         std::unique_lock<std::mutex> lk(g_dpool.m);
         g_dpool.open = false;
         g_dpool.done_cv.wait(lk, [&] { return g_dpool.active == 0; });

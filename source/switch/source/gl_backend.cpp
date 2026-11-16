@@ -893,12 +893,32 @@ void compile_worker_main(int index) {
     }
     static const bool helper_only = [] { const char* e = getenv("LSWTCS_GLWORKER1"); return !(e && !strcmp(e, "always")); }();
     for (;;) {
-        // On core 3 worker 1 shares the queue with worker 0; sent home by the meter, it is the frame-wait helper again.
-        const bool helper = index == 1 && helper_only && !(on_core3 && lsw_core3_active());
+        // On core 3 worker 1 builds saved programs nobody has asked for yet; sent home by the meter, it is the frame-wait helper
+        // again. log102: run 108's title screen waited 2.4 s for 5 programs while worker 1 had taken some of them and used 0.1 % of
+        // core 3 in those 10 s; run 107's texture stalls were the same kind of wait on core 3 (texdec_0). Low priorities on core 3
+        // can go unrun for seconds (likely the system's file service there during SD-heavy loads; not proven), so nothing the
+        // frame waits for runs there. It also starts before the saved-program reader is done: the reader is on core 2.
+        const bool core3_bg = index == 1 && on_core3 && lsw_core3_active();
+        const bool helper = index == 1 && helper_only && !core3_bg;
         std::pair<uint64_t, ProgSources> job;
         {
             std::unique_lock<std::mutex> lk(g_prog_mtx);
-            if (helper) {   // own condition variable: a notify_one for a new job always reaches worker 0
+            if (core3_bg) {   // own condition variable, as the helper: a notify_one for a requested job must reach worker 0
+                bool picked = false;
+                while (!picked) {
+                    // From the back: the front holds what the game asks for next (last session's order, the level's programs
+                    // moved ahead), and a program in build here when the game asks for it would make the frame wait on core 3.
+                    for (auto q = g_prog_queue.rbegin(); q != g_prog_queue.rend(); ++q) {
+                        auto e = g_prog_entries.find(q->first);
+                        if (e == g_prog_entries.end() || e->second.requested || e->second.state != kProgQueued) continue;
+                        job = std::move(*q);
+                        g_prog_queue.erase(std::next(q).base());
+                        picked = true;
+                        break;
+                    }
+                    if (!picked) g_prog_cv1.wait_for(lk, std::chrono::milliseconds(50));
+                }
+            } else if (helper) {   // own condition variable: a notify_one for a new job always reaches worker 0
                 while (g_prog_queue.empty() || !g_prog_frame_wait.load(std::memory_order_relaxed))
                     g_prog_cv1.wait_for(lk, std::chrono::milliseconds(50));
             } else {
@@ -911,8 +931,10 @@ void compile_worker_main(int index) {
                     return it == g_prog_entries.end() || it->second.requested || it->second.state != kProgQueued;
                 });
             }
-            job = std::move(g_prog_queue.front());
-            g_prog_queue.pop_front();
+            if (!core3_bg) {
+                job = std::move(g_prog_queue.front());
+                g_prog_queue.pop_front();
+            }
             auto it = g_prog_entries.find(job.first);
             if (it != g_prog_entries.end() && it->second.state != kProgQueued) continue;   // duplicate
             if (it != g_prog_entries.end() && !it->second.requested) {

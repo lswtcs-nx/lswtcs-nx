@@ -3805,3 +3805,41 @@ Run 107 (`run107-log100c3`, 221 s) took the Gungan route again from the 4-core f
   - Expect no `units` stalls, audio as in run 107 and the queue still fast.
   - `decwait` should stay near 0.
   - Check whether ns per guest call stays near 130.
+
+## Run 108: `0.0.99-log101c3`, handheld, `texdec_0` back on core 0
+
+Run 108 (`run108-log101c3`, 214 s) took the same Gungan route from the 4-core forwarder. Core 3 held the log writer (0x2C), XMA (0x2B), the file writer (0x3A) and `compile_1` (0x3F). `texdec_0` was on core 0.
+
+**Texture stalls: gone.**
+- `units` time in stalls of 250 ms or more: 32 ms, against 10.0 s in run 107.
+- `decwait` was 0.00 ms in all 152 reports.
+- So run 107's stalls came from `texdec_0` on core 3.
+
+**Audio:** 2.8 s of silence in 193 s (run 107: 2.6 in 203; run 105: 3.3 in 245).
+
+**Queue:** 115 programs left at replay 9000 (run 107: 46; run 105: 701).
+
+**One 2.4 s program stall** at the title screen (replay 574, 17.6 s):
+- 1484 programs were queued and the render thread waited for 5. Only 160 ms of that was GL-thread waits.
+- `compile_1` used 0.1 % of core 3 in that window. It had taken requested programs and was barely run.
+- Earlier runs' first program stalls were 0.3-1.3 s.
+
+**Main thread:** 129 ns per guest call (90 % 129-130). That makes three core-3 runs at 129-131, against 125 in run 105, so about +3 %.
+
+**FPS:** `Gungan_B` 38.4, within noise.
+
+**Reading:**
+- Low-priority threads on core 3 can go unrun for seconds, at the boot and at area entries.
+- A likely cause is the system's file service on core 3 during SD-heavy loads. This is not proven.
+- Work that a frame waits for does not belong there.
+
+## Log 102: `0.0.99-log102c3`
+
+- On core 3, `compile_1` takes only saved programs that nobody has asked for yet.
+- It takes them from the back of the queue: the front is the last session's order and the level's programs, which the game asks for next.
+- It starts during the saved-program reader. The reader is on core 2, so they do not compete.
+- Programs the game asks for go to worker 0 and the render thread, as without core 3.
+- If the meter sends it home, it is the frame-wait helper again.
+- **Test:** the same route.
+  - Expect no program stall above ~1 s at the title screen and the queue still fast.
+  - Expect no `units` stalls and audio as in run 108.

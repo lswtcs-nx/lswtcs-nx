@@ -9,7 +9,6 @@ and bring logs back.
 sdmc:/
   switch/lswtcs/lswtcs.nro     the app you build
   lswtcs/
-    env.txt                    the settings profile (below)
     default.xex                from your own disc of the game
     game.DAT  game1.DAT        from your own disc of the game
     Movies/   audio/           from your own disc of the game
@@ -31,11 +30,13 @@ These files come from your game. Do not share them, except the logs (see "Testin
 
 ## Two profiles: playing or testing
 
-`env.txt` chooses how the game runs. Copy one of these files to `sdmc:/lswtcs/env.txt`:
+The settings for play are built into the app. Without `sdmc:/lswtcs/env.txt` the game uses them, and the log says
+`built-in player settings`. An `env.txt` on the card replaces them whole, so copy a profile there only to test or
+to change a setting:
 
 | Profile | For | What it does |
 | --- | --- | --- |
-| [`profiles/player.env`](../profiles/player.env) | Playing | The tuned settings, diagnostics off. The game writes only a short `stdout.log`. |
+| [`profiles/player.env`](../profiles/player.env) | Playing | The built-in settings: tuned, diagnostics off. The game writes only a short `stdout.log`. No file needed. |
 | [`profiles/hardware-ab.env`](../profiles/hardware-ab.env) | Testing and bringing logs | The same settings plus the diagnostics: frame log, sampling profiler, GPU timings, render reports, capture combos. It runs slightly slower and writes about 120 MB of logs per hour. |
 
 Both use the same fixes, the same shader and texture handling and the fourth core when it is available. Results

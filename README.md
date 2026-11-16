@@ -42,11 +42,13 @@ There is no ready-made download yet. With `lswtcs.nro` from [Building](#building
 1. **Copy the app** to `sdmc:/switch/lswtcs/lswtcs.nro`.
 2. **Copy from your own disc** to `sdmc:/lswtcs/`: `default.xex`, `game.DAT`, `game1.DAT`, `Movies/` and `audio/`.
    The game checks them at start and names any file that is missing or from another version.
-3. **Copy the settings profile** [`profiles/player.env`](profiles/player.env) to `sdmc:/lswtcs/env.txt`.
-4. **Make a forwarder** in sphaira, so the game gets all four CPU cores (from the Homebrew Menu it gets three):
+3. **Make a forwarder** in sphaira, so the game gets all four CPU cores (from the Homebrew Menu it gets three):
    highlight *LEGO Star Wars: The Complete Saga*, press **X**, choose **Install Forwarder**, set **CPU Cores** to
    **4** and **Address Space** to **39-bit**, then choose **Create Forwarder**.
-5. **Start the game** from its new icon on the HOME menu.
+4. **Start the game** from its new icon on the HOME menu.
+
+The settings for play are built in, so no settings file is needed. Testers add one to get logs
+([docs/playing.md](docs/playing.md), "Testing").
 
 The finished SD card:
 
@@ -54,7 +56,6 @@ The finished SD card:
 sdmc:/
   switch/lswtcs/lswtcs.nro
   lswtcs/
-    env.txt
     default.xex  game.DAT  game1.DAT  Movies/  audio/
 ```
 

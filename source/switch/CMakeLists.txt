@@ -363,7 +363,7 @@ else()
         if(LSW_PGO STREQUAL "generate")
             set(LSW_NACP_VERSION "0.0.99-log97nvg")   # log97: the instrumented NRO of log96's code (wide counts)
         elseif(LSW_PGO STREQUAL "use")
-            set(LSW_NACP_VERSION "0.0.99-log107")   # log107: the image from default.xex, built-in player settings, file checks
+            set(LSW_NACP_VERSION "0.0.99-log108")   # log107: the image from default.xex, built-in player settings, file checks; log108: log text
         endif()
     else()
         set(LSW_NACP_VERSION "0.0.99-log93")

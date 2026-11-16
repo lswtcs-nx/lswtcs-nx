@@ -4116,3 +4116,22 @@ window); none is expected, since the guest's memory at boot is the same.
 
 **Documentation:** the README, `docs/playing.md` and `docs/BUILDING.md` now list the disc's files (`default.xex`,
 `game.DAT`, `game1.DAT`, `Movies/`, `audio/`) in place of `image.bin`, `pristine.bin` and `xex_header.bin`.
+
+## Run 114: `0.0.99-log107`, handheld, no `env.txt`
+
+Run 114 (`run114-log107-noenv`, about 140 s) booted log107 with no `env.txt` on the card, from the 4-core forwarder.
+
+- `[NX] no sdmc:/lswtcs/env.txt: 32 built-in player settings (profiles/player.env)`. The 32 `[NX] env` lines are
+  `profiles/player.env`'s settings, in order.
+- They took effect: `[ABCYCLE] state MAPXSHNLUBIkhwregdq`, the handheld GPU at 460.8 MHz (`apm_config=0x92220008`),
+  the fourth core in use (`[CORE3]`), no frame log or profiler (diagnostics off, as in the player profile).
+- The image again came from `default.xex` with the PC check's hash. Five save commits, no crash, all 1501 saved
+  programs built.
+
+So a player needs no settings file. The README and `docs/playing.md` no longer ask for one; testers still copy
+`profiles/hardware-ab.env` as `env.txt`.
+
+## Log 108: `0.0.99-log108`
+
+- `[INIT] Loaded ...` names the image's source (`the image from default.xex` or `image.bin`).
+- `profiles/player.env`'s header says it is built in; the built-in text changes with it, the settings do not.

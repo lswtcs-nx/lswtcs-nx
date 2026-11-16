@@ -1,6 +1,6 @@
 # BO ownership review: null `device` at final deletion
 
-Answers [FIRST_TASK.md](../FIRST_TASK.md) against the 1 November 2026 handoff.
+Asks how the buffer passed to Nouveau's final deletion can have a null `device`, against the 1 November 2026 handoff.
 W0–W5 position: W1, native BO fault. This review is **source reading only**: nothing
 was compiled, helper-tested, emulator-run or hardware-run. Mesa 20.1 and libdrm's
 `bufctx.c` are not in the handoff; they were read later at their recorded pins.

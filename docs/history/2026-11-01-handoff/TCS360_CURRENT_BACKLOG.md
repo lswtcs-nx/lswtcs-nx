@@ -1,7 +1,7 @@
 # TCS product requirements register —26 October 2026
 
 Execution comes from the [canonical harness](TCS360_DEKO_IMPLEMENTATION_PLAN.md)
-and [current handoff](NEXT_SESSION.md), not historical order numbers below.
+not historical order numbers below.
 Mesa remains primary; Deko source/artifacts and unfinished gates stay inactive.
 
 Current primary W1 gate:012 recorded draw-identity physical visual/cost acceptance.
@@ -19,7 +19,7 @@ no screenshot/FPS fix claim. Exact011 retained. Whole repair effort unknown.
 | 2 | Repair title-idle DEMOINTRO.WMV playback. Local candidates fill four CR and 1,426 VMX operations plus ring/wait/callback fixes. Further progression exposed overwritten main-thread PCR memory and overlapping virtual/physical allocator ranges. Picture is still corrupt. | Establish/fix the corruption writer/ownership, correct movie picture/audio/end/input and repeat cycles. No skip. Chapter cutscenes already worked for the owner. |
 | 3 | Correct save-slot date showing 1/1/1970. Trace displayed metadata/payload and guest time conversion; root cause remains unconfirmed. | Newly written saves show correct dates across restart; existing saves remain readable. Discuss handling of old invalid dates if needed. |
 | 4 | Deko is preserved and inactive under the23October Mesa-first decision. Prior captures, source and unfinished gates remain evidence. | Reopen only for a demonstrated Mesa/frontend limitation and a bounded reuse/adoption case; no automatic Deko continuation or new hardware probe. |
-| 5 | Context-sensitive Switch controls, Nintendo ABXY glyphs and platform wording. Physical A confirms and B returns in menus while B jumps and A performs special actions in gameplay. Owner requests visible Xbox/Xbox 360 mentions changed to Nintendo Switch later, including save warnings. | Audit menus, dialogs, tutorials and supported language variants; validate layout and semantic inputs without a global button swap. Internal XAM/API identifiers are not visible-copy replacements. |
+| 5 | Context-sensitive Switch controls, Nintendo ABXY glyphs and platform wording. Physical A confirms and B returns in menus while B jumps and A performs special actions in gameplay. Visible Xbox/Xbox 360 mentions are to change to Nintendo Switch later, including save warnings. | Audit menus, dialogs, tutorials and supported language variants; validate layout and semantic inputs without a global button swap. Internal XAM/API identifiers are not visible-copy replacements. |
 | 6 | Two-player local co-op using Pro Controller plus paired Joy-Cons first; separate input/player identity, join/drop-out, reconnect and shared progress. Sideways Joy-Cons follow later. | Two independent players complete a chapter and save/reload shared progress; disconnect/reconnect behaves predictably. Review player-assignment UI with owner. Online multiplayer is out of scope. |
 | 7 | Brightness and audio. Verify actual gamma behavior and offer a concrete correction; verify stereo output, docked HDMI 5.1 feasibility and routing. Handheld virtual surround is a separate design choice. | Audible channel-routing checks and visible brightness response; owner approves supported modes/UI before behavior changes. Do not claim existing surround menu is functional. |
 | 8 | HOME Menu launcher/package, reusing the fixed TCS application/save identity rather than donor-title ownership. | Full-memory launch from HOME, correct user handling and same existing saves; install/uninstall behavior documented. Packaging and installation details require owner review. |

@@ -1,7 +1,7 @@
 # Current status and acceptance
 
 Snapshot prepared1November2026. The latest documented implementation is Mesa012
-from26October; no012 hardware result has been supplied in this conversation.
+from26October; no012 hardware result exists yet.
 
 ## Whole-project position
 
@@ -23,11 +23,11 @@ This80% is not a port-completion estimate.
 
 | Version | Change/result |
 | --- | --- |
-| Mesa004 | Owner reached title/gameplay; native saves and separate users worked. Preserved fallback, not full-game acceptance. |
+| Mesa004 | Hardware reached title/gameplay; native saves and separate users worked. Preserved fallback, not full-game acceptance. |
 | 005 | Existing timing/logging streamlined. A/B sessions did not isolate logging overhead quantitatively. |
-| 006 | Texture image identity separated from sampler state to reduce duplicate preparation/uploads. Owner reported smoother gameplay/repeat visits. Combat drops, audio jitter and visual errors remained; no controlled numeric speedup. |
-| 007 | Audio queue readiness/waiting corrected. Owner reported no noticeable audible/FPS improvement. |
-| 008 | Removed an invalid page-age shortcut across explicit vertex/index epochs. Local counterexample fixed; owner's visual glitches/performance did not noticeably improve. |
+| 006 | Texture image identity separated from sampler state to reduce duplicate preparation/uploads. The tester reported smoother gameplay/repeat visits. Combat drops, audio jitter and visual errors remained; no controlled numeric speedup. |
+| 007 | Audio queue readiness/waiting corrected. The tester reported no noticeable audible/FPS improvement. |
+| 008 | Removed an invalid page-age shortcut across explicit vertex/index epochs. Local counterexample fixed; the reported visual glitches/performance did not noticeably improve. |
 | 009 | One-run input-reuse diagnostic. Crashed in native Nouveau BO deletion/unmap with a null device field. Exact symbols localized the failure; first invalidator unknown. No mismatched input capture was obtained. |
 | 010 | Bounded native BO lifecycle observer. Armed on hardware without a reported crash, but report persistence was incomplete. |
 | 011 | Initial report plus periodic coverage persistence. Hardware logged16 running samples and1,728,889 events at last checkpoint, no recognized violation. Diagnostic delivery passed; crash cause did not reproduce. |
@@ -35,11 +35,11 @@ This80% is not a port-completion estimate.
 
 ## Hardware context and evidence limits
 
-- Owner tests default to **handheld, stock clocks**. Exact silicon/model is not
+- Hardware tests default to **handheld, stock clocks**. Exact silicon/model is not
   independently established here; do not assume another port's raised-clock FPS.
 - The usual route is cantina → EpisodeI Chapter1 → combat/camera/movement → return,
   sometimes revisited. Exact battle timestamps are not consistently annotated.
-- Assume no crash when the owner reports none/supplies no crash log. Do not keep
+- Assume no crash when the tester reports none/supplies no crash log. Do not keep
   asking for that confirmation. Unreported clean-exit/reload acceptance is separate.
 -011 has10 successful save commits, empty stderr and roughly6½minutes of frame
   records. No final runtime/main return is logged. That is not proof of an exit
@@ -47,7 +47,7 @@ This80% is not a port-completion estimate.
 -012 has not executed the game on this host, an emulator or hardware. Local
   regressions mock environment/MSAA helpers and do not execute GPU shaders.
 
-The compact supplied evidence is in `../evidence/`. Full owner logs, personal
+The compact supplied evidence is in `../evidence/`. Full hardware logs, personal
 save identity, game captures and matching executable/symbol binaries stay local.
 Ask for a targeted additional excerpt when a concrete question requires it.
 
@@ -62,4 +62,4 @@ Ask for a targeted additional excerpt when a concrete question requires it.
 - Existing633 Mesa and633 inactive-Deko GameCode objects/PCH and Deko cache were
   preserved during the one-job incremental build.
 
-Hashes identify owner artifacts; those binaries are not contained in this folder.
+Hashes identify the tested artifacts; those binaries are not contained in this folder.

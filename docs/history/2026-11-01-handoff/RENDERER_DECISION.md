@@ -1,8 +1,7 @@
-# Mesa/Deko decision and collaboration scope
+# Mesa or Deko
 
-The screenshot conversation is useful context, but the current execution harness
-and present owner instructions govern the project. The main route is improving
-the working Mesa renderer while keeping the incomplete Deko work available.
+The main route is improving the working Mesa renderer while keeping the
+incomplete Deko work available.
 
 ## Avoid two unsupported conclusions
 
@@ -28,9 +27,9 @@ errors, input snapshots, alias semantics or ownership races.
   cache and wait patterns. Many use different frontends, Renut/Deko, NVK/Vulkan,
   platforms, quality settings or clocks. They are not a TCS API A/B benchmark.
 
-## If Gabriel wants to review Deko
+## Reviewing Deko
 
-That can be a **bounded independent review**, agreed with the owner first:
+A Deko review should be **bounded and independent**, agreed before it starts:
 identify one unfinished attachment/resolve/producer/lifetime contract in the
 existing PM4/shared model, compare an applicable reference, provide a minimal
 falsifier and describe reuse/cost. Keep Mesa fallback and existing semantics.

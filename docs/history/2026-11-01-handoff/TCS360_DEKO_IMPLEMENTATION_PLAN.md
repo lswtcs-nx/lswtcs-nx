@@ -1,12 +1,12 @@
 # TCS360 execution harness — Mesa first
 
-**Revision 2 — 23 October 2026.** the project owner requested a Mesa-or-Deko decision and a
-full execution harness. Mesa/OpenGL is now the main implementation path. This
+**Revision 2 — 23 October 2026.** a Mesa-or-Deko decision and a
+full execution harness were requested. Mesa/OpenGL is now the main implementation path. This
 revision supersedes the Deko-first work queue. The filename stays unchanged so
 existing AGENTS/handoff links continue to identify one canonical harness.
 
 This file is a complete replacement prepared for the project docs directory.
-If project writes remain unavailable, the conversation's Mesa-first direction
+If project writes remain unavailable, the Mesa-first direction
 still governs this session; do not pretend the old on-disk handoff was updated.
 The preserved previous harness/handoff are historical evidence, not another queue.
 
@@ -53,7 +53,7 @@ any30FPS cap or other real product tradeoff separately with measurements.
 
 | Item | Evidence / limit |
 | --- | --- |
-| Tested Mesa004 | the project owner confirmed title/gameplay, native saves and separate users. NRO114763973bytes, SHA256 `8aaaf05a5a7b9dcaa55b38e51f0a5159f4693aa2d611e5364388466e7836a95f`. Hash rechecked23October. Not full-game or performance acceptance. |
+| Tested Mesa004 | Hardware testing confirmed title/gameplay, native saves and separate users. NRO114763973bytes, SHA256 `8aaaf05a5a7b9dcaa55b38e51f0a5159f4693aa2d611e5364388466e7836a95f`. Hash rechecked23October. Not full-game or performance acceptance. |
 | Matching004 symbols | ELF SHA256 `3fde7343e20573ec691c16337c6e8200166a81b0ba3d5f53096cd850391db1aa`; map `4cf9d978d15ee499e2d3272a34e51e572d8541356cb36e7a57c7468ea42c7a58`. Rechecked; exact files under scratch `logs/hardware-004/`. |
 | Working checkout | Same `codex/tcs360-build-compat` branch, upstream base92ec175285504455777ccd14d2d0dcf19642694d, substantial local changes. Current source is not the tested004 source merely because both build. |
 | Current build tree | `switch/build-repro-make` has `LSW_DEKO_BACKEND=ON`. Preserve its633 GameCode objects/PCH. Audit an existing compatible Mesa recipe/output before changing configuration; never casually reconfigure this tree and force regeneration. |
@@ -68,7 +68,7 @@ any30FPS cap or other real product tradeoff separately with measurements.
 
 Tested artifacts remain unchanged. Native-save confirmation is later evidence
 than the package's original static-only build-info; preserve both provenance
-and the owner's subsequent confirmation without rewriting history.
+and the later hardware confirmation without rewriting history.
 
 ## 3. Work packages W0–W5 and acceptance
 
@@ -76,7 +76,7 @@ These are **revision2 Mesa-first scopes**. Earlier Deko W0/W1 results remain in
 the archived revision1 plan and do not count as new Mesa gates. H1 still means
 title/menu, and H2 gameplay/saves; neither means full-game completion. Work on one
 primary integrated package. Interleave a bounded independent repair only when
-it unblocks that package or prevents wasted owner testing.
+it unblocks that package or prevents wasted hardware testing.
 
 ### W0 — restore a reproducible Mesa baseline and classify cost
 
@@ -86,7 +86,7 @@ Checklist (not an estimate of remaining effort):
    hashes above rechecked. Never overwrite the only known-working package.
 2. Audit inherited code/config/build differences, driver/cache paths, content
    inventory and available telemetry. **Initial audit done**: concrete hazards
-   above;26October owner reports handheld at stock clocks for both005 runs.
+   above;26October the tester reports handheld at stock clocks for both005 runs.
 3. Establish an exact reproducible Mesa candidate recipe from approved sources
    plus explicitly selected shared fixes. Reuse compatible objects/PCH; dry-run
    the build first. If a separate backend build directory is necessary, document
@@ -98,7 +98,7 @@ Checklist (not an estimate of remaining effort):
    cantina, the same saved EpisodeI segment, transition/save/reload and natural
    title-idle movie. Record cold-launch versus shader-cache-cold versus warm.
    Prefer existing004 diagnostics if verified available; add only missing data.
-   **Done26October:** owner006 cantina/EpisodeI Chapter1/repeat/native save/
+   **Done26October:** hardware006 cantina/EpisodeI Chapter1/repeat/native save/
    reload/clean exit and separate natural idle-movie run received on handheld/
    stock. The movie FAILED; this records baseline coverage, not W1 correctness.
    Complete effective B env received byte-exact. Exact battle/visit timestamps
@@ -153,12 +153,12 @@ cycles, repeated affected transitions and at least one30minute mixed play/exit
 session complete with correct picture/audio/input, readable existing saves and
 no observed recurrence. These are finite planned acceptance samples, not a
 guarantee against every rare crash. Record residual risk and coverage honestly.
-Use a substantial owner checklist once local evidence warrants it. Do not block
+Use a substantial hardware checklist once local evidence warrants it. Do not block
 a small independent cache investigation on unrelated all-game completeness.
 
 ### W2 / Mesa H1 — shader readiness and smooth ordinary startup
 
-Implement the project owner's already-approved hybrid objective using existing mechanisms:
+Implement the already-approved hybrid objective using existing mechanisms:
 common boot/menu preparation, variants discovered/prepared during relevant
 loading, and persistent compatible reuse where the driver supports it.
 
@@ -196,7 +196,7 @@ separately. No 'compile once forever' claim and no promise of zero loading cost.
 
 Use W0 route evidence, refreshed after W1/W2 changes. Select the top cost class:
 
-| Measured owner | First candidates | Evidence required before retaining |
+| Measured cost | First candidates | Evidence required before retaining |
 | --- | --- | --- |
 | Shader/first-use | Remaining catalog/load readiness, correct existing persistence | Cold/warm counts/times, identical complete output and lower hitch cost. |
 | Game CPU | Existing codegen audit; native CRT/math/hot functions, register/call overhead only where sampled hot | Matched Switch stacks/cost per call, memory/register/rounding equivalence and integrated behavior. |
@@ -231,7 +231,7 @@ not all chapters or a finished game.
 
 ### Implementation register — concrete Mesa work inside W0–W5
 
-23October owner request: develop the complete Mesa improvement plan and begin
+23October request: develop the complete Mesa improvement plan and begin
 implementation; logging during ordinary play is desired if its cost is modest.
 This register expands the work packages above, not a competing plan. It lists
 the candidates worth examining, not changes to enable all at once. No speedup
@@ -244,8 +244,7 @@ spans/bytes, state/topology and non-tile system constants); unsupported keys nev
 authorize merge.337 local cases/ARM/static pass, same app/env staged,4/5(80%)
 candidate gates; physical visual/cost acceptance remains. One NRO-only5–10minute
 Chapter1 route. Full resident geometry, earlier walk-time copying/texture/resolve
-inputs remain outside this key; no screenshot/BO/FPS fix claimed. See current
-handoff/README. No new framework or quality/clock/speed change.
+inputs remain outside this key; no screenshot/BO/FPS fix claimed. No new framework or quality/clock/speed change.
 
 | ID / package | Implementation and existing reuse | Local and hardware keep/reject gate |
 | --- | --- | --- |
@@ -308,7 +307,7 @@ Maintain one coverage register, one row per meaningful route/feature and evidenc
   are separate product choices, not invisible optimizations.
 - HOME/suspend/resume/controller disconnect, app exit and native user selection.
   HOME launcher/package uses the intended app/save identity; installation or
-  packaging behavior needs the project owner's review before touching the console.
+  packaging behavior needs review before touching the console.
 
 **Exit:** the coverage register closes required routes with real evidence and
 explicit known limits; two-player progression/saves pass, repeated transitions
@@ -405,7 +404,7 @@ permanent forest of tuning flags; remove diagnostic-only scaffolding once its
 decision is closed. If evidence cannot distinguish the current hypotheses,
 redesign the measurement instead of patching another symptom.
 
-### Owner test contract
+### Hardware test contract
 
 Request hardware testing only after the candidate is concrete and locally
 qualified, or for a specific hardware-only uncertainty. One substantial checklist
@@ -435,11 +434,11 @@ No broad research assistant is needed to begin W0. A later focused external
 review must name one unresolved question (e.g. the exact GL binary/context race
 or first allocator conflict), provide pinned source/evidence, propose a falsifier,
 and return applicability/cost/limitations. Research text never authorizes installs
-or becomes a competing work queue. the project owner may supply such a review if useful.
+or becomes a competing work queue.
 
 ## 6. Execution, preservation and checkpoint rules
 
-- Owner does not make manual SD NRO/env backups. Agent maintains rollback
+- Testers do not make manual SD NRO/env backups. Agent maintains rollback
   through existing PC source/version history, preserved tested builds and
   recorded configs. Do not add per-test SD backup steps. Preserve saves/logs.
 - Same checkout/branch. No reset/clean, unsolicited code regeneration, extra SD
@@ -451,7 +450,7 @@ or becomes a competing work queue. the project owner may supply such a review if
   a qualified candidate exists. This does not create another SD app. Parked Deko
   staging stays `dist/tcs360-deko-test/sdmc`, app `/switch/lswtcs-deko-draw`.
 - ANY installation, portable dependency/runtime/driver/tool/plugin included,
-  needs the project owner's explicit yes after purpose, size and location. Existing tools
+  needs an explicit yes after purpose, size and location. Existing tools
   suffice for planning/baseline inspection. Never change security/permissions
   as a workaround for an unexplained write failure.
 - Preserve saves and originals; no content/movie skips or quality/clock/speed
@@ -460,9 +459,9 @@ or becomes a competing work queue. the project owner may supply such a review if
 - Describe previews in text; export opaque RGB PNGs while retaining raw RGBA.
   Stop only owned PID/executable/start-time-verified processes. Keep the blocked
   LLVM18/SIMDe cleanup untouched.
-- Update this harness's register and `docs/NEXT_SESSION.md` / session JSON after
+- Update this harness's register and session JSON after
   each checkpoint, never add a competing forward plan. Distinguish compiled,
-  locally run, emulator-validated, hardware-passed and owner-confirmed claims.
+  locally run, emulator-validated, hardware-passed and tester-confirmed claims.
 - At every checkpoint report active W0–W5 package, completed checklist/denominator,
   percentage of that named checklist only, completed work, remaining acceptance,
   shared cause and why added code is necessary. Say unknown for remaining effort.
@@ -481,7 +480,7 @@ or becomes a competing work queue. the project owner may supply such a review if
 | S1 | B prewarmed148 programs, no queued jobs/recorded shader holds; A has3 holds totalling1320.2ms; optional binary reuse still dormant | Unique preparation ownership and safe persistence, targeted to observed first-use work | W2 |
 | R1 |006 shared image/sampler key retained.012 recorded draw-key correction rejects26 reproduced unequal-input merges;300 legitimate plans unchanged, ARM/static staged | Physical atlas-spike/shifted-scene behavior and cost; full resident inputs, walk-time copying/texture/resolve dependencies remain open; no photo attribution | W1/W3 |
 | P1 |006 has zero shader holds, persistent combat drops and completion waits; exact battle/profile alignment unknown. CPU report output works | Separate battle CPU/driver/GPU/pacing costs;007 audio repair does not promise higher combat FPS | W3 |
-| F1 |006 save/reload/normal exit owner-confirmed,10 commits logged; prior per-user isolation preserved; dates/product coverage incomplete | Existing users/saves, date/time, controls/co-op/full content and sustained acceptance | W4 |
+| F1 |006 save/reload/normal exit confirmed on hardware,10 commits logged; prior per-user isolation preserved; dates/product coverage incomplete | Existing users/saves, date/time, controls/co-op/full content and sustained acceptance | W4 |
 | D0 | Deko preserved, incomplete and inactive | Reopen only for a demonstrated limitation and bounded reuse/adoption case | W5 or explicit earlier decision |
 
 Current work: W1/R1 recorded draw identity,012 candidate4/5(80% named gates),

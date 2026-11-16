@@ -2,7 +2,7 @@
 
 **Read first:** `README.md`, then `CONTRIBUTING.md`, the end of `docs/progress-log.md` (the newest state),
 `docs/reviews/CPU_ROADMAP.md` (last section: what limits each mode), `docs/known-issues.md`, `docs/ARCHITECTURE.md` and `docs/BUILDING.md`.
-`docs/GITHUB_SETUP.md` comes before any repository or Git-history work. The 1 November 2026 handoff, including the
+The 1 November 2026 handoff, including the
 revision2 execution harness (`TCS360_DEKO_IMPLEMENTATION_PLAN.md`, historical DEKO filename: Mesa is primary, Deko
 experimental and inactive), is archived in `docs/history/2026-11-01-handoff/`; it is reference, not a work queue.
 Confirm task and file ownership with the human collaborators before concurrent implementation.

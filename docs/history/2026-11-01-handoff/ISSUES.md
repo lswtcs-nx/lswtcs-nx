@@ -27,7 +27,7 @@ Useful supplied material: [BO review](../evidence/bo-observation-review.json),
 
 ## 2. Intermittent visual corruption
 
-The owner photographed atlas/glyph-like stretched triangles and separately
+The tester photographed atlas/glyph-like stretched triangles and separately
 reported a shifted/duplicated lower half of the scene. They occur occasionally
 for one or two frames and were not simultaneous. Their common cause is unproved.
 008 did not visibly fix them.009 did not yield a matched invalid-input capture.
@@ -39,7 +39,7 @@ resident texture/geometry dependency. Physical behavior and cost remain pending.
 
 Next decisive evidence is a corrected owning contract plus affected-route output,
 or a matched first-invalid input/composition trace. Avoid texture/shader/address/
-scene exceptions and asking the owner to press capture faster than a single frame.
+scene exceptions and asking the tester to press capture faster than a single frame.
 
 ## 3. Title-idle movie corruption and completion hang
 
@@ -48,7 +48,7 @@ below and in RUN2_FINDINGS.md "Run 85" to "Log 88".
 - **Established:**
   - With A/B state I the walker dropped the surface-retire interrupt (callback 0x82815910), which caused the black screen. Fixed in log83.
   - About 1,650 VMX operations the movie decoder runs were left empty by XenonRecomp. log84 fills them (`workspace-tools/fill_tcs360_movie_ops.py`, PC check `tests/fill_ops_check.py`). The fill must stay applied.
-  - The decoder takes about 280 ms of guest work per frame, so the movie runs at about 3 frames a second. Real time needs a native decoder or a much faster path, which is the owner's decision.
+  - The decoder takes about 280 ms of guest work per frame, so the movie runs at about 3 frames a second. Real time needs a native decoder or a much faster path.
   - The skip cannot work while the main thread waits inside the player, because nothing polls the pad.
 - **Tried and rejected:**
   - Delaying the interrupts until the replay (log85/86, `LSWTCS_AWDEFER=1`) deadlocks the player after three frames. The decoder waits on the player's event 1 and the main thread on event 3.
@@ -116,7 +116,7 @@ or movie pixels is established.
 
 ## 5. Combat frame pacing and audio jitter
 
-006 reduced redundant texture preparation and the owner noticed improvement.
+006 reduced redundant texture preparation and the tester noticed improvement.
 Combat still drops severely and affects audible playback.007 did not noticeably
 improve that. Warm gameplay often has no shader holds; compilation alone does
 not explain the steady cost. Native rendering, shader translation, recompiled
@@ -132,8 +132,8 @@ device-empty attribution before priority, buffering or time-stretch changes.
 
 ## Product coverage
 
-Native per-user saves work on bounded owner routes. Save dates, controller glyphs/
+Native per-user saves work on the tested routes. Save dates, controller glyphs/
 platform wording, local co-op/reconnect, brightness/audio modes, broader chapter
 coverage and launcher packaging remain in the existing product register.
-An Android-style single-player arcade-fighting idea in the Discord conversation
-is future product discussion, not a current implementation acceptance gate.
+An Android-style single-player arcade-fighting idea is future product
+discussion, not a current implementation acceptance gate.

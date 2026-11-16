@@ -1,4 +1,4 @@
-"""Extract the owner's XEX header for native module metadata; refuses overwrite."""
+"""Extract your copy's XEX header for native module metadata; refuses overwrite."""
 import argparse
 import hashlib
 from pathlib import Path

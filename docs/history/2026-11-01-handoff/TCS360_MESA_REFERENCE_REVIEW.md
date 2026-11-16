@@ -57,7 +57,7 @@ at another game's address could expose partially updated shared state.
 covers NVK/NAK/ZCULL and compiler cache revisioning. Our pinned build is patched
 Mesa20.1 GL/Nouveau: audit existing8 edits before any upgrade, and preserve exact
 driver/source identity. Installing a new SDK/Rust/compiler/driver is not implied
-by reading these sources and requires the project owner's prior explicit yes.
+by reading these sources and requires a prior explicit yes.
 
 **Some shortcuts conflict with our product contract.** Project8's
 [renderer notes](https://github.com/R-drg/project8-sw/blob/3393f2615deb7e8ac11ce51d2cd0e9defded5669/docs/native-renderer.md)
@@ -68,7 +68,7 @@ rendering and correct producer/alias lifetime across cache optimizations.
 
 ## Local audit and evidence limits
 
-- Rehashed tested004 NRO and matching ELF/map. Later owner save/user confirmation
+- Rehashed tested004 NRO and matching ELF/map. Later hardware save/user confirmation
   is retained separately from the original static-only package metadata.
 - Current `switch/build-repro-make` is Deko-on; a Mesa recipe needs qualification
   without destroying633 GameCode objects/PCH. Old `switch/env_play/env.txt`
@@ -90,7 +90,7 @@ not as another open-ended architecture survey.
 
 ## 26 October addition — Bejeweled CPU optimization guide
 
-the project owner supplied [optimising-functions.md](https://github.com/ChanseyIsTheBest/bejeweled3-nx/blob/b4ca88954303da539f2e034fd81e50538fbb8d7e/docs/optimising-functions.md),
+the supplied [optimising-functions.md](https://github.com/ChanseyIsTheBest/bejeweled3-nx/blob/b4ca88954303da539f2e034fd81e50538fbb8d7e/docs/optimising-functions.md),
 pinned at `b4ca88954303da539f2e034fd81e50538fbb8d7e`. Full19426-byte text and
 source hash retained under `logs/tcs360-project-harness-20261026/mesa005/references/`.
 The text is reference evidence, not installation or rewrite authorization.
@@ -158,7 +158,7 @@ serialize all publisher state. Check reuse licensing before copying implementati
 Recorded as deferred measurement work. No game code/build/env/staged artifact
 changes or installation.009's first-invalid-input trace remains the primary gate.
 
-## 26 October addition — eight owner-supplied Xbox port references
+## 26 October addition — eight more Xbox port references
 
 All eight READMEs and available release metadata are pinned below. Targeted
 engineering-note sections and source bodies were read for the mechanisms named

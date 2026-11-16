@@ -5,7 +5,7 @@
   "deko": "Preserved experimental implementation, not accepted live gameplay; inactive main implementation track",
   "active_package": "W1 correctness / recorded draw identity",
   "latest_candidate": "0.0.12",
-  "latest_candidate_hardware_test": "pending; no result supplied in this conversation",
+  "latest_candidate_hardware_test": "pending",
   "hardware_mode": "handheld stock clocks unless owner requests otherwise",
   "latest_hardware_observation": "0.0.11 active BO diagnostic; no recognized violation in recorded interval",
   "plan": "docs/TCS360_DEKO_IMPLEMENTATION_PLAN.md revision2 (legacy filename)",

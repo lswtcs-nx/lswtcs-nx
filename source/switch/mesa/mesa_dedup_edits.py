@@ -12,7 +12,7 @@ snapshot of the program right after translation, with its own copies of the code
 and fixups patch the code in place at upload, so every program gets fresh copies of the untouched ones). Programs with stream
 output and compute programs are not cached. At most 16 MB of snapshots (code and tables).
 
-Every 8th reuse (LSWTCS_SHADERDEDUPCHECK, 0 = never) the stage is also translated again and compared word for word (code, header,
+Every 64th reuse (LSWTCS_SHADERDEDUPCHECK, 0 = never; every 8th until log104) the stage is also translated again and compared word for word (code, header,
 registers, tables); a difference is logged as [NVC0DEDUP] and the fresh translation is used. LSWTCS_SHADERDEDUP=0 turns the reuse
 off. lsw_nvc0_dedup_stats() reports hits, misses, checks and mismatches for [GLPROG].
 Run 110 (log103dd): 1805 reuses against 1360 translations, worker time per program 278 -> 153 ms, no render stall of 250 ms or
@@ -20,6 +20,8 @@ more. 36 of 225 checks "differed", all pixel shaders with the same code size: th
 FixupEntry (8-byte pointer + 4-byte field) and RelocEntry (int8 then enum) carry padding bytes nv50_ir never writes. From log104
 the tables are compared field by field and the log says which part differed (bit mask: 1 code size, 2 code, 4 header, 8 registers
 / flags, 16 vertex fields, 32 pixel fields, 64 relocations, 128 fixups) and how many code words.
+Run 111 (log104dd): 225 checks, 0 differences, so the padding was the whole story. Each check is a full translation (about 9 % of
+the worker time at one in 8), so from log105 one reuse in 64 is checked.
 Applied after the other edits. Usage: python mesa_dedup_edits.py <mesa-src-dir>"""
 import sys, os
 root = sys.argv[1]
@@ -229,14 +231,14 @@ bool
 nvc0_program_translate(struct nvc0_program *prog, uint16_t chipset,
                        struct pipe_debug_callback *debug)
 {
-   static int on = -1, check_every = 8;
+   static int on = -1, check_every = 64;
    unsigned char sha[20];
    unsigned bucket, n_hit = 0;
    struct lsw_dedup_entry *e;
    bool ok = false;
 
    if (on < 0) {
-      check_every = lsw_dedup_env("LSWTCS_SHADERDEDUPCHECK", 8);
+      check_every = lsw_dedup_env("LSWTCS_SHADERDEDUPCHECK", 64);
       on = lsw_dedup_env("LSWTCS_SHADERDEDUP", 1) != 0;
    }
    if (!on || prog->pipe.type != PIPE_SHADER_IR_TGSI || !prog->pipe.tokens || prog->type == PIPE_SHADER_COMPUTE ||

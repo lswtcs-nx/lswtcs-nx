@@ -3944,3 +3944,40 @@ The saved-program queue was empty by replay ~5000, about 2 minutes in. Run 109 e
 - **Expected:** 0 differences, which confirms padding was the cause.
 - If code (2) differs, the reuse is suspect (nondeterministic or missing key input) and goes off by default until explained.
 - **Test:** the same route. Read `[NVC0DEDUP]` and look for visual defects.
+
+## Run 111: `0.0.99-log104dd`, field-wise dedup check
+
+Run 111 (`run111-log104dd`, 197 s) took the same Gungan route from the 4-core forwarder.
+
+**Checks:** 225, with 0 differences. Run 110's 36 "differences" were padding bytes in the fixup and relocation tables. Reused translations are identical to fresh ones.
+
+**Reuse:** 1803 reused against 1362 made.
+
+**Compile:**
+- 163 ms of worker time per program (245.2 s for 1504); run 110 had 153 and run 109 278.
+- Worker 0 median 80 ms, `compile_1` 109 ms.
+- The queue was empty by replay ~6000.
+
+**Stalls of 250 ms or more:** two, 0.65 s in all (373 ms program, 275 ms texture upload).
+
+**Audio:** 2.8 s of silence in 183 s.
+
+**FPS and CPU:**
+- `Gungan_B` 37.7, within noise.
+- 130 ns per guest call (90 % 129-131).
+- Heap at the end: 515-525 MB free, as in run 109.
+
+**Where the route stands now** (runs 105 → 111, same build base, same route, handheld):
+
+| | Run 105 | Run 111 |
+|---|---|---|
+| Render stalls of 250 ms or more | 2.9 s | 0-0.65 s |
+| Program queue | not done in 4 min | empty in about 2 min |
+| Compile cost per program | 278 ms | 153-163 ms |
+| Audio silence per 3 min | ~3.3 s | ~2.6-2.8 s |
+| Heavy-frame FPS | GPU-limited | unchanged |
+| Main thread | 125 ns per call | about 3-4 % more while the second compiler runs |
+
+## Log 105: `0.0.99-log105dd`
+
+The dedup check runs on every 64th reuse instead of every 8th. Each check is a full translation, about 9 % of worker time at one in 8.

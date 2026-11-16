@@ -157,6 +157,8 @@ in [docs/progress-log.md](docs/progress-log.md).
 **Shaders and textures (stutter)**
 - Every shader program the game used is saved on the SD card. Later boots prepare the list in the background, the
   current level's programs first.
+- Shader translations are saved too (`sdmc:/lswtcs/glprogs2/xlate.bin`), so from the second session the hub's long
+  first frames are gone; the first few loaded are re-translated and compared.
 - Mesa reuses the nvc0 translation of an identical shader stage, which cut the cost per program by about 45 %; a
   sample is re-translated and compared.
 - Two shader compilers; with four cores, the second takes only programs nothing is waiting for.

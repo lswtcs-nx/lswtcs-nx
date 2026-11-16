@@ -3,7 +3,7 @@
 What changes for players in each release. The engineering record behind every change is in
 [docs/progress-log.md](docs/progress-log.md).
 
-## Unreleased
+## v0.2.0 (16 November 2026)
 
 **Performance**
 - Shader translations are saved on the SD card (`sdmc:/lswtcs/glprogs2/xlate.bin`). From the second session, the hub's long first frames (about 0.5-0.9 s) are gone; only areas never visited before still translate.

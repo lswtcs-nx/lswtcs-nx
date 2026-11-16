@@ -35,6 +35,11 @@ Shader programs are prepared the first time a level needs them. The game keeps a
 `sdmc:/lswtcs/glprogs2/`, so later visits and the next boot prepare them in advance. With four cores, a second
 compiler on core 3 prepares the saved list in the background; the queue empties in about two minutes after boot.
 
+Since log109 the translations themselves are saved in `sdmc:/lswtcs/glprogs2/xlate.bin`. Run 117 loaded 175 in
+184 ms at boot and the hub's longest frame fell from 976 ms to 391 ms; what remains is the area load (textures and
+programs). The first session of each build still translates, about 21 ms a program, mostly in SPIRV-Cross and the
+GLSL clean-up. Open: one 1.6 s wait in Mesa at the hub's first frame in run 116, seen once.
+
 ## Short audio dropouts in the heaviest scenes
 
 About 1-2 % of a session, in the heaviest combat. Run 107 measured 2.6 s of silence in 203 s, against 8.7 s in run

@@ -15,5 +15,5 @@ once to the matching folded baseline. Older generated-output fix patches/scripts
 must not be applied again on top of it. Fresh code generation remains unvalidated.
 
 Upstream port provenance: https://github.com/KingDariusStim/LSWTCS-360-to-Switch-Port
-base 92ec175285504455777ccd14d2d0dcf19642694d. Its LICENSE is at the repository root (../LICENSE).
+base 92ec175285504455777ccd14d2d0dcf19642694d. Its original licence is kept at ../provenance/ORIGINAL_LICENSE-CC-BY-NC-SA-4.0.txt; this repository is GPL-3.0 (../LICENSE).
 Git history, account configuration, generated game output and game data are absent.

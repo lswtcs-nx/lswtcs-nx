@@ -11,8 +11,8 @@ generated code as TCS. Its renderer differs (Vulkan on NVK). `PORT_RESEARCH.md` 
 
 ## Limits
 
-- **License.** bo2-360-nx is GPL-3 and this port is CC BY-NC-SA 4.0. Reuse the techniques and write the code here; do not copy
-  its code. Confirm any doubtful case with the owner before it lands.
+- **License.** bo2-360-nx is GPL-3, and so is this port since 16 November 2026 (it was CC BY-NC-SA 4.0 when this was written).
+  Its code may now be used with its notices kept; see CONTRIBUTING.md.
 - **Numbers do not transfer.** Its percentages are frame-rate gains in one game, from its own A/B runs. Mass Effect measured no
   gain from LTO and PGO, so the two ports already disagree.
 - **Where it applies.** These paths help where the guest CPU sets the pace, as in run 7's heaviest level: GPU 54 ms and GPU idle

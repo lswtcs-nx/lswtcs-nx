@@ -132,11 +132,12 @@ the last section of [docs/reviews/CPU_ROADMAP.md](docs/reviews/CPU_ROADMAP.md).
   - SPIRV-Cross, SIMDe, FFmpeg, xxHash and rpmalloc.
 
   Their licences and notices are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
-- **Ideas only:** some techniques were learned from bo2-360-nx and rr6-nx. No code was copied.
+- **Related ports:** some techniques were learned from bo2-360-nx and rr6-nx (GPL-3.0). No code was copied from them so far.
 
-**Licence.** The port's code is under [CC BY-NC-SA 4.0](LICENSE), inherited from the original port. Moving to GPL-3.0,
-the usual licence for these ports, is being discussed with the original author, and needs their agreement. The
-components keep their own licences.
+**Licence.** The port's code is under the [GNU GPL 3.0](LICENSE), the usual licence for these ports. The original port
+was published under CC BY-NC-SA 4.0 (kept in [`provenance/`](provenance/ORIGINAL_LICENSE-CC-BY-NC-SA-4.0.txt)); its
+author's confirmation of the change is pending. The components keep their own licences
+([THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)).
 
 **Disclaimer.** This is a fan project, not affiliated with or endorsed by the LEGO Group, Lucasfilm, TT Games,
 Microsoft or Nintendo. *LEGO Star Wars: The Complete Saga* and its content belong to their owners. The repository

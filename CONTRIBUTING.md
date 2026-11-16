@@ -62,9 +62,9 @@ Never commit any of these:
 
 ## Code from other projects
 
-Keep the notices of every component ([THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)). GPL-3.0 projects (bo2-360-nx,
-rr6-nx, mk9-nx) are a source of ideas only, while this repository's licence differs from theirs: reimplement, do not
-copy.
+Keep the notices of every component ([THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)). The repository is GPL-3.0, like
+bo2-360-nx, rr6-nx and mk9-nx: code from them can be used, with their copyright notices kept in the file and a line in
+THIRD_PARTY_NOTICES.md. Code under a licence that GPL-3.0 cannot take in stays out.
 
 ## Rules for coding assistants
 

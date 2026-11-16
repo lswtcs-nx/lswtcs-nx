@@ -40,7 +40,8 @@ what is listed.
 
 - **Owner and visibility.** A GitHub organisation owned by both collaborators avoids the repository belonging to one
   person. Start it **private**, and make it public only when both agree.
-- **Licence.** The port's own code is CC BY-NC-SA (see `notices/README.md`). Bundled third-party code keeps its own
+- **Licence.** The port's own code is GPL-3.0 (`LICENSE`); the original port's CC BY-NC-SA text is kept in
+  `provenance/`, and its author's confirmation of the change is pending (see `notices/README.md`). Bundled third-party code keeps its own
   licences and notices: FFmpeg, SIMDe, SPIRV-Cross, XenonRecomp, xenia-canary, xxHash, rpmalloc. Do not put one
   blanket licence over the whole tree.
 - **The owner's decisions on the current build** (listed in `README.md`, "Update, 8 November 2026"): the 460.8 MHz

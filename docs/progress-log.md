@@ -4202,3 +4202,19 @@ area entries (`[GLSTALL]` 0.26-0.37 s, mostly texture uploads) and the boot.
 **Test:** two sessions in a row on the same build, the same route through the hub. The first fills the file and should
 stutter as before; in the second, the hub's 46-shader frame should lose the translation time and keep only the
 analysis and the rest of the draw preparation.
+
+## Runs 116-117: log109, the translation cache filled and then used
+
+Two handheld sessions in a row on log109, the same route through the hub (`run116-log109`, about 160 s and 180 s).
+- **Session 1 (fills the file):** `started over (none yet)`; 175 translations, 3793 ms in all (median 21 ms, up to
+  107 ms). The hub's burst frames as before: `prepare` 830, 486, 374 and 202 ms.
+- **Session 2 (uses it):** 175 translations loaded (3.6 MB) in 184 ms at the first draw. The first 8 were checked:
+  all `same as translated`. 167 more came from the file in 3.8 ms in all (0.02 ms each). The hub's entry is one
+  391 ms frame, of which 310 ms is the render thread's usual area-entry work (textures, programs); `prepare` 1.5 ms.
+  The only `prepare` spike left, 318 ms at 179 s, is 9 shaders that session 1 never reached.
+- **What the translation costs:** SPIR-V generation is about 15 % of it; SPIRV-Cross and the GLSL clean-up are the rest.
+  The microcode analysis, which the cache does not save, was 22-26 ms per session in all.
+- **Not explained:** in session 1, the hub's first replay waited 1611 ms in one `MapBufferRange` on Mesa's GL thread
+  (`[GLSTALL]` 1889 ms). No earlier run has a wait over 300 ms there; session 2 has none. One sample; watch for it.
+
+The cache stays on by default. Translation time is now paid once per build and per new area.

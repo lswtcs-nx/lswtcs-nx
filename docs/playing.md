@@ -1,13 +1,13 @@
 # Playing and testing
 
-This page is for people who have built the port (see [BUILDING.md](BUILDING.md)) and want to play it, or to test it
-and bring logs back.
+This page is for people who have installed the port (the README's "How to install") and want to play it, or to test
+it and bring logs back.
 
 ## What goes on the SD card
 
 ```text
 sdmc:/
-  switch/lswtcs/lswtcs.nro     the app you build
+  switch/lswtcs/lswtcs.nro     the app, from the release zip
   lswtcs/
     default.xex                from your own disc of the game
     game.DAT  game1.DAT        from your own disc of the game

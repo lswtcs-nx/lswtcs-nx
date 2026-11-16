@@ -23,28 +23,14 @@ OpenGL on Mesa/Nouveau).
 
   The game checks your `default.xex` when it starts and tells you on screen if it is another version. Checksums for
   developers: [`provenance/expected-inputs.json`](provenance/expected-inputs.json).
-- **A PC to build the app** from your copy (see [Building](#building)).
-
-## Building
-
-The build makes Switch code out of your copy of the game. Tested on Windows with devkitPro (devkitA64, libnx), CMake
-and Python 3. In outline:
-
-1. **Get the dependencies** at the pinned versions ([`provenance/dependencies.json`](provenance/dependencies.json)):
-   XenonRecomp, Xenia Canary, SPIRV-Cross, SIMDe.
-2. **Generate the game code** from your `default.xex` with XenonRecomp, and apply the port's patch to the output.
-3. **Build Mesa for the Switch** with the port's changes: `source/switch/tools/build_mesa.sh`.
-4. **Build the NRO** with CMake from `source/switch`. The current recipe (guest memory without `volatile`, plus an
-   optional profile-guided build) is in "The current build" in [docs/BUILDING.md](docs/BUILDING.md).
-
-The game's own files need no preparation: the app reads them from your disc's files on the SD card.
 
 ## How to install
 
-There is no ready-made download yet. With `lswtcs.nro` from [Building](#building) (`sdmc:/` below is the root of
-your SD card):
+`sdmc:/` below is the root of your SD card.
 
-1. **Copy the app** to `sdmc:/switch/lswtcs/lswtcs.nro`.
+1. **Download the app:** `lswtcs-vX.Y.Z.zip` from the
+   [latest release](https://github.com/lswtcs-nx/lswtcs-nx/releases/latest), and extract it to the root of your SD
+   card. It puts the app at `sdmc:/switch/lswtcs/lswtcs.nro` and makes the `sdmc:/lswtcs/` folder.
 2. **Copy the game's files** to `sdmc:/lswtcs/`: `default.xex`, `game.DAT`, `game1.DAT`, `Movies/` and `audio/`.
    They are at the root of your disc. If you have a backup of your disc as an ISO file, open it with an Xbox 360 ISO
    extractor (for example [extract-xiso](https://github.com/XboxDev/extract-xiso)) and copy those five items. The game
@@ -69,8 +55,9 @@ sdmc:/
     default.xex  game.DAT  game1.DAT  Movies/  audio/
 ```
 
-**Updating:** replace `sdmc:/switch/lswtcs/lswtcs.nro`. The forwarder starts the new build without being made again,
-and the saves are kept.
+**Updating:** download the new release and replace `sdmc:/switch/lswtcs/lswtcs.nro` with its `lswtcs.nro` (or
+extract its zip again). The forwarder starts the new version without being made again, and the saves and game files
+are kept. [CHANGELOG.md](CHANGELOG.md) lists what each version changes.
 
 **Uninstalling:** deleting the forwarder removes only the shortcut. To remove the game, delete
 `sdmc:/switch/lswtcs/` and `sdmc:/lswtcs/`. Saves stay in the console's save storage.
@@ -140,6 +127,21 @@ in [docs/progress-log.md](docs/progress-log.md).
 
 **Next:** we are studying a move from OpenGL on Mesa to deko3d, the Switch's native graphics library, for a broader
 gain.
+
+## Building from source
+
+Only needed to change the code: players use the release. The build makes Switch code out of your copy of the
+game. Tested on Windows with devkitPro (devkitA64, libnx), CMake
+and Python 3. In outline:
+
+1. **Get the dependencies** at the pinned versions ([`provenance/dependencies.json`](provenance/dependencies.json)):
+   XenonRecomp, Xenia Canary, SPIRV-Cross, SIMDe.
+2. **Generate the game code** from your `default.xex` with XenonRecomp, and apply the port's patch to the output.
+3. **Build Mesa for the Switch** with the port's changes: `source/switch/tools/build_mesa.sh`.
+4. **Build the NRO** with CMake from `source/switch`. The current recipe (guest memory without `volatile`, plus an
+   optional profile-guided build) is in "The current build" in [docs/BUILDING.md](docs/BUILDING.md).
+
+The game's own files need no preparation: the app reads them from your disc's files on the SD card.
 
 ## How to collaborate
 

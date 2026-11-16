@@ -25,7 +25,10 @@ keep their `0.0.99-logN` names, so a log always shows which build made it.
 4. **On a Switch, from a clean card:** extract the release zip, copy the disc files, no `env.txt`, a new forwarder
    (4 cores, 39-bit). Boot to the title, play one level, save and load, in handheld and docked. The log must show
    `[XEX] image from default.xex` with `matches the PC check`.
-5. **Package:** `python tools/make_release.py --version X.Y.Z`. It checks the NRO's version, and writes the zip,
+5. **Package:** `python tools/make_release.py --version X.Y.Z`. It checks the NRO's version and that no absolute path
+   of the build machine is left in it, and writes the zip,
    `SHA256SUMS.txt` and the release notes to `private/releases/vX.Y.Z/`, with the ELF for crash reports.
 6. **Tag and draft:** `git tag vX.Y.Z`, push the tag, then the `gh release create ... --draft` command the script prints.
    Read the draft on GitHub before publishing it.
+7. **Back to test builds:** `cmake -S source/switch -B source/switch/build-nvpgo -DLSW_RELEASE_VERSION=` clears the
+   version, so the next test build carries its `logN` name again.

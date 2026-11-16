@@ -158,13 +158,19 @@ foreach(f libavcodec/aarch64/idctdsp_init_aarch64.c libavcodec/aarch64/mpegaudio
         list(APPEND FFMPEG_LIBAVCODEC_SOURCES "${FFMPEG_ROOT}/${f}")
     endif()
 endforeach()
+# FFmpeg's asserts print __FILE__, so the NRO carried the build machine's absolute paths (log109). Map the source root to
+# "source/" in both spellings the compiler may see under MSYS2 (/c/... and C:/...). tools/make_release.py refuses an NRO
+# that still has the repository's absolute path.
+string(REGEX REPLACE "^/([a-zA-Z])/" "\\1:/" LSW_ROOT_WIN "${LSW_ROOT}")
+set(LSW_PREFIX_MAP "-ffile-prefix-map=${LSW_ROOT}/=source/" "-ffile-prefix-map=${LSW_ROOT_WIN}/=source/")
 foreach(lib avutil avcodec)
     string(TOUPPER ${lib} U)
     add_library(lsw_${lib} STATIC ${FFMPEG_LIB${U}_SOURCES})
     target_include_directories(lsw_${lib} PRIVATE include/ffmpeg "${FFMPEG_CFG}" "${FFMPEG_ROOT}")
     target_compile_definitions(lsw_${lib} PRIVATE HAVE_AV_CONFIG_H BUILDING_${lib} _USE_MATH_DEFINES)
     target_compile_options(lsw_${lib} PRIVATE ${LSW_ARCH_FLAGS} -O2 -w $<$<COMPILE_LANGUAGE:C>:-std=gnu11>
-        $<$<COMPILE_LANGUAGE:C>:-Wno-incompatible-pointer-types>)   # GCC 15 makes these errors; clang warns
+        $<$<COMPILE_LANGUAGE:C>:-Wno-incompatible-pointer-types>   # GCC 15 makes these errors; clang warns
+        ${LSW_PREFIX_MAP})
 endforeach()
 target_include_directories(lsw_avcodec PRIVATE "${FFMPEG_ROOT}/libavcodec")
 

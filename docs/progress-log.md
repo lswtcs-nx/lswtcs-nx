@@ -4135,3 +4135,18 @@ So a player needs no settings file. The README and `docs/playing.md` no longer a
 
 - `[INIT] Loaded ...` names the image's source (`the image from default.xex` or `image.bin`).
 - `profiles/player.env`'s header says it is built in; the built-in text changes with it, the settings do not.
+
+## v0.1.0: the first release
+
+- **Code:** log108's, built as the play build (guest memory without `volatile`, PGO) with
+  `-DLSW_RELEASE_VERSION=0.1.0`, so the NACP version is `0.1.0`.
+- **Paths:** the NRO carried 22 absolute paths of the build machine, all from FFmpeg's asserts (`__FILE__`). FFmpeg is
+  now compiled with `-ffile-prefix-map` from the source root to `source/` (`LSW_PREFIX_MAP`), and
+  `tools/make_release.py` refuses an NRO that still has the repository's or the user folder's absolute path. The only
+  other paths left are newlib's from devkitPro's own build machine, which every devkitPro binary carries.
+- **Hardware:** this exact NRO was not booted before publishing. It differs from log108, booted in runs 113-114 as
+  log107, only in the NACP version and FFmpeg's file-name strings.
+- **Files:** `lswtcs-v0.1.0.zip` (the NRO at `switch/lswtcs/lswtcs.nro` and a note in `lswtcs/` naming the disc files
+  to copy), `lswtcs.nro` and `SHA256SUMS.txt`; notes from `CHANGELOG.md`. The ELF is kept privately for crash reports.
+- **README:** installing starts from the latest release's zip; "Building from source" moved after Performance, for
+  people who change the code.

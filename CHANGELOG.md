@@ -5,17 +5,29 @@ What changes for players in each release. The engineering record behind every ch
 
 ## Unreleased
 
-**Installing gets simpler.**
-- The game loads `default.xex` from your disc directly. The files made on a PC before (`image.bin`, `pristine.bin`,
-  `xex_header.bin`) and Xenia are no longer needed. Cards that still have them keep working.
-- The player settings are built in, so `env.txt` is only for testers.
-- A missing file or an unsupported game version shows a message on screen instead of closing the game.
+Nothing yet.
 
-**Since the first public snapshot (1 November 2026).**
-- Story levels with native saves, two-player co-op and full audio.
+## v0.1.0 (16 November 2026)
+
+The first release.
+
+**What you can play**
+- The story levels, with two-player co-op, native saves and full audio.
+
+**Installing**
+- The app reads the game from your own disc's files: `default.xex`, `game.DAT`, `game1.DAT`, `Movies/` and `audio/`.
+  No PC tool or emulator is needed to prepare them.
+- The game checks those files when it starts, and names any file that is missing or from another version of the game.
+- The settings for play are built in; no settings file is needed.
+- The app is titled *LEGO Star Wars: The Complete Saga* and uses the game's cover as its icon.
+
+**Performance**
 - Four CPU cores from a sphaira forwarder; the fourth runs background work.
 - Faster game code (guest memory without `volatile`, profile-guided optimisation) and the handheld GPU at Nintendo's
-  460.8 MHz profile.
-- Far fewer shader stutters: the shader list is kept on the SD card and prepared in the background, and Mesa reuses
-  translations of identical shader stages.
-- The app is titled *LEGO Star Wars: The Complete Saga* and uses the game's cover as its icon.
+  460.8 MHz handheld profile.
+- Far fewer shader stutters: the shaders the game used are kept on the SD card and prepared in the background, and
+  Mesa reuses the translations of identical shader stages.
+
+**Known issue**
+- The movie that plays when the title screen is left idle can show corruption and hang at its end. Avoid leaving the
+  title screen idle.

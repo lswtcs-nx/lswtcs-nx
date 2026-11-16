@@ -62,6 +62,18 @@ def nacp_version(nro: bytes) -> str:
     return nacp[0x3060:0x3070].split(b"\0")[0].decode()
 
 
+def personal_paths(nro: bytes) -> list:
+    """Absolute paths of this machine that a compiler left in the binary (__FILE__ and the like)."""
+    found = []
+    for base in {Path.home(), ROOT}:
+        win = str(base).replace("\\", "/")                      # C:/Users/name/...
+        posix = "/" + win[0].lower() + win[2:] if win[1:2] == ":" else win   # /c/Users/name/...
+        for form in {win, posix, str(base)}:
+            if form.encode() in nro:
+                found.append(form)
+    return found
+
+
 def changelog_section(version: str) -> str:
     text = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
     m = re.search(rf"^## v{re.escape(version)}\b.*?$(.*?)(?=^## |\Z)", text, re.M | re.S)
@@ -83,6 +95,10 @@ def main():
     found = nacp_version(nro)
     if found != args.version:
         raise SystemExit(f"the NRO's version is {found!r}, not {args.version!r}: build with -DLSW_RELEASE_VERSION={args.version}")
+    leaks = personal_paths(nro)
+    if leaks:
+        raise SystemExit(f"the NRO contains this machine's paths ({', '.join(sorted(set(leaks)))}): map them with "
+                         "-ffile-prefix-map (CMakeLists.txt, LSW_PREFIX_MAP) and rebuild")
     changes = changelog_section(args.version)
 
     out = ROOT / "private" / "releases" / f"v{args.version}"

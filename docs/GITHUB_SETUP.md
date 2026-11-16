@@ -114,7 +114,7 @@ Keep the credit line in `README.md` too.
 ## After setup
 
 - Work on branches, and merge into `main` through pull requests when both want to review.
-- Logs and test results stay out of the repository. Findings go into `docs/reviews/RUN2_FINDINGS.md` and
+- Logs and test results stay out of the repository. Findings go into `docs/progress-log.md` and
   `docs/reviews/CPU_ROADMAP.md`, as so far.
 - Read `README.md` first, then `docs/reviews/CPU_ROADMAP.md` (its last section is the current state), then
   `docs/BUILDING.md` for the build. `AGENTS.md` holds the rules for coding agents.

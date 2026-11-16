@@ -72,7 +72,8 @@ def validate(build, nm):
     require(nacp == (build / "lswtcs.nacp").read_bytes(), "Embedded NACP differs from generated NACP")
     name = nacp[:0x200].split(b"\0")[0].decode("utf-8")
     version = nacp[0x3060:0x3070].split(b"\0")[0].decode("utf-8")
-    require(name == "LSWTCS", "Unexpected application name")
+    # log106: the full title (was "LSWTCS" until log105).
+    require(name in ("LEGO Star Wars: The Complete Saga", "LSWTCS"), "Unexpected application name")
     symbols = subprocess.run([str(nm), "--defined-only", str(elf)],
                              capture_output=True, text=True, check=True).stdout
     defined = {line.split()[-1] for line in symbols.splitlines() if line.split()}

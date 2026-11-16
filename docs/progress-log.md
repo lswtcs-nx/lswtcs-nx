@@ -1,4 +1,8 @@
-# Findings from the first GPU attribution run, 1 November 2026
+# Progress log
+
+Every build and hardware session since 1 November 2026, oldest first, with the evidence behind each decision. Run numbers count the tester's sessions on a real Switch; a build is named by its log number (`log105dd`). Figures are from the logs of those sessions. FPS between sessions varies by about 10 %, so a gain is claimed only when its interval stays above zero. The newest state is at the end. A shorter summary is in [`reviews/CPU_ROADMAP.md`](reviews/CPU_ROADMAP.md).
+
+## Findings from the first GPU attribution run, 1 November 2026
 
 Fresh Mesa012 build plus logging (`0.0.12-log1`), `profiles/hardware-gpu.env`, about 24
 minutes with 7 save commits, no `crash.log`, empty stderr. The tester reported no visual

@@ -352,7 +352,7 @@ else()
         if(LSW_PGO STREQUAL "generate")
             set(LSW_NACP_VERSION "0.0.99-log97nvg")   # log97: the instrumented NRO of log96's code (wide counts)
         elseif(LSW_PGO STREQUAL "use")
-            set(LSW_NACP_VERSION "0.0.99-log105dd")   # log99-100: log98 + the fourth core used (compile worker 1, decode, logs, XMA)
+            set(LSW_NACP_VERSION "0.0.99-log106")   # log99-100: log98 + the fourth core used (compile worker 1, decode, logs, XMA)
         endif()
     else()
         set(LSW_NACP_VERSION "0.0.99-log93")
@@ -362,9 +362,10 @@ else()
             set(LSW_NACP_VERSION "0.0.99-log95pgo")   # build 3: optimised with run 96's counts
         endif()
     endif()
-    nx_generate_nacp(lswtcs.nacp NAME "LSWTCS" AUTHOR "LSWTCS port" VERSION "${LSW_NACP_VERSION}")
+    # The title the HOME menu, sphaira and a forwarder made from this NRO show; the icon is the project's own (tools/make_logo.py).
+    nx_generate_nacp(lswtcs.nacp NAME "LEGO Star Wars: The Complete Saga" AUTHOR "LSWTCS NX port" VERSION "${LSW_NACP_VERSION}")
 endif()
-nx_create_nro(lswtcs NACP lswtcs.nacp)
+nx_create_nro(lswtcs NACP lswtcs.nacp ICON "${CMAKE_CURRENT_SOURCE_DIR}/icon.jpg")
 
 # M0 smoke test (no runtime): proves an NRO holding all game code loads. Not built by default.
 add_executable(lswtcs_m0 EXCLUDE_FROM_ALL source/m0_main.cpp)

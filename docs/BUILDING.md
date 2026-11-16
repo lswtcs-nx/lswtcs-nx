@@ -205,7 +205,7 @@ tree casually. Original full rebuilds were expensive. The owner's incremental
 
 `workspace-tools/validate_tcs360_switch.py --help` describes the static artifact
 check. Link/static success is not hardware acceptance. Use
-`profiles/hardware-B.env` as the documented reference profile, without emulator
+`profiles/player.env` or `profiles/hardware-ab.env` (docs/playing.md), without emulator
 autostart/keys/settings. `GAMEROOT=X:/none/` disables fallback lookup only; movies
 in the data working directory still resolve. No movie skip is intended.
 
@@ -213,7 +213,7 @@ in the data working directory still resolve. No movie skip is intended.
 
 The build played since run 101 (`0.0.99-log98nvp`) differs from `build-mesa` in two ways. Each was measured on its own and
 they add up: CPU per guest call is 157 ns with neither, 139 ns with the first, 140 ns with the second, and 127 ns with both
-(`docs/reviews/RUN2_FINDINGS.md`, runs 97-102).
+(`docs/progress-log.md`, runs 97-102).
 
 1. **Guest memory without `volatile`**, in a copy of the generated output:
    ```sh

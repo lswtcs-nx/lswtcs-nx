@@ -3,7 +3,7 @@
 **Latest state: the section "State on 8 November 2026" at the end of this file.** The sections between are history, newest last.
 
 The state of the CPU work for whoever takes it over. It summarizes what runs 10-23 measured, what was tried and dropped, and the
-two routes left: guest threads on several cores, and faster generated code. The run-by-run evidence is in `RUN2_FINDINGS.md`, and
+two routes left: guest threads on several cores, and faster generated code. The run-by-run evidence is in `docs/progress-log.md`, and
 the earlier survey of bo2-360-nx techniques is in `BO2_OPTIMIZATION_PATHS.md`. Numbers are from one handheld console at stock
 clocks (CPU 1020 MHz, GPU 307 MHz), in Episode I chapter 2 (`Gungan_A` to `E`), the heaviest level tested.
 
@@ -48,7 +48,7 @@ Scenes differ between runs; compare within a session where possible (`LSWTCS_ABC
   emptied the audio buffers (60-65 % filled). `LSWTCS_PLACEGUARD=1` repairs and logs a guest thread left off its core; it fired
   for the file loader stuck on core 1 above the render thread, the likely cause of runs 19-20's slow render.
 - **Open faults:** studs and dark outlines of one brick drawn through the characters (`Gungan_C`), from program 374's early
-  draws (cube sampler bound to a 2D texture, `DIM-MISMATCH`). See `RUN2_FINDINGS.md`, runs 17-20.
+  draws (cube sampler bound to a 2D texture, `DIM-MISMATCH`). See `docs/progress-log.md`, runs 17-20.
 
 ## Big picture after run 32: half of the turn is this port's own code
 
@@ -66,7 +66,7 @@ The command thread is 38 % of the turn and almost all native. So compiler work o
 `plain_mem_probe.sh` shows little for plain memory to remove. Order to try, by how much each can reach:
 
 1. **One tile at the source (`LSWTCS_ONETILE`, log33, not yet run).** The game draws its world three times per frame for EDRAM. The engine's layout function decides that, and has a plain path, so log33 makes the layout fit without changing MSAA or
-   resolution (`RUN2_FINDINGS.md`, "0.0.39-log33"). Heaviest frames: walk about 33 ms, `repeat tiles` 9 ms measured, of a 72 ms frame. A guess of 9-22 ms saved, plus much of `plan` (13 ms on the render thread); no measurement behind it. Run 14's T could not reach this, since each tile's draw state differs.
+   resolution (`docs/progress-log.md`, "0.0.39-log33"). Heaviest frames: walk about 33 ms, `repeat tiles` 9 ms measured, of a 72 ms frame. A guess of 9-22 ms saved, plus much of `plan` (13 ms on the render thread); no measurement behind it. Run 14's T could not reach this, since each tile's draw state differs.
 2. **The walk and recording themselves.** Native, not guest-thread-safety work, and often switchable in A/B. Recording on a second thread, as bo2-360-nx defers it, moves only native work.
 3. **Fourth core** (bo2-360-nx: +11.9 to +16 %, audio and XMA alone on core 3). Needs a forwarder installed: owner decision.
 4. **Game settings** (bo2-360-nx's main route: half the draws at its very low preset). Product decision of the author, never silent.
@@ -122,11 +122,11 @@ the attempt to fix it.
 
 **Run 30 (log28):** real spinlocks still stall on the XAudio voice lock (846 waits past 200 ms, 8.4 FPS), even with the turn passed
 to the holder. Either the lock is also released outside the stubs, or a holder waits for something while holding it. Find which
-first (`RUN2_FINDINGS.md`, run 30, "Next evidence"); until then L is off and route 1 is blocked at this step.
+first (`docs/progress-log.md`, run 30, "Next evidence"); until then L is off and route 1 is blocked at this step.
 
 **log29:** the guest code points to a third cause: the voice lock is recursive, with an inline count and owner, and overlapping sections
 leave the count stuck above 0, so the release stub stops running. Not yet confirmed at run time. log29 takes real locks from boot and clears
-the count on winning the word; run 31 compares L and no L on the same level (`RUN2_FINDINGS.md`, "0.0.35-log29").
+the count on winning the word; run 31 compares L and no L on the same level (`docs/progress-log.md`, "0.0.35-log29").
 
 **Run 31 (log29): confirmed, and route 1 is unblocked.** With L from boot: no forced wait, 16 short waits in 4.67 M acquires, 0-10 % of FPS at most and fuller audio. Without L the count
 goes stale in heavy scenes, so today's default also skips the quantum most of the time from then on. log30 moves `sub_827DDE40`, 57 % of the XAudio thread's turn, off the turn.
@@ -201,7 +201,7 @@ What the main thread does at heavy load, by samples: guest code 56 %, and PM4 wa
 **Dropped:**
 - W: the main thread is the walker, so going off the turn frees only others. Others hold 5 % of the turn.
 - Guest threads on several cores: main is 95 % of the turn, and with none else waiting in 55 % of heavy ticks, there is little to run beside it.
-- Quads without a geometry shader, Deko for FPS (`RUN2_FINDINGS.md`, run 36).
+- Quads without a geometry shader, Deko for FPS (`docs/progress-log.md`, run 36).
 - Fourth core: Mesa's worker is not limiting.
 
 **Owner or tester decisions, the largest levers and not to be applied silently:**
@@ -370,7 +370,7 @@ The measurements below are from heavy frames (1300+ draws, the start of `Gungan_
 **Handheld now:**
 - Heavy frames run at about 26-27 FPS, with about 36 ms of GPU work per frame.
 - Docked runs 29-30 FPS at the same CPU clock. So about 4 ms of GPU savings brings handheld to the CPU wall, and anything past that needs CPU work.
-- The bench's leftover with everything off (about 10 ms) is mostly the GPU waiting for submission, not GPU cost (RUN2_FINDINGS.md, run 63).
+- The bench's leftover with everything off (about 10 ms) is mostly the GPU waiting for submission, not GPU cost (`docs/progress-log.md`, run 63).
 
 **Options left:**
 
@@ -385,7 +385,7 @@ The measurements below are from heavy frames (1300+ draws, the start of `Gungan_
 
 **Run 64:** inlinable guest calls changed nothing (CPU per guest call 161 ns against 156-158; the same profile). The main thread's time is inside large guest functions: memory accesses through the region table, writes back into `ctx`, float compares and FPCR switches. Options left on the CPU side are in RUN2_FINDINGS.md, run 64. None is expected to reach 10 % alone.
 
-**Loading (log65):** the tester turned to load times. During loads, two loader threads hold the guest turn while blocked on the card, about 30 % of the time, so reading and processing never overlap. log65 tries freeing the turn during file calls, plus 512 KB reads, in modes cycled over loads (RUN2_FINDINGS.md, log 65). Run 64's loads: hub to Gungan 7-8 s, Gungan to hub about 21 s.
+**Loading (log65):** the tester turned to load times. During loads, two loader threads hold the guest turn while blocked on the card, about 30 % of the time, so reading and processing never overlap. log65 tries freeing the turn during file calls, plus 512 KB reads, in modes cycled over loads (`docs/progress-log.md`, log 65). Run 64's loads: hub to Gungan 7-8 s, Gungan to hub about 21 s.
 
 ## mk9-nx study (4 November 2026)
 

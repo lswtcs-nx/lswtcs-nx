@@ -1,0 +1,10 @@
+# Files keep the line endings they were committed with: most are LF, some sources are CRLF, and docs/progress-log.md
+# mixes both. No conversion on checkout or commit, whatever core.autocrlf says, so diffs stay exact.
+* -text
+
+*.png binary
+*.jpg binary
+
+# Shown as documentation, not code, in GitHub's language statistics.
+docs/** linguist-documentation
+provenance/** linguist-documentation

@@ -3985,3 +3985,16 @@ Run 111 (`run111-log104dd`, 197 s) took the same Gungan route from the 4-core fo
 ## Log 105: `0.0.99-log105dd`
 
 The dedup check runs on every 64th reuse instead of every 8th. Each check is a full translation, about 9 % of worker time at one in 8.
+
+## Log 106: `0.0.99-log106`, the repository reorganised
+
+- Same code as `log105dd`.
+- The NRO is titled *LEGO Star Wars: The Complete Saga* (it was "LSWTCS") and carries the project's own icon
+  (`tools/make_logo.py`). A forwarder copies both when it is made, so a forwarder made from an older NRO keeps
+  "LSWTCS" until it is made again.
+- Documentation:
+  - The README is for players first.
+  - `docs/playing.md` covers profiles, controls, forwarders, saves and logs.
+  - `CONTRIBUTING.md` and `THIRD_PARTY_NOTICES.md` are new.
+  - This log moved from `docs/reviews/RUN2_FINDINGS.md`.
+  - The 1 November handoff documents moved to `docs/history/2026-11-01-handoff/`.

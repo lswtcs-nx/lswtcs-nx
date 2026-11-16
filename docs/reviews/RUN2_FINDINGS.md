@@ -3843,3 +3843,54 @@ Run 108 (`run108-log101c3`, 214 s) took the same Gungan route from the 4-core fo
 - **Test:** the same route.
   - Expect no program stall above ~1 s at the title screen and the queue still fast.
   - Expect no `units` stalls and audio as in run 108.
+
+## Run 109: `0.0.99-log102c3`, handheld, core-3 compiler takes only unrequested programs
+
+Run 109 (`run109-log102c3`, 210 s) took the same Gungan route from the 4-core forwarder.
+
+**Title screen:** first program stalls of 288 and 307 ms, against 2.4 s in run 108.
+
+**All stalls of 250 ms or more:** 3, 0.9 s in all. This is the lowest of the route's runs (run 105: 2.9 s; run 107: 11.2 s; run 108: 3.0 s). No `units` stalls.
+
+**Queue:** 85 programs left at replay 9000 (run 108: 115; run 105: 701).
+
+**Audio:** 2.9 s of silence in 193 s.
+
+**FPS:** `Gungan_B` 37.7, within noise.
+
+**Main thread:** 128 ns per guest call (90 % 127-133), against 125 in run 105.
+
+**Fourth core settles** with the steady threads at their home priorities, `compile_1` building unrequested saved programs, and `texdec_0` on core 0. Against run 105 (no core 3):
+- the saved-program queue drains about 1.5x faster;
+- render stalls are 0.9 s against 2.9 s;
+- audio silence is lower;
+- heavy-frame FPS is unchanged (handheld is GPU-limited);
+- the main thread is about 3 % slower while the second compiler runs.
+
+**Where compile time goes** (run 109 `hwprof`, compile threads):
+
+| Share | Where |
+|---|---|
+| 55 % | nv50_ir: 19.5 % register allocation, 35.5 % conversion, SSA and passes |
+| 19 % | allocator: rpmalloc, the free wrapper, `bo_check` hooks, TLS reads |
+| 18 % | waits |
+| 2 % | GLSL and TGSI |
+
+- Worker 0 median 137 ms a program; `compile_1` on core 3 median 228 ms.
+- The saved list of 2026-11-04 (1082 programs) has 114 different vertex shaders (about 25 KB of GLSL each), 804 different pixel shaders and 11 geometry shaders.
+- nvc0 translates every stage of every linked program, so a vertex shader shared by 68 programs went through nv50_ir 68 times.
+
+## Log 103: `0.0.99-log103dd`, nvc0 translations reused (`mesa_dedup_edits.py`)
+
+- **What it does:**
+  - `nvc0_program_translate` depends only on the shader type, the TGSI tokens, the user clip planes and the chipset.
+  - Its result is kept in memory for the session, keyed by the SHA-1 of the tokens.
+  - An identical stage later gets copies of the code and the relocation and fixup tables instead of a new nv50_ir run.
+- **Not cached:** stream output and compute. The cache stops growing at 16 MB.
+- **Check:** every 8th reuse is translated again and compared word for word (code, header, registers, tables). A difference is logged as `[NVC0DEDUP]` and the fresh translation is used.
+- **Switches:** `LSWTCS_SHADERDEDUP=0` turns it off; `LSWTCS_SHADERDEDUPCHECK` sets the check interval.
+- `[NVC0DEDUP]` (with `[GLPROG]`) reports reuses, translations made, checks, differences and the KB kept.
+- **Unknown until the run:** how often the linked TGSI really repeats. Mesa's linker removes vertex outputs that a program's pixel shader does not read, so the same GLSL can give different TGSI.
+- **Test:** the same route from the forwarder.
+  - Read `[NVC0DEDUP]` (reuse rate, 0 differences) and the worker ms per program against run 109's 137/228 ms.
+  - Read the queue drain time and look for any visual defect.

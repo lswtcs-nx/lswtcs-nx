@@ -145,6 +145,8 @@ extern "C" void lsw_malloc_lock_stats(uint64_t* wait_ns, uint64_t* contended, ui
 extern "C" void lsw_heap_stats(uint64_t* size, uint64_t* in_use, uint64_t* free_inside, uint64_t* untouched);   // platform_switch.cpp
 extern "C" uint32_t lsw_heap_free_mb();                                                                         // platform_switch.cpp
 extern "C" void lsw_bridge_counts(uint32_t* shaders, uint32_t* translations, uint32_t* memo, uint32_t* memo_clears);   // gl_bridge.cc
+extern "C" void lsw_nvc0_dedup_stats(unsigned* hits, unsigned* misses, unsigned* checks, unsigned* mismatches,
+                                     unsigned* kb) __attribute__((weak));   // mesa_dedup_edits.py (log103)
 extern "C" void lsw_big_alloc_stats(size_t* bytes, size_t* count) __attribute__((weak));   // rpmalloc_switch.c (LSW_RPMALLOC)
 extern "C" void lsw_bo_pool_stats(uint64_t* hits, uint64_t* misses, uint64_t* kept, uint64_t* dropped, uint64_t* bytes,
                                   int* state, uint64_t* made) __attribute__((weak));   // bo_check.cpp (log78)
@@ -4533,6 +4535,12 @@ PresentSrc replay() {
                    "%zu still queued, %zu stages compiled, %u stage compiles saved by reuse\n", g_prog_compiled,
                    (unsigned long long)(g_prog_compile_ns / 1000000), g_prog_from_binary, g_prog_cache_written,
                    g_prog_boot_queued, g_prog_queue.size(), g_stages.size(), g_stage_reused);
+        }
+        if (lsw_nvc0_dedup_stats) {   // log103: nvc0 translations reused for identical stages
+            unsigned hits = 0, misses = 0, checks = 0, mismatches = 0, kb = 0;
+            lsw_nvc0_dedup_stats(&hits, &misses, &checks, &mismatches, &kb);
+            printf("[NVC0DEDUP] stage translations: %u reused, %u made, %u reuses checked against a fresh one, %u differed, %u KB kept\n",
+                   hits, misses, checks, mismatches, kb);
         }
         printf("[GLDRAW] replay %llu: %u drawn (plain %u / points %u / rects %u / quads %u), %u no program, %u no GS, %u no RT, "
                "%u resolves (%u copies skipped as dead), %u dead draws skipped, %u resolved-texture binds, %u swizzle patches, "

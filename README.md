@@ -32,9 +32,9 @@ OpenGL on Mesa/Nouveau).
    [latest release](https://github.com/lswtcs-nx/lswtcs-nx/releases/latest), and extract it to the root of your SD
    card. It puts the app at `sdmc:/switch/lswtcs/lswtcs.nro` and makes the `sdmc:/lswtcs/` folder.
 2. **Copy the game's files** to `sdmc:/lswtcs/`: `default.xex`, `game.DAT`, `game1.DAT`, `Movies/` and `audio/`.
-   They are at the root of your disc. If you have a backup of your disc as an ISO file, open it with an Xbox 360 ISO
-   extractor (for example [extract-xiso](https://github.com/XboxDev/extract-xiso)) and copy those five items. The game
-   checks them at start and names any file that is missing or from another version.
+   They are at the root of your disc. If you have a backup of your disc as an ISO file, see
+   [Taking the files from an ISO](#taking-the-files-from-an-iso). The game checks them at start and names any file
+   that is missing or from another version.
 3. **Make a forwarder** in sphaira, so the game gets all four CPU cores: in sphaira's list of homebrew apps,
    highlight *LEGO Star Wars: The Complete Saga*, press **X**, choose **Install Forwarder**, set **CPU Cores** to
    **4** and **Address Space** to **39-bit**, then choose **Create Forwarder**.
@@ -62,6 +62,25 @@ are kept. [CHANGELOG.md](CHANGELOG.md) lists what each version changes.
 
 **Uninstalling:** deleting the forwarder removes only the shortcut. To remove the game, delete
 `sdmc:/switch/lswtcs/` and `sdmc:/lswtcs/`. Saves stay in the console's save storage.
+
+### Taking the files from an ISO
+
+[extract-xiso](https://github.com/XboxDev/extract-xiso) unpacks Xbox 360 ISOs. On Windows:
+
+1. Download `extract-xiso-Win64_Release.zip` from
+   [extract-xiso's latest release](https://github.com/XboxDev/extract-xiso/releases/latest) and unzip it.
+2. Put your ISO in the same folder as `extract-xiso.exe` and rename it to `game.iso`.
+3. Click the folder's address bar in File Explorer, type `cmd` and press Enter. In the window that opens, type this
+   and press Enter:
+   ```
+   extract-xiso -s -d game game.iso
+   ```
+   (`-s` skips the disc's system update folder, which the game does not need.)
+4. A `game` folder appears next to the ISO. Copy `default.xex`, `game.DAT`, `game1.DAT`, `Movies` and `audio` from it to
+   `sdmc:/lswtcs/`.
+
+On macOS or Linux, use `extract-xiso_macOS.zip` or `extract-xiso_Linux.zip` from the same page, and run
+`./extract-xiso -s -d game game.iso` in a terminal opened in that folder.
 
 ## Controls
 

@@ -4150,3 +4150,14 @@ So a player needs no settings file. The README and `docs/playing.md` no longer a
   to copy), `lswtcs.nro` and `SHA256SUMS.txt`; notes from `CHANGELOG.md`. The ELF is kept privately for crash reports.
 - **README:** installing starts from the latest release's zip; "Building from source" moved after Performance, for
   people who change the code.
+
+## Run 115: v0.1.0's NRO, handheld, as a player installs it
+
+Run 115 (`run115-v0.1.0`, about 95 s) booted the published `lswtcs.nro` with only the disc's files on the card and no
+`env.txt`, from the 4-core forwarder.
+- 32 built-in player settings; the image from `default.xex` with the PC check's hash (read 213 ms, built 69 ms);
+  `[INIT] Loaded the image from default.xex` (log108's text); kernel variables bound; core 3 in use; GPU at 460.8 MHz.
+- Two save commits, no crash.
+
+The release behaves as runs 113-114 did. The NACP version is not logged; the NRO on the card was the release's
+(`d099bb6c…`).

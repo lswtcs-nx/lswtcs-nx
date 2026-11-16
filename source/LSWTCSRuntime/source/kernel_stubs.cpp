@@ -2276,6 +2276,9 @@ static uint32_t g_phys_alloc(uint32_t raw_size) {
     g_phys_sizes[addr] = size;
     return addr;
 }
+#ifdef __SWITCH__
+extern "C" const uint8_t* lsw_switch_xex_header(size_t* size);   // platform_switch.cpp (log107)
+#endif
 // Allocate through the existing physical allocator: this block is tracked as live
 // and never freed/recycled, rather than borrowing executable padding or heap holes.
 extern "C" bool lsw_initialize_kernel_variables() {
@@ -2284,17 +2287,31 @@ extern "C" bool lsw_initialize_kernel_variables() {
         printf("[IMPORTS] diagnostic legacy mode: snapshot variable pointers unresolved\n");
         return true;
     }
-    FILE* f = fopen(LSW_DATA_DIR "/xex_header.bin", "rb");
-    if (!f) { printf("[IMPORTS] missing xex_header.bin; install the complete runtime update\n"); return false; }
-    if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return false; }
-    const long bytes = ftell(f);
-    if (bytes < 24 || bytes > long(lsw_kernel::arena_bytes - lsw_kernel::header_offset)) {
-        fclose(f); printf("[IMPORTS] invalid XEX header length\n"); return false;
+    // log107: default.xex's own header when the image came from it (platform_switch.cpp); xex_header.bin otherwise.
+    std::vector<uint8_t> header;
+    bool read_ok = true;
+#ifdef __SWITCH__
+    {
+        size_t n = 0;
+        if (const uint8_t* h = lsw_switch_xex_header(&n)) header.assign(h, h + n);
     }
-    rewind(f);
-    std::vector<uint8_t> header(size_t(bytes), uint8_t(0));
-    const bool read_ok = fread(header.data(), 1, header.size(), f) == header.size();
-    fclose(f);
+#endif
+    if (header.empty()) {
+        FILE* f = fopen(LSW_DATA_DIR "/xex_header.bin", "rb");
+        if (!f) { printf("[IMPORTS] missing xex_header.bin and default.xex\n"); return false; }
+        if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return false; }
+        const long bytes = ftell(f);
+        if (bytes < 24 || bytes > long(lsw_kernel::arena_bytes - lsw_kernel::header_offset)) {
+            fclose(f); printf("[IMPORTS] invalid XEX header length\n"); return false;
+        }
+        rewind(f);
+        header.assign(size_t(bytes), uint8_t(0));
+        read_ok = fread(header.data(), 1, header.size(), f) == header.size();
+        fclose(f);
+    }
+    if (header.size() > lsw_kernel::arena_bytes - lsw_kernel::header_offset) {
+        printf("[IMPORTS] invalid XEX header length\n"); return false;
+    }
     if (!read_ok || !lsw_kernel::valid_header(header.data(), header.size())) {
         printf("[IMPORTS] invalid/truncated XEX2 header\n"); return false;
     }

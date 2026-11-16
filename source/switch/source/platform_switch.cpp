@@ -3,6 +3,10 @@
 #include <switch.h>
 #include "lsw_guest_layout.h"
 #include "lsw_save_platform.h"
+#include "lsw_xex_image.h"
+#include "lsw_player_env.h"   // generated from profiles/player.env (CMakeLists.txt, log107)
+#include <string>
+#include <vector>
 #include <pthread.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -54,29 +58,44 @@ char g_log_dir[48] = ".";   // this session's folder, relative to LSW_DATA_DIR
 
 uint64_t info_u64(uint32_t id) { uint64_t v = 0; svcGetInfo(&v, id, CUR_PROCESS_HANDLE, 0); return v; }
 
+// One env line: NAME=VALUE, '#' comments. Returns whether it set a variable.
+bool apply_env_line(char* s) {
+    while (*s == ' ' || *s == '\t') ++s;
+    if (*s == '#' || *s == '\n' || *s == '\r' || !*s) return false;
+    char* e = s + strlen(s);
+    while (e > s && (e[-1] == '\n' || e[-1] == '\r' || e[-1] == ' ')) *--e = 0;
+    char* eq = strchr(s, '=');
+    if (!eq) return false;
+    *eq = 0;
+    setenv(s, eq + 1, 1);
+    printf("[NX] env %s=%s\n", s, eq + 1);
+    return true;
+}
+
 // env.txt: one NAME=VALUE per line, '#' comments. Replaces the PC launch scripts' environment.
+// log107: without an env.txt the game uses profiles/player.env, built into the NRO (generated/lsw_player_env.h), so a
+// player needs no settings file. An env.txt on the card replaces it whole, as before: the testing profile stays exact.
 void load_env_file(const char* path) {
-    FILE* f = fopen(path, "r");
-    if (!f) { printf("[NX] no %s (using defaults)\n", path); return; }
-    char line[512];
     int n = 0;
-    while (fgets(line, sizeof line, f)) {
-        char* s = line;
-        while (*s == ' ' || *s == '\t') ++s;
-        if (*s == '#' || *s == '\n' || *s == '\r' || !*s) continue;
-        char* e = s + strlen(s);
-        while (e > s && (e[-1] == '\n' || e[-1] == '\r' || e[-1] == ' ')) *--e = 0;
-        char* eq = strchr(s, '=');
-        if (!eq) continue;
-        *eq = 0;
-        setenv(s, eq + 1, 1);
-        printf("[NX] env %s=%s\n", s, eq + 1);
-        ++n;
+    if (FILE* f = fopen(path, "r")) {
+        char line[512];
+        while (fgets(line, sizeof line, f)) n += apply_env_line(line);
+        fclose(f);
+        printf("[NX] %d env settings from %s\n", n, path);
+    } else {
+        std::string text(kLswPlayerEnv);
+        size_t at = 0;
+        while (at < text.size()) {
+            size_t end = text.find('\n', at);
+            if (end == std::string::npos) end = text.size();
+            std::string line = text.substr(at, end - at);
+            n += apply_env_line(line.data());
+            at = end + 1;
+        }
+        printf("[NX] no %s: %d built-in player settings (profiles/player.env)\n", path, n);
     }
-    fclose(f);
-    printf("[NX] %d env settings from %s\n", n, path);
-    // Which cores this launch may use: 0x7 for a normal homebrew launch, 0xF only from a title whose NPDM allows core 3 (the
-    // fourth-core route of bo2-360-nx, an owner decision). Logged so the launch route of each session is on record.
+    // Which cores this launch may use: 0x7 for a normal homebrew launch, 0xF only from a title whose NPDM allows core 3 (a
+    // forwarder made with "CPU Cores: 4"). Logged so the launch route of each session is on record.
     { u64 mask = 0; const Result rc = svcGetInfo(&mask, InfoType_CoreMask, CUR_PROCESS_HANDLE, 0);
       printf("[NX] process core mask 0x%llX (rc 0x%X)\n", (unsigned long long)mask, rc); }
 }
@@ -784,6 +803,176 @@ extern "C" uint8_t* lsw_switch_guest_window(size_t size) {
     printf("[NX] UsedMemory after window: %llu MB\n", (unsigned long long)(info_u64(InfoType_UsedMemorySize) >> 20));
     tlb_bench(w);
     return w;
+}
+
+// ---- game files (log107) ----------------------------------------------------------------------
+// A player copies the files of their own disc to sdmc:/lswtcs/ and nothing else: the game image is built from default.xex
+// at boot (lsw_xex_image.h), and a missing or wrong file shows a screen instead of a silent exit. The supported release is
+// the USA/Europe Rev 1 multilingual release (1.1); its checksums are in provenance/expected-inputs.json.
+namespace {
+constexpr uint64_t kXexBytes = 17547264;
+constexpr const char* kXexSha256 = "c6152578061348e96500f6b6c07732cb4d3af36b9cb7bf461f900220e03436f0";
+// The image tests/xex_image_check.py builds on the PC from that default.xex; logged as a cross-check, never refused.
+constexpr const char* kImageSha256 = "eaa9522564d62b6c7e563a36bf8bd0998c76cf001a267f1d71860db2840050c6";
+struct DataFile { const char* name; uint64_t bytes; };
+constexpr DataFile kDataFiles[] = {{"game.DAT", 2546542496ull}, {"game1.DAT", 2508887880ull}};
+constexpr const char* kDataDirs[] = {"Movies", "audio"};
+std::vector<uint8_t> g_xex_header;   // the first header_size bytes of default.xex (kernel_stubs.cpp: was xex_header.bin)
+
+struct HwAes : lsw_xex::Decryptor {   // libnx's AES-128-CBC on the CPU's crypto instructions; streams across calls
+    Aes128CbcContext ctx{};
+    void start(const uint8_t key[16]) override {
+        static const uint8_t iv[16] = {};
+        aes128CbcContextCreate(&ctx, key, iv, false);
+    }
+    void decrypt(uint8_t* data, size_t size) override {
+        static uint8_t bounce[1 << 16];   // only the runtime thread decrypts, once, at boot
+        for (size_t at = 0; at < size; at += sizeof bounce) {
+            const size_t n = std::min(sizeof bounce, size - at);
+            aes128CbcDecrypt(&ctx, bounce, data + at, n);
+            memcpy(data + at, bounce, n);
+        }
+    }
+};
+
+void to_hex(const uint8_t* d, size_t n, char* out) {
+    for (size_t i = 0; i < n; ++i) snprintf(out + 2 * i, 3, "%02x", d[i]);
+}
+}  // namespace
+
+// A full-screen message (libnx console) that waits for Plus; the caller then ends the process. Only before the renderer
+// starts.
+extern "C" void lsw_switch_fatal_screen(const char* title, const char* body) {
+    printf("[FATAL] %s\n%s\n", title, body);
+    fflush(stdout);
+    if (g_stdout_log) fflush(g_stdout_log);
+    consoleInit(nullptr);
+    printf("\n\n  LEGO Star Wars: The Complete Saga\n\n  %s\n\n", title);
+    for (const char* p = body; *p;) {
+        const char* nl = strchr(p, '\n');
+        const int len = nl ? int(nl - p) : int(strlen(p));
+        printf("  %.*s\n", len, p);
+        if (!nl) break;
+        p = nl + 1;
+    }
+    printf("\n  Press + to close.\n");
+    consoleUpdate(nullptr);
+    padConfigureInput(8, HidNpadStyleSet_NpadStandard);
+    PadState pad;
+    padInitializeAny(&pad);
+    while (appletMainLoop()) {
+        padUpdate(&pad);
+        if (padGetButtonsDown(&pad) & HidNpadButton_Plus) break;
+        consoleUpdate(nullptr);
+        svcSleepThread(16'000'000);
+    }
+    consoleExit(nullptr);
+}
+
+// Every file the game needs is on the card, with the supported release's sizes. default.xex is checked when it is read.
+extern "C" bool lsw_switch_check_game_files() {
+    struct stat st{};
+    char path[128];
+    std::string missing, wrong;
+    if (stat(LSW_DATA_DIR "/default.xex", &st) != 0 && stat(LSW_DATA_DIR "/image.bin", &st) != 0) missing += "default.xex\n";
+    for (const DataFile& f : kDataFiles) {
+        snprintf(path, sizeof path, "%s/%s", LSW_DATA_DIR, f.name);
+        if (stat(path, &st) != 0) missing += std::string(f.name) + "\n";
+        else if (uint64_t(st.st_size) != f.bytes) {
+            char line[128];
+            snprintf(line, sizeof line, "%s: %llu bytes, the supported release has %llu\n", f.name,
+                     (unsigned long long)st.st_size, (unsigned long long)f.bytes);
+            wrong += line;
+        }
+    }
+    for (const char* d : kDataDirs) {
+        snprintf(path, sizeof path, "%s/%s", LSW_DATA_DIR, d);
+        if (stat(path, &st) != 0 || !S_ISDIR(st.st_mode)) missing += std::string(d) + "/\n";
+    }
+    if (!missing.empty()) {
+        lsw_switch_fatal_screen("Game files not found",
+            ("These files from your own Xbox 360 disc are missing in sdmc:/lswtcs/:\n\n" + missing +
+             "\nCopy them from the disc, then start the game again.").c_str());
+        return false;
+    }
+    if (!wrong.empty()) {
+        lsw_switch_fatal_screen("Incomplete game files",
+            (wrong + "\nCopy them again from your disc. The port supports the USA/Europe Rev 1 release.").c_str());
+        return false;
+    }
+    printf("[NX] game files present: %s, game.DAT, game1.DAT, Movies/, audio/\n",
+           stat(LSW_DATA_DIR "/default.xex", &st) == 0 ? "default.xex" : "image.bin (no default.xex)");
+    return true;
+}
+
+// Builds the game image from sdmc:/lswtcs/default.xex into image[0, capacity). Returns 1 when it did, 0 when there is no
+// default.xex (the caller loads image.bin as before), -1 after a fatal screen.
+extern "C" int lsw_switch_image_from_xex(uint8_t* image, size_t capacity, uint32_t image_base) {
+    FILE* f = fopen(LSW_DATA_DIR "/default.xex", "rb");
+    if (!f) return 0;
+    const uint64_t t0 = armGetSystemTick();
+    fseek(f, 0, SEEK_END);
+    const long size = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    char msg[256];
+    if (size != long(kXexBytes)) {
+        fclose(f);
+        snprintf(msg, sizeof msg, "sdmc:/lswtcs/default.xex is %ld bytes; the USA/Europe Rev 1\nrelease (1.1) has %llu.",
+                 size, (unsigned long long)kXexBytes);
+        lsw_switch_fatal_screen("Unsupported game version", msg);
+        return -1;
+    }
+    std::vector<uint8_t> xex(size_t(size), 0);
+    setvbuf(f, nullptr, _IONBF, 0);
+    size_t got = 0;
+    while (got < xex.size()) {
+        const size_t n = fread(xex.data() + got, 1, std::min(size_t(4) << 20, xex.size() - got), f);
+        if (!n) break;
+        got += n;
+    }
+    fclose(f);
+    if (got != xex.size()) {
+        lsw_switch_fatal_screen("Cannot read default.xex", "The SD card returned an error. Copy the file again.");
+        return -1;
+    }
+    const uint64_t t_read = armGetSystemTick();
+    uint8_t digest[32];
+    char hex[65];
+    sha256CalculateHash(digest, xex.data(), xex.size());
+    to_hex(digest, 32, hex);
+    if (strcmp(hex, kXexSha256) != 0) {
+        snprintf(msg, sizeof msg, "sdmc:/lswtcs/default.xex is not the USA/Europe Rev 1 release (1.1)\n"
+                                  "this port supports.\n\nSHA-256 %s", hex);
+        lsw_switch_fatal_screen("Unsupported game version", msg);
+        return -1;
+    }
+    lsw_xex::Info info;
+    const char* err = lsw_xex::parse(xex.data(), xex.size(), &info);
+    if (!err && info.load_address != image_base) err = "unexpected image address";
+    if (!err) g_xex_header.assign(xex.begin(), xex.begin() + info.header_size);
+    HwAes aes;
+    if (!err) err = lsw_xex::build_image(xex.data(), xex.size(), info, image, capacity, aes);
+    unsigned thunks = 0, records = 0;
+    if (!err) err = lsw_xex::resolve_like_snapshot(g_xex_header.data(), g_xex_header.size(), image, image_base,
+                                                   info.image_size, &thunks, &records);
+    if (err) {
+        lsw_switch_fatal_screen("Cannot load default.xex", err);
+        return -1;
+    }
+    const uint64_t t_built = armGetSystemTick();
+    sha256CalculateHash(digest, image, info.image_size);
+    to_hex(digest, 32, hex);
+    const auto ms = [](uint64_t a, uint64_t b) { return double(armTicksToNs(b - a)) / 1e6; };
+    printf("[XEX] image from default.xex: 0x%X bytes at 0x%08X, %u import thunks, %u records; read %.0f ms, built %.0f ms; "
+           "image sha256 %s (%s the PC check)\n", info.image_size, info.load_address, thunks, records, ms(t0, t_read),
+           ms(t_read, t_built), hex, strcmp(hex, kImageSha256) == 0 ? "matches" : "DIFFERS from");
+    return 1;
+}
+
+// default.xex's header, once lsw_switch_image_from_xex has read it (nullptr otherwise).
+extern "C" const uint8_t* lsw_switch_xex_header(size_t* size) {
+    *size = g_xex_header.size();
+    return g_xex_header.empty() ? nullptr : g_xex_header.data();
 }
 
 // ---- entry ----------------------------------------------------------------------------------

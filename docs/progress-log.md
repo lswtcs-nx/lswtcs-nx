@@ -4046,3 +4046,45 @@ likely but its size is uncertain. Unmatched, from `analyze_run.py` on both sessi
 **What this changes:** docked heavy frames are at about 35 FPS on this route. The limit is still the chain from the
 game's frame to the GPU, so the levers stay as in `CPU_ROADMAP.md`: `VdSwap` handing the frame over instead of waiting,
 a cheaper render-thread replay, and deko3d.
+
+## Log 107: `0.0.99-log107`, the game image from `default.xex`; built-in player settings
+
+The aim is a release a player installs by copying the files of their own disc, with no PC tool and no Xenia.
+
+**`image.bin` was the clean image plus Xenia's import resolution.** Compared section by section on the PC:
+- `.rdata`, `.pdata`, `.text`, the embedded sections, `.XBLD`, `.reloc` and the tail are identical to `pristine.bin`
+  (the clean loader image from `default.xex`).
+- `.data` differs in 146,037 words of runtime state, which `LSWTCS_PRISTINE=1` has replaced with the clean bytes in
+  every session since it was introduced.
+- What is left is the XEX import table: its 679 records (333 thunks in `.xidata`, 346 records in `.idata`). Xenia wrote
+  `sc 2; blr; nop; nop` into each thunk and `0xDEADC0DE` into each record, except the 13 kernel-variable records, which
+  the runtime binds again from the header at boot (`[IMPORTS]`). Plus one word of `.XBMOVIE` (0x83284B04: 0x1800 in the
+  clean image, 0 in the snapshot).
+- `xex_header.bin` is the first 0x4000 bytes of `default.xex`.
+
+**The change** (`lsw_xex_image.cpp`, `platform_switch.cpp`):
+- When `sdmc:/lswtcs/default.xex` exists, the runtime checks its size and SHA-256 (the USA/Europe Rev 1 release),
+  decrypts it with libnx's AES (the CPU's crypto instructions), copies its basic-compression blocks into the guest
+  image, and rewrites the import records and the `.XBMOVIE` word as the snapshot had them. `.data` is then already
+  clean, so the `LSWTCS_PRISTINE` overlay is skipped, and the kernel variables take the header from memory.
+- Without a `default.xex`, `image.bin`, `pristine.bin` and `xex_header.bin` load as before.
+- `tests/xex_image_check.py` builds the same code for the PC and compares its image with the reference files: equal to
+  `image.bin` outside `.data` and the 13 rebound records, equal to `pristine.bin` in `.data`, and the header equal to
+  `xex_header.bin`. It passes. The boot scan of host pointers treats the image the same way, except 3 of those 13
+  records, which it now zeroes before the runtime writes them.
+- `[XEX]` logs the read and build times and the image's SHA-256 against the PC check (`eaa95225…`).
+
+**Built-in settings.** Without an `env.txt`, the NRO applies `profiles/player.env`, built in at configure time. An
+`env.txt` on the card replaces it whole, so the testing profile is unchanged.
+
+**File checks.** Before the guest window is mapped, a missing `default.xex` (or `image.bin`), `game.DAT`, `game1.DAT`,
+`Movies/` or `audio/`, a DAT of the wrong size, or another version of `default.xex` shows a full-screen message that
+names the file, instead of the process ending with only a log line.
+
+**Release scaffolding:** `CHANGELOG.md`, `docs/RELEASING.md`, `tools/make_release.py` (zip, `SHA256SUMS.txt`, notes,
+the `gh release create --draft` command) and a bug-report form. The NACP takes `LSW_RELEASE_VERSION` for a release.
+
+**Test:** handheld, the usual route, with `default.xex` added on the card and `image.bin`, `pristine.bin` and
+`xex_header.bin` moved to another folder. Expected: `[XEX] ... matches the PC check`, `[PRISTINE] .data is the clean
+image from default.xex`, `[IMPORTS] all 13 variable slots backed`, and play, CPU per guest call and FPS as in run 111.
+Then one boot without `env.txt`: `[NX] no sdmc:/lswtcs/env.txt: N built-in player settings`.

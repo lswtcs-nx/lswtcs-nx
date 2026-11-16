@@ -12,6 +12,11 @@
 #include "gpu_d3d12.h"
 #include "lsw_guest_layout.h"
 extern "C" bool lsw_initialize_kernel_variables();
+#ifdef __SWITCH__
+// platform_switch.cpp (log107): the game files on the card, and the image built from default.xex.
+extern "C" bool lsw_switch_check_game_files();
+extern "C" int lsw_switch_image_from_xex(uint8_t* image, size_t capacity, uint32_t image_base);
+#endif
 #include <cstdio>
 #include <cstdarg>
 #include <cstdlib>
@@ -1173,6 +1178,7 @@ int main() {
 #ifdef __SWITCH__
     if (!lsw_switch_init()) return 1;   // selected user's native save must be available
     lsw_boot_mark("platform and save storage up");
+    if (!lsw_switch_check_game_files()) return 1;   // log107: a screen names any missing file instead of a silent exit
 #ifdef LSW_DEKO_BACKEND
     extern int lsw_deko_startup_check();
     const int diagnostic = lsw_deko_startup_check();
@@ -1320,17 +1326,28 @@ int main() {
         printf("[DBGWAIT] resuming\n"); fflush(stdout);
     }
 
+    // log107: the image is built from default.xex when the card has it (platform_switch.cpp, lsw_xex_image.h): the clean
+    // loader image with the import table resolved as in image.bin, so the guest gets the same memory at boot. Without a
+    // default.xex, image.bin is loaded as before.
+    bool image_from_xex = false;
+#ifdef __SWITCH__
+    {
+        const int r = lsw_switch_image_from_xex(g_base + PPC_IMAGE_BASE, PPC_IMAGE_SIZE, PPC_IMAGE_BASE);
+        if (r < 0) return 1;
+        image_from_xex = r > 0;
+    }
+#endif
     // Load image.bin
-    FILE* f = fopen(LSW_DATA_DIR "/image.bin", "rb");
-    if (!f) {
+    FILE* f = image_from_xex ? nullptr : fopen(LSW_DATA_DIR "/image.bin", "rb");
+    if (!f && !image_from_xex) {
         printf("Failed to open image.bin\n");
         return 1;
     }
     // log69: unbuffered 4 MB reads into a heap buffer, copied into the guest window. One fread straight into the window went
     // through the FILE's small buffer: 21 MB in 1.4 s (run 68, [BOOT] 4208 -> 5606 ms), about 15 MB/s, against 60-69 MB/s for the
     // 512 KB reads of the loads. The bytes are the same.
-    size_t nread = 0;
-    {
+    size_t nread = image_from_xex ? size_t(PPC_IMAGE_SIZE) : 0;
+    if (f) {
         setvbuf(f, nullptr, _IONBF, 0);
         std::vector<uint8_t> chunk(size_t(4) << 20);
         while (nread < PPC_IMAGE_SIZE) {
@@ -1341,7 +1358,7 @@ int main() {
             if (got < want) break;
         }
     }
-    fclose(f);
+    if (f) fclose(f);
     lsw_boot_mark("image read");
     printf("[INIT] Loaded image.bin: 0x%zX bytes\n", nread);
     lsw_text_patch_image(g_base + PPC_IMAGE_BASE, nread);   // log65: the console's name in the save messages (kernel_stubs.cpp)
@@ -1355,7 +1372,10 @@ int main() {
     // job-system ctx, NuSound object ptr) is one of those words. LSWTCS_PRISTINE=1
     // overlays .data (0x82E70000, size 0x41491C, which also spans the .bss tail) with the
     // pristine bytes, keeping code and resolved imports from the dump.
-    {
+    if (image_from_xex) {
+        g_pristine_data = true;   // log107: .data is already the clean XEX bytes
+        printf("[PRISTINE] .data is the clean image from default.xex; no overlay needed\n");
+    } else {
         const char* e = getenv("LSWTCS_PRISTINE");
         if (e && e[0] == '1') {
             const uint32_t DATA_VA = 0x82E70000u, DATA_SZ = 0x0041491Cu;

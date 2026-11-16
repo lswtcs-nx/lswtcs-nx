@@ -1,0 +1,61 @@
+name: Bug report
+description: Something looks, sounds or runs wrong in the game.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for testing. Never attach game files, saves, keys or `glprogs2/`.
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Shown under the game's name in sphaira or the HOME menu's data management (for example 0.1.0).
+    validations:
+      required: true
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Mode
+      options: [Handheld, Docked, Both]
+    validations:
+      required: true
+  - type: dropdown
+    id: launch
+    attributes:
+      label: How the game was started
+      options:
+        - Forwarder with 4 CPU cores
+        - Forwarder with 3 CPU cores
+        - Homebrew Menu
+    validations:
+      required: true
+  - type: input
+    id: where
+    attributes:
+      label: Where in the game
+      description: Episode, chapter, hub, menu or cutscene.
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you saw or heard, and what you expected. Say whether it happens every time.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: |
+        Zip the session's folder from `sdmc:/lswtcs/logs/` and attach it. For the most detail, play with the testing
+        profile (`profiles/hardware-ab.env` copied as `sdmc:/lswtcs/env.txt`). `stdout.log` names the console user;
+        remove that line if you prefer.
+  - type: checkboxes
+    id: copy
+    attributes:
+      label: Game copy
+      options:
+        - label: I use my own copy of the USA/Europe Rev 1 release.
+          required: true

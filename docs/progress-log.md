@@ -3998,3 +3998,51 @@ The dedup check runs on every 64th reuse instead of every 8th. Each check is a f
   - `CONTRIBUTING.md` and `THIRD_PARTY_NOTICES.md` are new.
   - This log moved from `docs/reviews/RUN2_FINDINGS.md`.
   - The 1 November handoff documents moved to `docs/history/2026-11-01-handoff/`.
+
+## Run 112: `0.0.99-log106`, docked, four cores
+
+Run 112 (`run112-log106-dock`, 214 s) ran log106's code (log105dd's, with the cover icon) from a 4-core forwarder
+(process core mask 0xF). Docked: CPU 1020, GPU 768 and memory 1600 MHz in all 44 `[CLOCK]` samples. Route: the hub,
+`Gungan_A`, `Gungan_B` (109 s), the hub. It is the first docked session since run 102 (log98), so it carries every change
+since then together: the fourth core with home priorities, the core-3 compiler for unrequested programs, and the nvc0
+translation reuse.
+
+**Heavy frames are faster docked.** Load-matched against run 102 (`pair_runs.py`: Gungan frames binned by draws):
+- heavy (1300+ draws): +12.5 % speed (90 %: +2.8 to +23.1);
+- medium (700-1299): +10.7 % (90 %: +6.6 to +17.2).
+
+The intervals cover the spread between scenes inside each session, not the 3-7 % between sessions, so the gain is
+likely but its size is uncertain. Unmatched, from `analyze_run.py` on both sessions:
+
+| | Run 102 (log98) | Run 112 (log106) |
+| --- | --- | --- |
+| 1300+ draws | 32.4 FPS | 35.0 FPS |
+| 1900+ draws | 29.0 FPS | 33.8 FPS |
+| `Gungan_B` | 39.1 FPS | 41.2 FPS |
+
+**Where it comes from: a shorter hand-over, not a cheaper thread.**
+- CPU per heavy replay (`[THREADCPU]`, windows of 100k+ guest calls) is unchanged: render 15.4 against 15.0 ms, Mesa's
+  worker 11.3 against 11.3, guest threads 12.3 against 12.3. CPU per guest call is 127 ns (90 %: 125-129), against 124.
+- The GPU's drawing time per heavy frame is unchanged: draws to present 20.2 against 20.1 ms (`[GLSPAN]` p50, 39 heavy
+  windows each).
+- The GPU's idle gap fell from 9.9 to 7.7 ms, and swap to swap from 30.5 to 28.2 ms.
+- The likely cause is XMA leaving core 2, which it shared with Mesa's worker: XMA now takes 4.8 ms per heavy replay,
+  up to 23 % of core 3. This is not isolated: all of the changes since log98 are in this run.
+
+**Shaders.**
+- The 1501 saved programs were all built after about 2 minutes (replay ~5500). Run 102 still had 1085 queued at its
+  end, after 4.4 minutes.
+- 147 ms of worker time per program (221.3 s for 1507).
+- Translation reuse: 1808 reused, 1365 made, 28 checked against a fresh translation, 0 differed.
+
+**Stalls of 250 ms or more:** one, 271 ms, at the `Gungan_B` entry (88 new textures and 2 programs). Run 102 had two,
+0.88 s in all.
+
+**Audio:** 3.2 s of empty device queue in 214 s (1.5 %), against 4.2 s in 264 s in run 102 (1.6 %). Limiter peak
+1.63, 58 blocks turned down.
+
+**Other:** no binary block in `stdout.log`; 590 MB of heap free at the end; SoC at most 42.0 °C.
+
+**What this changes:** docked heavy frames are at about 35 FPS on this route. The limit is still the chain from the
+game's frame to the GPU, so the levers stay as in `CPU_ROADMAP.md`: `VdSwap` handing the frame over instead of waiting,
+a cheaper render-thread replay, and deko3d.

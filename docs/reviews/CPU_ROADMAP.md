@@ -701,3 +701,11 @@ In the docked heavy frames:
 - **The title-screen movie (ISSUES #3):** the FFmpeg WMV3 route is described in "rc-guide material study". It is not started, and it only affects the idle demo and a trailer.
 - **The `-ffp-contract` correctness note** ("renut-nx, katamari-nx and mkdd-nx study"): it needs its own review.
 - **A possible end-of-level transition glitch (run 95):** one frame only, and the tester has not described it yet.
+
+## Docked after run 112 (16 November 2026)
+
+Run 112 is the first docked session with the fourth core and the nvc0 translation reuse. Heavy frames are about
++12.5 % faster than run 102 load-matched (90 %: +2.8 to +23.1; about 35 FPS at 1300+ draws). Per-thread CPU and the GPU's
+drawing time are unchanged; the GPU's idle gap between heavy frames fell from 9.9 to 7.7 ms, most likely because XMA
+left core 2, which it shared with Mesa's worker. Docked is still limited by the chain from the game's frame to the GPU,
+so the docked candidates in "State on 8 November 2026" stand. Details: `progress-log.md`, "Run 112".

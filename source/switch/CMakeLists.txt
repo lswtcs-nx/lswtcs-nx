@@ -352,7 +352,7 @@ else()
         if(LSW_PGO STREQUAL "generate")
             set(LSW_NACP_VERSION "0.0.99-log97nvg")   # log97: the instrumented NRO of log96's code (wide counts)
         elseif(LSW_PGO STREQUAL "use")
-            set(LSW_NACP_VERSION "0.0.99-log98nvp")   # log98: log96's code optimised with those counts
+            set(LSW_NACP_VERSION "0.0.99-log99c3")   # log99: log98 + the fourth core used (compile worker 1, decode, logs, XMA)
         endif()
     else()
         set(LSW_NACP_VERSION "0.0.99-log93")

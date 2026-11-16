@@ -3685,3 +3685,47 @@ In C the r10 loop keeps the register in a host register (the reload is gone; one
   - **deko3d.** CPU cost per draw on the render thread and in the driver is now on the docked critical path. That is the cost deko3d removes (no GL front end, no glthread round trips). The earlier estimate, that docked is limited by the main thread and so a GPU API cannot raise it, no longer holds.
   - **Mesa.** On Mesa, the render thread's replay cost and the frame hand-over (`VdSwap` waiting for the walker) are the levers.
 - **The binary block again:** 2,512 bytes of high-entropy data in `stdout.log`, after a `[GLSTEP]` line and right before the same `[OBJACT] ... class 1 obj 967CD550` burst as in run 101. It is seen in both log98 sessions, and in none of runs 97-99. `objlog_name` prints only printable bytes, and the async log ring looks correct, so the source is open.
+
+## Runs 103-105: log98, fourth core attempt and a long two-player session
+
+**Run 103** (`run103-log98nvp-short`): Homebrew Menu launch (mask 0x7), closed during the boot. No frames and no crash record.
+
+**Run 104** (`run104-log98nvp-dock-mp`): docked, two players, 93 minutes. Route: Episode IV, Blockade Runner to Mos Eisley.
+- No crash. 55 FPS overall; Mos Eisley B-D 42-51 FPS.
+- 139 ns per guest call. This is a different route from runs 101-102 (Gungan), so it is not comparable with their 124-127 ns.
+- Heap: 301 MB free at the end, after a low of about 300 MB. The figure is flat from minute 10 on, so there is no leak.
+- SoC up to 48.6 °C.
+- **Stalls:**
+  - 46 render stalls of 250 ms or more.
+  - 42.3 s of their time was waiting for a shader program, against 1.5 s for texture uploads.
+  - 15 lasted over a second, all programs (the longest 5.6 s and 4.0 s, each for 7-10 programs). The waits are `GetShaderiv`/`GetProgramiv` behind Mesa's GL thread.
+  - Programs cost 306 ms of worker time each (1512 in 462 s).
+  - The 1315 saved programs took until about replay 17850 (5 minutes) to build on core 2.
+  - Most of the long stalls fall at level entries and menus, on levels this save had not seen before.
+- Audio: limiter peak 1.37, 38 blocks turned down, 53 A/V holds.
+
+**Run 105** (`run105-log98nvp-c3off`): handheld, Gungan route, 256 s. Launched from a Sphaira forwarder with "CPU Cores: 4".
+- Process core mask 0xF, but **nothing moved to core 3**: there is no `[CORE3]` line.
+- Cause: the log writer is the first caller of `lsw_core3_begin`, and it starts before `env.txt` is read. The once-only check saw no `LSWTCS_CORE3` and stayed off for the session.
+- So run 105 is a plain log98 handheld session:
+  - 125 ns per guest call (run 101: 127);
+  - `Gungan_B` 35.6 FPS (run 101: 34.1), which is within noise.
+- `hwprof` shows shader-compile worker 1 and the texture-decode helper `texdec_0` on core 0 with the guest, at 0x3B.
+
+## Log 99: `0.0.99-log99c3`, the fourth core used
+
+- **The check runs on each call.** The log writer moves after `env.txt` is read (`lsw_log_async_core3`).
+- **Also on core 3:**
+  - shader-compile worker 1, taking jobs all the time (until now it ran only while the guest waited for programs);
+  - `texdec_0`, which was on core 0.
+  - The XMA worker, the background file writer and the log writer were already on the list.
+- **Priority:** the lowest the title allows, 0x3F, with 0x3B as the fallback. The result is logged.
+- **Meter:** it counts only the steady threads (log, XMA, files) toward the 85 %/2 s send-home. The compile worker and the decoder are bursty by design.
+- **New `[CORE3]` line every 10 s:** each moved thread's share of core 3.
+- **Expected:** saved programs build about twice as fast after boot, on-demand program waits are shorter when a level brings several, and core 0 is free of the two helpers. Frame rate in heavy handheld frames should not change (they are GPU-limited, runs 101-102).
+- **Test:** launch from the 4-core forwarder (mask 0xF).
+  - Read `[CORE3]` (priority, rc, shares) and the boot-queue time against run 104's 5 minutes.
+  - Compare `[GLSTALL]` program waits per level entry.
+  - Watch for system hangs: bo2-360-nx reported a Switch Lite freeze from starving core 3.
+  - A Homebrew Menu launch (mask 0x7) must behave as log98.
+- The NRO's PGO counts are from log98, so the three changed runtime files are compiled without counts for the changed functions.

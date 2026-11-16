@@ -38,6 +38,7 @@ extern "C" void lsw_log_async_drain();
 extern "C" void lsw_hw_monitor_start();
 extern "C" void lsw_hw_profiler_start();
 extern "C" void lsw_prof_register(const char* name, int sched_id);
+extern "C" void lsw_log_async_core3();   // log_async.cpp (log99): the log writer starts before env.txt is read
 
 #ifndef LSW_DATA_DIR
 #define LSW_DATA_DIR "sdmc:/lswtcs"
@@ -197,19 +198,27 @@ extern "C" void lsw_offcore_end() {
 // the turn. Core 3 also runs system services: bo2-360-nx reports a hard freeze of a Switch Lite from starving them, so a
 // meter checks once a second and sends every moved thread home for the rest of the session if they used more than 85 % of
 // the core for 2 seconds in a row ([CORE3]).
+// log99: run 105 had mask 0xF and moved nothing. The log writer is the first caller and starts before env.txt is read, so
+// the old once-only check saw no LSWTCS_CORE3 and kept "off" for the session. The check now runs on each call, and the log
+// writer moves after env.txt (lsw_log_async_core3). Also on core 3 from log99: shader-compile worker 1 (all the time, not
+// only while the guest waits for programs: run 104 spent 42 s of a 93-minute session waiting for programs built on demand,
+// ~0.3 s each) and the texture-decode helper that sat on core 0 with the guest. Those two are bursty by design (a level
+// entry can keep them busy for minutes), so the meter counts only the other moved threads; all of them run at the lowest
+// priority the title allows (0x3F, else 0x3B), below every system thread on that core. [CORE3] reports each 10 s.
 namespace {
-struct Core3Thread { Handle handle; s32 home_core; u64 home_mask; s32 home_prio; u64 ticks_last; char name[16]; };
+struct Core3Thread { Handle handle; s32 home_core; u64 home_mask; s32 home_prio; u64 ticks_last; u64 ticks_10s; bool metered; char name[16]; };
 Core3Thread g_core3[8];
 std::atomic<int> g_core3_count{0};
 std::atomic<bool> g_core3_on{false};
 Mutex g_core3_lock;
 bool core3_available() {
-    static const bool ok = [] {
-        const char* e = getenv("LSWTCS_CORE3");
+    const char* e = getenv("LSWTCS_CORE3");
+    if (!(e && e[0] == '1')) return false;
+    static const bool mask_ok = [] {
         u64 mask = 0;
-        return e && e[0] == '1' && R_SUCCEEDED(svcGetInfo(&mask, InfoType_CoreMask, CUR_PROCESS_HANDLE, 0)) && (mask & 8);
+        return R_SUCCEEDED(svcGetInfo(&mask, InfoType_CoreMask, CUR_PROCESS_HANDLE, 0)) && (mask & 8);
     }();
-    return ok;
+    return mask_ok;
 }
 void core3_send_home() {
     mutexLock(&g_core3_lock);
@@ -221,7 +230,7 @@ void core3_send_home() {
     mutexUnlock(&g_core3_lock);
 }
 void core3_meter(void*) {
-    int over = 0;
+    int over = 0, sec = 0;
     for (;;) {
         svcSleepThread(1000000000);
         if (!g_core3_on.load()) return;
@@ -229,8 +238,20 @@ void core3_meter(void*) {
         for (int i = 0; i < g_core3_count.load(); ++i) {
             u64 t = 0;
             if (R_FAILED(svcGetInfo(&t, InfoType_ThreadTickCount, g_core3[i].handle, UINT64_MAX))) continue;
-            used += t - g_core3[i].ticks_last;
+            if (g_core3[i].metered) used += t - g_core3[i].ticks_last;
             g_core3[i].ticks_last = t;
+        }
+        if (++sec == 10) {   // what each moved thread used of core 3 in the last 10 s
+            sec = 0;
+            char line[384];
+            int at = snprintf(line, sizeof line, "[CORE3] last 10 s, %% of core 3:");
+            for (int i = 0; i < g_core3_count.load() && at < int(sizeof line) - 40; ++i) {
+                const u64 d = g_core3[i].ticks_last - g_core3[i].ticks_10s;
+                g_core3[i].ticks_10s = g_core3[i].ticks_last;
+                at += snprintf(line + at, sizeof line - at, " %s %.1f", g_core3[i].name, double(armTicksToNs(d)) / 1e8);
+            }
+            printf("%s\n", line);
+            fflush(stdout);
         }
         const double share = double(armTicksToNs(used)) / 1e9;
         over = share > 0.85 ? over + 1 : 0;
@@ -243,8 +264,8 @@ void core3_meter(void*) {
     }
 }
 }  // namespace
-// The calling thread moves to core 3 if the fourth core is on; returns whether it moved.
-extern "C" int lsw_core3_begin(const char* name) {
+// Moves a thread to core 3 if the fourth core is on; returns whether it moved. Metered threads count toward the 85 % limit.
+static int core3_move(Handle handle, const char* name, bool metered) {
     if (!core3_available()) return 0;
     static std::once_flag started;
     std::call_once(started, [] {
@@ -260,19 +281,39 @@ extern "C" int lsw_core3_begin(const char* name) {
     const int i = g_core3_count.load();
     if (i >= 8) { mutexUnlock(&g_core3_lock); return 0; }
     Core3Thread& t = g_core3[i];
-    t.handle = threadGetCurHandle();
+    t.handle = handle;
     if (R_FAILED(svcGetThreadCoreMask(&t.home_core, &t.home_mask, t.handle))) { mutexUnlock(&g_core3_lock); return 0; }
     if (R_FAILED(svcGetThreadPriority(&t.home_prio, t.handle))) t.home_prio = -1;
     svcGetInfo(&t.ticks_last, InfoType_ThreadTickCount, t.handle, UINT64_MAX);
+    t.ticks_10s = t.ticks_last;
+    t.metered = metered;
     snprintf(t.name, sizeof t.name, "%s", name);
-    svcSetThreadPriority(t.handle, 0x3F);
+    // 0x3F is the lowest priority; a title's NPDM may stop higher (hbloader's stops at 0x3B), so fall back to 0x3B.
+    s32 prio = 0x3F;
+    Result rp = svcSetThreadPriority(t.handle, prio);
+    if (R_FAILED(rp)) { prio = 0x3B; rp = svcSetThreadPriority(t.handle, prio); }
     const Result rc = svcSetThreadCoreMask(t.handle, 3, 1u << 3);
+    if (R_FAILED(rc)) {   // stays home, at its own priority
+        if (t.home_prio >= 0) svcSetThreadPriority(t.handle, t.home_prio);
+        mutexUnlock(&g_core3_lock);
+        printf("[CORE3] %s could not move to core 3 (rc 0x%X)\n", name, rc);
+        fflush(stdout);
+        return 0;
+    }
     g_core3_count.store(i + 1);
     mutexUnlock(&g_core3_lock);
-    printf("[CORE3] %s on core 3 (rc 0x%X)\n", name, rc);
+    printf("[CORE3] %s on core 3, priority 0x%X (rc 0x%X)%s\n", name, R_SUCCEEDED(rp) ? prio : t.home_prio, rp,
+           metered ? "" : ", not metered");
     fflush(stdout);
-    return R_SUCCEEDED(rc);
+    return 1;
 }
+// The calling thread moves to core 3 if the fourth core is on; returns whether it moved.
+extern "C" int lsw_core3_begin(const char* name) { return core3_move(threadGetCurHandle(), name, true); }
+// The same for a thread whose work comes in long bursts (shader compiles, texture decode): not counted by the meter.
+extern "C" int lsw_core3_begin_bursty(const char* name) { return core3_move(threadGetCurHandle(), name, false); }
+extern "C" int lsw_core3_move_thread(Handle handle, const char* name) { return core3_move(handle, name, true); }
+// Whether moved threads are still on core 3 (the meter can send them home).
+extern "C" int lsw_core3_active() { return g_core3_on.load() ? 1 : 0; }
 
 // DIAG: per-core load ([CPULOAD], printed with [GLPROF]). Horizon reports a core's idle ticks only to a thread running
 // on that core (InfoType_IdleTickCount, sub-id -1 = the caller's core), so one sampler thread per core, at the lowest
@@ -575,6 +616,7 @@ extern "C" bool lsw_switch_init() {
                (unsigned long long)(used >> 20), (unsigned long long)(top >> 20));
     }
     load_env_file(LSW_DATA_DIR "/env.txt");
+    lsw_log_async_core3();   // log99: the log writer runs from before env.txt; it moves now if LSWTCS_CORE3=1
 #ifdef LSW_PGO_GENERATE
     lsw_pgo_start(g_run_id);   // log93: PGO counts to sdmc:/lswtcs/pgo (lsw_pgo.cpp)
 #endif

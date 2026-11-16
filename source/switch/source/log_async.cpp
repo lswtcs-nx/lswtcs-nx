@@ -21,6 +21,7 @@
 
 extern "C" void lsw_prof_register(const char* name, int sched_id);   // hw_profiler.cpp
 extern "C" int lsw_core3_begin(const char* name);                      // platform_switch.cpp: fourth core, when there is one
+extern "C" int lsw_core3_move_thread(Handle handle, const char* name); // the same for another thread
 
 namespace {
 struct Stream {
@@ -55,8 +56,8 @@ bool stream_write(Stream& s) {
     return true;
 }
 
+Thread g_writer;   // log99: moved to core 3 from outside, after env.txt is read (it starts before)
 void writer_main(void*) {
-    lsw_core3_begin("log_writer");
     lsw_prof_register("log_writer", -1);
     for (;;) {
         bool any = false;
@@ -210,12 +211,16 @@ extern "C" bool lsw_log_async_init() {
     g_device.write_r = alog_write;
     g_device.fstat_r = alog_fstat;
     if (AddDevice(&g_device) < 0) return false;
-    static Thread writer;
     // Core 2 at 0x2C: below the audio output thread (0x2B), above the shader-compile worker (0x2D), which could otherwise
     // keep the core for seconds. It spends its time waiting on the SD card.
-    if (R_FAILED(threadCreate(&writer, writer_main, nullptr, nullptr, 0x8000, 0x2C, 2)) || R_FAILED(threadStart(&writer))) return false;
+    if (R_FAILED(threadCreate(&g_writer, writer_main, nullptr, nullptr, 0x8000, 0x2C, 2)) || R_FAILED(threadStart(&g_writer))) return false;
     g_device_ok = true;
     return true;
+}
+
+// Called once env.txt is read: the log writer moves to core 3 when the fourth core is on.
+extern "C" void lsw_log_async_core3() {
+    if (g_device_ok) lsw_core3_move_thread(g_writer.handle, "log_writer");
 }
 
 // `name` as "alog:/name" when the ring is up, else unchanged.

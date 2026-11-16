@@ -3729,3 +3729,41 @@ In C the r10 loop keeps the register in a host register (the reload is gone; one
   - Watch for system hangs: bo2-360-nx reported a Switch Lite freeze from starving core 3.
   - A Homebrew Menu launch (mask 0x7) must behave as log98.
 - The NRO's PGO counts are from log98, so the three changed runtime files are compiled without counts for the changed functions.
+
+## Run 106: `0.0.99-log99c3`, handheld, fourth core on
+
+Run 106 (`run106-log99c3`, 286 s) took run 105's route (Gungan) from the 4-core forwarder. That makes run 105 the same build and route without core 3.
+
+**Core 3:**
+- Process mask 0xF. Five threads moved, all at 0x3F (rc 0): the log writer, XMA, `compile_1`, the file writer and `texdec_0`.
+- The meter never sent them home. The tester saw no system hang.
+- `compile_1` used 22-39 % of core 3 while the queue lasted. XMA used 1-10 %.
+
+**Saved-program queue (1501 programs):**
+
+| Replay | Run 106, still queued | Run 105, still queued |
+|---|---|---|
+| 4500 | 792 | 951 |
+| 9000 | 42 | 701 |
+| 10500 | 0 (empty from replay ~9300, t 233 s) | 514 |
+
+- Compiled in the same time: 1505 against 992, about 1.5x.
+- Program time in render stalls of 250 ms or more: 0.2 s against 1.5 s.
+
+**Two regressions, one cause:**
+- Audio silence was 8.7 s in 271 s, against 3.3 s in run 105 (run 101: 4.1 s). It fell to 0-10 ms per window once the queue was empty.
+- One 3.0 s stall at replay 2096: 2.77 s in the texture pre-pass (`units`), with 1111 programs queued. The render thread was waiting for `texdec_0`.
+- Cause: Horizon does not share a core between threads of equal priority. With everything at 0x3F, `compile_1` held core 3, and XMA and `texdec_0` waited behind it.
+
+**Other results:**
+- FPS is unchanged and within noise: `Gungan_B` 35.6 both; 1900+ draws 30.8 against 29.1.
+- Main thread: 130 ns per guest call (90 % 129-131) against 125 (124-126). The difference is significant within these two runs, and the cause is unknown. Candidates: a shared L2 and memory traffic from a second compiler running, or the route. Recheck in the next run.
+
+## Log 100: `0.0.99-log100c3`, priorities on core 3
+
+- The steady threads keep the priority they had at home: XMA 0x2B, log writer 0x2C, file writer 0x3A.
+- `texdec_0` runs at 0x3E and `compile_1` at 0x3F, so the compiler only takes what is left.
+- If a title stops at 0x3B, both shift down by 4.
+- **Test:** the same route from the forwarder.
+  - Expect audio silence back at run 105's level, no texture stall while the queue runs, and the queue still about 1.5x faster.
+  - Recheck the ns per guest call.

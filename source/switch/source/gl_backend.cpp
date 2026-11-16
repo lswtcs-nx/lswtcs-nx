@@ -91,7 +91,7 @@ s32 g_render_prio_start = 0x3B;                                      // the rend
 extern "C" void lsw_audio_stats(uint64_t* played, uint64_t* empty_ns);   // audio_switch.cpp: frames.log columns
 extern "C" void lsw_log_async_path(char* out, size_t capacity, const char* name);   // log_async.cpp
 extern "C" void lsw_prof_register(const char* name, int sched_id);   // hw_profiler.cpp
-extern "C" int lsw_core3_begin_bursty(const char* name);   // platform_switch.cpp (log99): fourth core, when there is one
+extern "C" int lsw_core3_begin_bursty(const char* name, int prio);   // platform_switch.cpp (log99): fourth core, when there is one
 extern "C" int lsw_core3_active();
 extern "C" void lsw_prof_note_draws(uint32_t draws);
 bool lsw_bg_submit(size_t bytes, std::function<void()> run);   // log_async.cpp: slow file work off this thread
@@ -873,7 +873,7 @@ void compile_worker_main(int index) {
     // Worker 0 on core 2 (idle). Worker 1 on core 0 at the lowest priority: the guest threads live there
     // but are held while a new scene's programs build. From log71 it takes jobs only then (g_prog_frame_wait).
     // log99: with the fourth core, worker 1 runs there and takes jobs all the time (below).
-    const bool on_core3 = index == 1 && lsw_core3_begin_bursty("compile_1");
+    const bool on_core3 = index == 1 && lsw_core3_begin_bursty("compile_1", 0x3F);   // below texdec_0 (log100)
     if (on_core3) {
     } else if (index == 1) {
         pin_to_core(0, "shader-compile worker 1");
@@ -3577,7 +3577,7 @@ void decode_drain(const uint8_t* phys) {
 void decode_helper(int core, int prio) {
     lsw_prof_register(core == 2 ? "texdec_2" : "texdec_0", -1);
     // log99: the helper meant for core 0 (with the guest, lowest priority) goes to the fourth core when there is one.
-    if (!(core == 0 && lsw_core3_begin_bursty("texdec_0"))) {
+    if (!(core == 0 && lsw_core3_begin_bursty("texdec_0", 0x3E))) {   // above compile_1: the render thread waits for it
         pin_to_core(core, "texture decode helper");
         svcSetThreadPriority(CUR_THREAD_HANDLE, prio);
     }

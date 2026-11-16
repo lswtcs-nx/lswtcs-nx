@@ -203,8 +203,11 @@ extern "C" void lsw_offcore_end() {
 // writer moves after env.txt (lsw_log_async_core3). Also on core 3 from log99: shader-compile worker 1 (all the time, not
 // only while the guest waits for programs: run 104 spent 42 s of a 93-minute session waiting for programs built on demand,
 // ~0.3 s each) and the texture-decode helper that sat on core 0 with the guest. Those two are bursty by design (a level
-// entry can keep them busy for minutes), so the meter counts only the other moved threads; all of them run at the lowest
-// priority the title allows (0x3F, else 0x3B), below every system thread on that core. [CORE3] reports each 10 s.
+// entry can keep them busy for minutes), so the meter counts only the other moved threads. [CORE3] reports each 10 s.
+// log100: Horizon does not share a core between threads of equal priority (the running one keeps it until it waits). With
+// all of them at 0x3F (log99, run 106) compile_1 held core 3 and the XMA worker and texdec_0 waited behind it: audio silence
+// 8.7 s against 3.3 in run 105, one 3 s texture stall. Now the steady threads keep the priority they had at home (XMA 0x2B,
+// log writer 0x2C, file writer 0x3A); texdec_0 runs at 0x3E and compile_1 at 0x3F, so the compiler only takes what is left.
 namespace {
 struct Core3Thread { Handle handle; s32 home_core; u64 home_mask; s32 home_prio; u64 ticks_last; u64 ticks_10s; bool metered; char name[16]; };
 Core3Thread g_core3[8];
@@ -265,7 +268,8 @@ void core3_meter(void*) {
 }
 }  // namespace
 // Moves a thread to core 3 if the fourth core is on; returns whether it moved. Metered threads count toward the 85 % limit.
-static int core3_move(Handle handle, const char* name, bool metered) {
+// prio < 0: keep the thread's own priority; else that priority, or 0x3B - (0x3F - prio) when the title stops at 0x3B.
+static int core3_move(Handle handle, const char* name, bool metered, int want_prio) {
     if (!core3_available()) return 0;
     static std::once_flag started;
     std::call_once(started, [] {
@@ -288,10 +292,12 @@ static int core3_move(Handle handle, const char* name, bool metered) {
     t.ticks_10s = t.ticks_last;
     t.metered = metered;
     snprintf(t.name, sizeof t.name, "%s", name);
-    // 0x3F is the lowest priority; a title's NPDM may stop higher (hbloader's stops at 0x3B), so fall back to 0x3B.
-    s32 prio = 0x3F;
-    Result rp = svcSetThreadPriority(t.handle, prio);
-    if (R_FAILED(rp)) { prio = 0x3B; rp = svcSetThreadPriority(t.handle, prio); }
+    s32 prio = want_prio < 0 ? t.home_prio : want_prio;
+    Result rp = 0;
+    if (want_prio >= 0) {
+        rp = svcSetThreadPriority(t.handle, prio);
+        if (R_FAILED(rp)) { prio = 0x3B - (0x3F - want_prio); rp = svcSetThreadPriority(t.handle, prio); }
+    }
     const Result rc = svcSetThreadCoreMask(t.handle, 3, 1u << 3);
     if (R_FAILED(rc)) {   // stays home, at its own priority
         if (t.home_prio >= 0) svcSetThreadPriority(t.handle, t.home_prio);
@@ -308,10 +314,11 @@ static int core3_move(Handle handle, const char* name, bool metered) {
     return 1;
 }
 // The calling thread moves to core 3 if the fourth core is on; returns whether it moved.
-extern "C" int lsw_core3_begin(const char* name) { return core3_move(threadGetCurHandle(), name, true); }
-// The same for a thread whose work comes in long bursts (shader compiles, texture decode): not counted by the meter.
-extern "C" int lsw_core3_begin_bursty(const char* name) { return core3_move(threadGetCurHandle(), name, false); }
-extern "C" int lsw_core3_move_thread(Handle handle, const char* name) { return core3_move(handle, name, true); }
+extern "C" int lsw_core3_begin(const char* name) { return core3_move(threadGetCurHandle(), name, true, -1); }
+// The same for a thread whose work comes in long bursts (shader compiles, texture decode): not counted by the meter, run at
+// `prio` (0x3E-0x3F) so that it never holds the core against the steady threads.
+extern "C" int lsw_core3_begin_bursty(const char* name, int prio) { return core3_move(threadGetCurHandle(), name, false, prio); }
+extern "C" int lsw_core3_move_thread(Handle handle, const char* name) { return core3_move(handle, name, true, -1); }
 // Whether moved threads are still on core 3 (the meter can send them home).
 extern "C" int lsw_core3_active() { return g_core3_on.load() ? 1 : 0; }
 

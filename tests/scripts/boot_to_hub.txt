@@ -1,0 +1,15 @@
+# Smoke test: boot to the hub and stand there. Not yet replayed on a console or an emulator: the menu presses below are a
+# guess at the title and load-game screens, to be replaced by a recorded route (tools/padrec_to_script.py).
+log boot_to_hub
+waitlight 3000 120          # the title screen
+repeat 6                    # title, then the load-game menus: confirm the defaults
+  press START
+  wait 1500
+  press A
+  wait 1500
+end
+waitlevel Map 120           # the hub is loading
+waitplay 5000 120           # in the hub, 5 s of play frames
+capture
+wait 20000                  # 20 s standing: a stable window for the frame counters
+done

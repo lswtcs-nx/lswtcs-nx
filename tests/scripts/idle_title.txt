@@ -1,0 +1,6 @@
+# Leaves the title screen idle until the attract movie plays (the open movie issue in docs/known-issues.md), then stops.
+log idle_title
+waitlight 3000 120
+wait 90000
+capture
+done

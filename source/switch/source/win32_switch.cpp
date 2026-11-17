@@ -22,6 +22,7 @@
 #include <unistd.h>
 #include <vector>
 #include "lsw_save_platform.h"
+#include "lsw_input_script.h"
 std::atomic<uint32_t> g_frame_marks{0};   // tester marks, written to frames.log by gl_backend.cpp
 std::atomic<uint32_t> g_capture_request{0};   // capture combos: 1 light, 2 full; taken by gl_backend.cpp
 std::atomic<uint32_t> g_ab_toggle_request{0};   // A/B toggle combo (L + R + left stick), taken by gl_backend.cpp (LSWTCS_ABTOGGLE)
@@ -766,6 +767,91 @@ void map_full(const PadState& pad, u64 b, XiState& st) {
 }
 
 extern "C" void lsw_log_async_drain();   // log_async.cpp
+
+// Scripted input (LSWTCS_INPUTSCRIPT, include/lsw_input_script.h): a file of steps replaces player 1's pad while it runs, for
+// automated runs on the console or in an emulator. A bare name is read from sdmc:/lswtcs/tests/. [SCRIPT] lines report each
+// step and the result ("done" or "failed"); after either, the pad is the player's again.
+extern "C" void lsw_level_name(char* out, size_t capacity);   // native_crt.cpp
+LswInputScript g_script;
+bool g_script_on = false;
+void script_init() {
+    const char* e = getenv("LSWTCS_INPUTSCRIPT");
+    if (!e || !*e || !strcmp(e, "0")) return;
+    std::string path = e;
+    if (path.find(':') == std::string::npos && path[0] != '/') path = "sdmc:/lswtcs/tests/" + path;
+    std::string text;
+    if (FILE* f = fopen(path.c_str(), "rb")) {
+        char buf[4096];
+        for (size_t n; (n = fread(buf, 1, sizeof buf, f)) > 0;) text.append(buf, n);
+        fclose(f);
+    } else {
+        printf("[SCRIPT] failed: cannot open %s\n", path.c_str());
+        fflush(stdout);
+        return;
+    }
+    if (!g_script.load(text)) {
+        printf("[SCRIPT] failed: %s: %s\n", path.c_str(), g_script.error().c_str());
+        fflush(stdout);
+        return;
+    }
+    g_script_on = true;
+    printf("[SCRIPT] %s: %zu steps; player 1's pad follows the script until it ends\n", path.c_str(), g_script.steps());
+    fflush(stdout);
+}
+// Pad recording (LSWTCS_INPUTRECORD=1): a [PADREC] line whenever player 1's 360-pad state changes (sticks in steps of 1/16),
+// with the time, light or play frames and the level, so tools/padrec_to_script.py can turn one played route into a script
+// whose waits follow the game's loads instead of the clock.
+void record_poll(const XiState& st) {
+    static const bool on = [] { const char* e = getenv("LSWTCS_INPUTRECORD"); return e && e[0] == '1'; }();
+    if (!on) return;
+    static XiState last{};
+    static bool last_light = false, first = true;
+    static char last_level[96] = {};
+    auto q = [](SHORT v) { return int(v) / 2048; };   // 1/16 of the range
+    const bool light = g_frame_light.load(std::memory_order_relaxed);
+    char level[96];
+    lsw_level_name(level, sizeof level);
+    const bool same = !first && st.buttons == last.buttons && (st.lt > 127) == (last.lt > 127) && (st.rt > 127) == (last.rt > 127) &&
+                      q(st.lx) == q(last.lx) && q(st.ly) == q(last.ly) && q(st.rx) == q(last.rx) && q(st.ry) == q(last.ry) &&
+                      light == last_light && !strcmp(level, last_level);
+    if (same) return;
+    first = false;
+    last = st;
+    last_light = light;
+    snprintf(last_level, sizeof last_level, "%s", level);
+    printf("[PADREC] %llu ms buttons 0x%04X lt %d rt %d l %d %d r %d %d %s level %s\n",
+           (unsigned long long)(armTicksToNs(armGetSystemTick()) / 1000000ull), st.buttons, st.lt > 127, st.rt > 127,
+           q(st.lx), q(st.ly), q(st.rx), q(st.ry), light ? "light" : "play", level[0] ? level : "?");
+}
+
+void script_poll(XiState& st) {
+    static std::once_flag once;
+    std::call_once(once, script_init);
+    if (!g_script_on || g_script.finished()) { record_poll(st); return; }
+    LswScriptWorld w;
+    w.now_ms = armTicksToNs(armGetSystemTick()) / 1000000ull;
+    w.light = g_frame_light.load(std::memory_order_relaxed);
+    char level[96];
+    lsw_level_name(level, sizeof level);
+    w.level = level;
+    LswPadOut pad{};
+    pad.buttons = st.buttons; pad.lt = st.lt; pad.rt = st.rt; pad.lx = st.lx; pad.ly = st.ly; pad.rx = st.rx; pad.ry = st.ry;
+    LswScriptActions act;
+    std::vector<std::string> log;
+    g_script.poll(w, &pad, &act, &log);
+    st.buttons = pad.buttons; st.lt = pad.lt; st.rt = pad.rt; st.lx = pad.lx; st.ly = pad.ly; st.rx = pad.rx; st.ry = pad.ry;
+    for (int i = 0; i < act.marks; ++i) {
+        const uint32_t n = g_frame_marks.fetch_add(1, std::memory_order_relaxed) + 1;
+        printf("[MARK] %u at %llu ms (script)\n", n, (unsigned long long)w.now_ms);
+    }
+    if (act.capture) g_capture_request.store(uint32_t(act.capture), std::memory_order_relaxed);
+    for (const std::string& line : log) printf("%s\n", line.c_str());
+    if (!log.empty() || act.marks) {
+        fflush(stdout);
+        if (g_script.finished()) lsw_log_async_drain();
+    }
+}
+
 DWORD WINAPI nx_xinput_get_state(DWORD slot, void* out) {
     std::call_once(g_pad_once, pads_init);
     if (slot >= DWORD(g_players)) return 1167;   // ERROR_DEVICE_NOT_CONNECTED
@@ -887,6 +973,7 @@ DWORD WINAPI nx_xinput_get_state(DWORD slot, void* out) {
                 fflush(stdout);
             }
         }
+        script_poll(st);
     }
     memcpy(out, &st, sizeof st);
     return ERROR_SUCCESS;

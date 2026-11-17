@@ -190,6 +190,7 @@ The game's own files need no preparation: the app reads them from your disc's fi
   details.
 - **Change the code:** read [CONTRIBUTING.md](CONTRIBUTING.md). Then the end of [docs/progress-log.md](docs/progress-log.md)
   has the newest state, and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) the code map.
+- **Automated runs** (scripted input on the console or in an emulator, in progress): [docs/AUTOMATED_TESTS.md](docs/AUTOMATED_TESTS.md).
 - **Coding assistants** follow [AGENTS.md](AGENTS.md).
 
 ## Credits

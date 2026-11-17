@@ -4229,3 +4229,32 @@ The cache stays on by default. Translation time is now paid once per build and p
   is kept privately for crash reports.
 - **Docs:** the README's Performance list and `known-issues.md` ("First visit to a level stutters briefly") describe the
   cache and what runs 116-117 measured.
+
+## Log 110: scripted input and pad recording, for automated runs
+
+**Why:** every console session so far needed the tester to play, and routes differed between sessions (part of the
+±10 % between them). A script that drives the pad gives the same route each time, on the console and later in an
+emulator, where a build can be checked for boot, loads, crashes and visual regressions before it reaches the card.
+An emulator does not measure the X1: frame times, GPU cost, CPU cost per call and clocks stay console measurements
+(`docs/AUTOMATED_TESTS.md`).
+
+**Change:**
+- `LSWTCS_INPUTSCRIPT=<file>` (`source/switch/source/lsw_input_script.cpp`, format in `include/lsw_input_script.h`): a
+  text file of steps replaces player 1's pad while it runs. Waits follow the game, not the clock: the level path
+  (`waitlevel`), light frames (`waitlight`) and play frames (`waitplay`), each with a timeout. Presses last at least two
+  polls down and two up. `repeat`/`end`, sticks, `mark`, `capture`, `log`, `done`. `[SCRIPT]` lines give each step and
+  the result; after `done` or a failure the pad is the player's again. Buttons are the 360 pad's, so a script does not
+  depend on the face-button layout.
+- `LSWTCS_INPUTRECORD=1`: `[PADREC]` lines when player 1's pad changes; `tools/padrec_to_script.py` turns a played
+  route into a script, with `waitlevel` at level changes and `waitplay 500` after loads.
+- `tools/emu_run.py`: runs the NRO in an emulator with a script, follows `stdout.log` until the result, stops only the
+  process it started and copies the logs to `private/emu-runs/`. Written for Ryubing; untested, no emulator installed.
+- Draft scripts in `tests/scripts/` (the menu presses in `boot_to_hub.txt` are a guess).
+- Host check: `python tests/input_script_check.py` (a simulated route, slow polls, a timeout, a missing `done`, parse
+  errors, and every script in `tests/scripts/`): PASS.
+- Both switches are off unless set; the testing profile lists them commented out. Only `win32_switch.cpp` and the new
+  file changed in the runtime, so the rest of the PGO-built code links as in log109.
+
+**Build:** `0.0.99-log110` (`build-nvpgo`), NRO `eec06e74…`, ELF kept privately. `validate_tcs360_switch.py` passed.
+Not run on hardware. Without the two switches it should behave as log109; its new build ID makes the first session
+fill `xlate.bin` again.

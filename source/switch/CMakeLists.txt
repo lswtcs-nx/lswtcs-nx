@@ -258,7 +258,7 @@ set(RT "${LSW_ROOT}/LSWTCSRuntime/source")
 add_executable(lswtcs
     "${RT}/main.cpp" "${RT}/kernel_stubs.cpp" "${RT}/lsw_xex_image.cpp" "${RT}/gpu_ringbuf.cpp" "${RT}/native_lz2k.cpp" "${RT}/native_reverb.cpp" "${RT}/native_mixer.cpp" "${RT}/audio_offturn.cpp" "${RT}/one_tile.cpp"
     "${RT}/native_crt.cpp" "${RT}/lsw_net_host.cpp"
-    source/platform_switch.cpp source/win32_switch.cpp source/null_backends.cpp source/linux_shim.cpp
+    source/platform_switch.cpp source/win32_switch.cpp source/lsw_input_script.cpp source/null_backends.cpp source/linux_shim.cpp
     source/log_async.cpp source/hw_monitor.cpp source/hw_profiler.cpp
     "${RT}/menu_switch.cpp"
     ${LSW_RENDERER_SOURCES} source/audio_switch.cpp source/save_switch.cpp)
@@ -370,7 +370,7 @@ else()
         if(LSW_PGO STREQUAL "generate")
             set(LSW_NACP_VERSION "0.0.99-log97nvg")   # log97: the instrumented NRO of log96's code (wide counts)
         elseif(LSW_PGO STREQUAL "use")
-            set(LSW_NACP_VERSION "0.0.99-log109")   # log107: the image from default.xex, built-in player settings, file checks; log108: log text; log109: shader translations saved on the SD card
+            set(LSW_NACP_VERSION "0.0.99-log110")   # log107: the image from default.xex, built-in player settings, file checks; log108: log text; log109: shader translations saved on the SD card; log110: scripted input and pad recording
         endif()
     else()
         set(LSW_NACP_VERSION "0.0.99-log93")

@@ -89,5 +89,8 @@ No keys or firmware were needed to boot the homebrew NRO. Without the firmware's
 UTC. Keys and firmware, if they turn out to be needed, come from the owner's own console and never go into the
 repository.
 
-**Open:** the stop about 30 s in. Next: run with the window (without `--no-gui`) to see the screen when it stops, and
+**Open:** the stop about 30 s in. The likeliest cause is memory: during those runs the PC had about 0.7-1.1 GB of its
+15 GB free (another program held 7.5 GB), and the emulator had 3.3 GB in use and the guest's 4 GB to map, so it was
+probably paging. The emulator's log stopping is weak evidence of a freeze, since it logs little once a game runs.
+`emu_run.py` now prints the free memory at start and warns under 6 GB. First retry with the PC free; if it still stops: run with the window (without `--no-gui`) to see the screen when it stops, and
 find whether the emulator itself is stuck (its log stops too) or the NRO waits on the emulated GPU.

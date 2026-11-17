@@ -48,6 +48,23 @@ def newest_log_dir(logs, after):
     return max(dirs, key=lambda d: d.stat().st_mtime) if dirs else None
 
 
+def free_ram_mb():
+    """Free physical memory in MB on Windows, or None. The emulator holds the guest's 4 GB plus its own (about 3.3 GB in
+    use in the first runs), so with little free memory it pages and looks frozen."""
+    if os.name != "nt":
+        return None
+    import ctypes
+
+    class MemoryStatus(ctypes.Structure):
+        _fields_ = [("dwLength", ctypes.c_ulong), ("dwMemoryLoad", ctypes.c_ulong), ("ullTotalPhys", ctypes.c_ulonglong),
+                    ("ullAvailPhys", ctypes.c_ulonglong), ("ullTotalPageFile", ctypes.c_ulonglong),
+                    ("ullAvailPageFile", ctypes.c_ulonglong), ("ullTotalVirtual", ctypes.c_ulonglong),
+                    ("ullAvailVirtual", ctypes.c_ulonglong), ("ullAvailExtendedVirtual", ctypes.c_ulonglong)]
+    st = MemoryStatus()
+    st.dwLength = ctypes.sizeof(MemoryStatus)
+    return st.ullAvailPhys // (1 << 20) if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(st)) else None
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--emu", required=True, help="the emulator's executable")
@@ -85,6 +102,9 @@ def main():
     extra = [f"LSWTCS_INPUTSCRIPT={args.script}", *EMU_ENV, *args.env]
     env_path.write_bytes((profile.rstrip("\n") + "\n# emu_run.py\n" + "\n".join(extra) + "\n").encode())
 
+    free = free_ram_mb()
+    if free is not None:
+        print(f"free memory before start: {free} MB" + ("  (WARNING: under 6000 MB, the emulator may page and stall)" if free < 6000 else ""))
     emu = Path(args.emu).resolve()
     cmd = [str(emu), *[a.replace("{nro}", str(nro)) for a in shlex.split(args.emu_args, posix=False)]]
     print("starting:", " ".join(cmd))

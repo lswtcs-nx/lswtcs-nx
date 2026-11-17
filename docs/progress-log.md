@@ -4258,3 +4258,24 @@ An emulator does not measure the X1: frame times, GPU cost, CPU cost per call an
 **Build:** `0.0.99-log110` (`build-nvpgo`), NRO `eec06e74…`, ELF kept privately. `validate_tcs360_switch.py` passed.
 Not run on hardware. Without the two switches it should behave as log109; its new build ID makes the first session
 fill `xlate.bin` again.
+
+## Emulator runs 1-6: Ryubing 1.3.3, log110
+
+Ryubing 1.3.3 (the Ryujinx fork) in portable mode in `_work/emu/` (not in Git), with the disc's files on its emulated SD
+card. Script `boot_to_hub.txt`, `tools/emu_run.py`.
+- **Without keys or firmware** the homebrew NRO loads (NPDM defaults: cores 0-2, 4 GB memory).
+- **Two missing pieces stopped it:**
+  - the clock read (`pcv` command 3): `--ignore-missing-services`;
+  - the clock monitor's GPU-load ioctl (`nvhost-ctrl-gpu` 0x80044715): `LSWTCS_CLOCKLOG=0`.
+- **Then the boot runs as on the console:** the image from `default.xex` with the console's hash (`eaa95225…`), a
+  preselected user and save storage, EGL and Mesa, audio, the guest threads. Player 1 is the emulator's Pro Controller,
+  and the script starts (`[SCRIPT] started`).
+- **Vulkan backend:** the log stops at the first shader (`[SHADERNEW] swap 0`).
+- **OpenGL backend:** about 104 swaps of the boot logos in about 20 s, with draws, resolves and programs built (`[GLSTALL]`
+  frames of 0.4-0.5 s, mostly resolves and program builds). Then both the NRO's log and the emulator's stop, about 30 s
+  in. The emulator process stays alive, using about 0.4 of a core.
+- **Cause unknown.** The emulator's own log stopping too points at the emulator stalling rather than a guest wait, but
+  this is not shown. The `waitlight` step never saw light frames before the stop.
+
+**Harness defaults now:** the flags above, `--graphics-backend OpenGl`, `--skip-user-profiles-manager`,
+`--ignore-controller-applet`, `--disable-docked-mode`, `--no-gui`, and `LSWTCS_CLOCKLOG=0` in `env.txt`.

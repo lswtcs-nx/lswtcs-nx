@@ -1,7 +1,8 @@
 """Runs the NRO in a Switch emulator with an input script and collects the session's logs.
 
-Not yet run against an emulator: no emulator is installed on this machine. It is written for Ryubing (the Ryujinx fork,
-https://ryujinx.app), which loads a homebrew NRO given on its command line and keeps the emulated SD card in a folder.
+Written for Ryubing 1.3.3 (the Ryujinx fork, https://ryujinx.app) in portable mode: it loads a homebrew NRO given on its
+command line and keeps the emulated SD card in portable/sdcard. First runs (17 November 2026): the NRO boots and draws the
+boot logos, then the emulator stops responding about 30 s in (docs/AUTOMATED_TESTS.md).
 The emulator command is a template (--emu-args), so another emulator only needs another template.
 
 What it does:
@@ -16,7 +17,7 @@ What it does:
 Exit status: 0 when the script finished with "done" and no crash line was seen, 1 otherwise.
 
 Usage:
-  python tools/emu_run.py --emu "C:/path/Ryujinx.exe" --sd "%APPDATA%/Ryujinx/sdcard" \
+  python tools/emu_run.py --emu _work/emu/ryubing-1.3.3/Ryujinx.exe --sd _work/emu/ryubing-1.3.3/portable/sdcard \
       --nro source/switch/build-nvpgo/lswtcs.nro --script boot_to_hub.txt [--timeout 900] [--out private/emu-runs]
 """
 import argparse
@@ -31,6 +32,12 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 GAME_FILES = ["default.xex", "game.DAT", "game1.DAT"]
+# Ryubing 1.3.3 (17 November 2026): headless, handheld, no profile picker or controller screen, unimplemented services
+# answered instead of stopping (pcv), and its OpenGL backend: with Vulkan the NRO stopped at its first shader.
+RYUBING_ARGS = ("--no-gui --disable-docked-mode --skip-user-profiles-manager --ignore-controller-applet "
+                "--ignore-missing-services --graphics-backend OpenGl {nro}")
+# The clock monitor reads the GPU load with an nvhost-ctrl-gpu ioctl (0x80044715) the emulator does not have.
+EMU_ENV = ["LSWTCS_CLOCKLOG=0"]
 CRASH_MARKS = ["[CRASH]", "[FATAL]", "std::bad_alloc", "terminate called", "[EXCEPTION]"]
 
 
@@ -44,7 +51,7 @@ def newest_log_dir(logs, after):
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--emu", required=True, help="the emulator's executable")
-    ap.add_argument("--emu-args", default="{nro}", help="arguments template; {nro} is the NRO's path (Ryubing headless: '--no-gui {nro}')")
+    ap.add_argument("--emu-args", default=RYUBING_ARGS, help="arguments template; {nro} is the NRO's path (default: Ryubing 1.3.3 headless)")
     ap.add_argument("--sd", required=True, help="the emulator's SD card folder")
     ap.add_argument("--nro", required=True)
     ap.add_argument("--script", required=True, help="a file in tests/scripts/ (copied to sdmc:/lswtcs/tests/)")
@@ -75,16 +82,18 @@ def main():
     if had_env and not backup.exists():
         shutil.copyfile(env_path, backup)
     profile = Path(args.profile).read_bytes().decode("utf-8")
-    extra = [f"LSWTCS_INPUTSCRIPT={args.script}", *args.env]
+    extra = [f"LSWTCS_INPUTSCRIPT={args.script}", *EMU_ENV, *args.env]
     env_path.write_bytes((profile.rstrip("\n") + "\n# emu_run.py\n" + "\n".join(extra) + "\n").encode())
 
-    cmd = [args.emu, *[a.replace("{nro}", str(nro)) for a in shlex.split(args.emu_args, posix=False)]]
+    emu = Path(args.emu).resolve()
+    cmd = [str(emu), *[a.replace("{nro}", str(nro)) for a in shlex.split(args.emu_args, posix=False)]]
     print("starting:", " ".join(cmd))
     t0 = time.time()
-    proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     result, reason, log_dir, last_step, crash = "timeout", f"no result in {args.timeout} s", None, "", []
     pos = 0
+    proc = None
     try:
+        proc = subprocess.Popen(cmd, cwd=str(emu.parent), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         while time.time() - t0 < args.timeout:
             time.sleep(2)
             if log_dir is None:
@@ -114,7 +123,7 @@ def main():
                 result, reason = "exited", f"the emulator exited with {proc.returncode}"
                 break
     finally:
-        if proc.poll() is None:   # only the process this run started
+        if proc is not None and proc.poll() is None:   # only the process this run started
             proc.terminate()
             try:
                 proc.wait(15)

@@ -3,9 +3,13 @@
 Scripted input lets a session run without anyone playing: on the console (launch it and leave it) or in a Switch
 emulator on a PC. The same script and the same NRO serve both.
 
-**Status (17 November 2026):** the script player, the recorder and the converter pass their PC check
-(`python tests/input_script_check.py`). None of it has run on a console or in an emulator yet, and no emulator is
-installed. The two scripts in `tests/scripts/` are drafts: the menu presses in `boot_to_hub.txt` are a guess.
+**Status (17 November 2026):**
+- The script player, the recorder and the converter pass their PC check (`python tests/input_script_check.py`).
+- Ryubing 1.3.3 runs the NRO. It boots, builds the image from `default.xex` (same hash as the console), starts Mesa and
+  audio, the script starts, and the boot logos draw. About 30 s in, the emulator stops: its own log and the NRO's both
+  stop being written. Cause unknown.
+- Nothing has run on a console yet. The two scripts in `tests/scripts/` are drafts: the menu presses in
+  `boot_to_hub.txt` are a guess.
 
 ## What an emulator run can and cannot tell
 
@@ -64,12 +68,26 @@ camera) replay best. How far a route holds is not known yet.
 
 `tools/emu_run.py` writes `env.txt` on the emulated SD card (a profile plus the script), copies `tests/scripts/`,
 starts the emulator, follows `stdout.log` until the script ends, a crash line appears or the time runs out, stops the
-emulator it started, copies the logs to `private/emu-runs/` and prints a summary. It is written for Ryubing
-(https://ryujinx.app) and untested.
+emulator it started, copies the logs to `private/emu-runs/` and prints a summary.
 
-Setting one up needs, on the PC that runs it:
-- the emulator, installed with the owner's approval (name, size and folder first; see `AGENTS.md`);
-- keys and firmware dumped from the owner's own console;
-- the disc's files in the emulated SD card's `lswtcs/` folder, as on the console.
+**Setup on the owner's PC:** Ryubing 1.3.3 (`ryujinx-1.3.3-win_x64.zip`, sha256 `baa93f48…`, from the project's own
+download link) unpacked in `_work/emu/ryubing-1.3.3/` with a `portable/` folder, so its settings and the emulated SD
+card (`portable/sdcard/`) stay there. The disc's files are copied to `portable/sdcard/lswtcs/`. `_work/` is not in Git.
 
-None of these go into the repository.
+```
+python tools/emu_run.py --emu _work/emu/ryubing-1.3.3/Ryujinx.exe --sd _work/emu/ryubing-1.3.3/portable/sdcard \
+    --nro source/switch/build-nvpgo/lswtcs.nro --script boot_to_hub.txt --timeout 300
+```
+
+**What the first runs needed** (the harness's defaults now):
+- `--ignore-missing-services`: the CPU clock read (`pcv` command 3) is not implemented and stopped the emulator.
+- `LSWTCS_CLOCKLOG=0`: the clock monitor's GPU-load ioctl (`nvhost-ctrl-gpu` 0x80044715) is not implemented.
+- `--graphics-backend OpenGl`: with Vulkan the NRO stopped at its first shader; with OpenGL it drew about 100 frames.
+- `--skip-user-profiles-manager`, `--ignore-controller-applet`, `--disable-docked-mode`, `--no-gui`.
+
+No keys or firmware were needed to boot the homebrew NRO. Without the firmware's time-zone archive, save times are in
+UTC. Keys and firmware, if they turn out to be needed, come from the owner's own console and never go into the
+repository.
+
+**Open:** the stop about 30 s in. Next: run with the window (without `--no-gui`) to see the screen when it stops, and
+find whether the emulator itself is stuck (its log stops too) or the NRO waits on the emulated GPU.

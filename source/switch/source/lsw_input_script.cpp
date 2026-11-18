@@ -190,6 +190,13 @@ void LswInputScript::begin_step(const LswScriptWorld& w, std::vector<std::string
 
 void LswInputScript::poll(const LswScriptWorld& w, LswPadOut* pad, LswScriptActions* act, std::vector<std::string>* log) {
     if (state_ != State::Running) return;
+    // The player can always take over: a button really pressed on the pad (sticks are left out, they drift) ends the
+    // script, so a menu path that went wrong cannot go on choosing for them.
+    if (pad->buttons || pad->lt > 127 || pad->rt > 127) {
+        if (!t_begin_) t_begin_ = w.now_ms ? w.now_ms : 1;
+        fail(w, "a button was pressed on the pad: the player took over", log);
+        return;
+    }
     if (!t_begin_) {
         t_begin_ = w.now_ms ? w.now_ms : 1;
         char b[128];

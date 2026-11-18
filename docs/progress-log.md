@@ -4311,8 +4311,25 @@ Built while the tester used the PC, with one compile job; no session yet.
 `stdout.log` is quiet for S seconds, writes every guest thread's stack to `threads.txt`. It uses devkitPro's
 `aarch64-none-elf-gdb` and the NRO's load address in Ryubing (0x8500000). Not tried yet.
 
-**Build:** `0.0.99-log111` (`build-nvpgo`), NRO `365667d9…`, ELF kept privately; `validate_tcs360_switch.py` passed. Not run on hardware or in the emulator.
+**Build:** `0.0.99-log111` (`build-nvpgo`), NRO `b594955f…` (with the take-over rule below), ELF kept privately; `validate_tcs360_switch.py` passed. Not run on hardware or in the emulator.
 
 **Pitfalls:** the counters' function needs `visibility("default")` like `lsw_nvc0_dedup_stats` (Mesa builds with hidden visibility); and `private/session-tools/mesa_rebuild.sh` pipes ninja through `tail`, so a failed Mesa compile still exits 0.
 The first build of this log linked the old Mesa (a missing prototype, `-Werror=missing-prototypes`). Check its output
 for `FAILED`.
+
+## Log 111, continued: taking over a script, captures, porting tools
+
+- **Taking over:** a button really pressed on player 1's pad while a script runs ends it, and the pad goes back to the
+  player (`[SCRIPT] failed ... the player took over`). Sticks are left out, since they drift. On the console this is the
+  way out if the menu path goes wrong (for instance a new game over a save). `tests/input_script_check.py` covers it.
+- **`tools/capture_compare.py`:** pairs the captures two sessions took at the same script step and reports the
+  difference and blank-frame shares, with side-by-side images. Checked on made-up images only.
+- **Porting another game** (`docs/PORTING_ANOTHER_GAME.md`):
+  - `tools/port_inventory.py` puts the 349 guest addresses the runtime names into regions of TCS's image: SDK libraries,
+    TT engine, data;
+  - `tools/find_functions.py` finds the named functions in another image by masked signatures. Self-check on TCS: 212
+    of 246 function starts are found only where they are; 34 are ambiguous, all tiny chunks;
+  - `tests/xex_image_check.py --out` builds any game's image from its `default.xex`. On TCS's it gives the known hash
+    `eaa95225…`.
+- **Console test asked for:** docked, the boot by script, then the Gungan route by hand. It is for `[CHAIN]` and
+  `[WORK]`.

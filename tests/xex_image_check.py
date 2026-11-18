@@ -28,9 +28,14 @@ KERNEL_VARIABLE_SLOTS = {0x83290A3C, 0x83290A6C, 0x83290A78, 0x83290A88, 0x83290
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--xex", required=True, type=Path)
-    ap.add_argument("--data-dir", required=True, type=Path)
+    ap.add_argument("--data-dir", type=Path)
+    ap.add_argument("--out", type=Path, help="only build: write the image here (any game's default.xex) and stop. "
+                                             "Note lsw_xex_image.cpp zeroes TCS's .XBMOVIE word 0x83284B04 when it falls "
+                                             "inside the image; check that word for another game")
     ap.add_argument("--clang", default=os.environ.get("CLANGXX", r"C:\Program Files\LLVM\bin\clang++.exe"))
     args = ap.parse_args()
+    if not args.out and not args.data_dir:
+        ap.error("--data-dir (check against TCS's files) or --out (only build)")
 
     aes = ROOT / "XenonRecomp" / "thirdparty" / "tiny-AES-c"
     with tempfile.TemporaryDirectory() as tmp:
@@ -46,6 +51,10 @@ def main():
         out_image, out_header = tmp / "image.out", tmp / "header.out"
         subprocess.run([str(exe), str(args.xex), str(out_image), str(out_header)], check=True)
         built, header = out_image.read_bytes(), out_header.read_bytes()
+    if args.out:
+        args.out.write_bytes(built)
+        print(f"image: {args.out} ({len(built)} bytes at 0x{BASE:08X}), sha256 {hashlib.sha256(built).hexdigest()}")
+        return 0
 
     image = (args.data_dir / "image.bin").read_bytes()
     pristine = (args.data_dir / "pristine.bin").read_bytes()

@@ -63,8 +63,23 @@ How to read `[CHAIN]` on the console: if "wait for previous frame" is long, the 
 "render pickup" is long and "render idle when posted" is low, the render thread was still busy with the previous frame;
 if both are short and frames are still slow, the time is in the game's own work ("game") or in the GPU (`[GLSPAN]`).
 
-`stdout.log` gets `[SCRIPT]` lines: each step with its time, level and frame kind, then `[SCRIPT] done in N s` or
-`[SCRIPT] failed at N s: <reason>`.
+`stdout.log` gets `[SCRIPT]` lines: each step with its time, level, frame kind and load count, then
+`[SCRIPT] done in N s` or `[SCRIPT] failed at N s: <reason>`.
+
+Pressing any button on the real pad while a script runs ends it ("the player took over") and hands the pad back.
+Sticks are not counted, since they drift. On the console this is the way out if a menu path goes wrong.
+
+## Comparing captures
+
+`python tools/capture_compare.py <run A> [<run B>]` pairs the captures two sessions of the same script took at each
+`capture` step. For each step it reports:
+- how much of the picture differs;
+- per image, the share of pixels still at the clear colour and of near-black pixels, which flags a blank or missing
+  frame even without a reference;
+- `compare/step<N>.png`: A | B | the difference.
+
+Two sessions never show the same frame exactly, so only gross faults stand out: black frames, missing geometry, wrong
+colours. Checked on made-up images only so far. It needs Pillow and NumPy on the PC.
 
 ## Recording a route
 

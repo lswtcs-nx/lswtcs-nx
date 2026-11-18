@@ -31,6 +31,7 @@ struct Run {
     int marks = 0, capture = 0;
     LswInputScript s;
     Game g;
+    uint64_t takeover_at = 0;
     bool go(const std::string& text, uint64_t max_ms = 400000, uint64_t poll_ms = 33) {
         if (!s.load(text)) { log.push_back("load error: " + s.error()); return false; }
         for (g.t = 1000; g.t < max_ms && !s.finished(); g.t += poll_ms) {
@@ -39,7 +40,8 @@ struct Run {
             w.light = g.light();
             w.level = g.level.c_str();
             LswPadOut pad;
-            pad.buttons = 0x8000;   // the real pad holds Y: the script must replace it while running
+            pad.lx = 12000;   // the real pad: an idle stick that drifts; the script replaces it while running
+            if (takeover_at && g.t >= takeover_at) pad.buttons = 0x8000;   // the player presses Y
             LswScriptActions act;
             s.poll(w, &pad, &act, &log);
             marks += act.marks;
@@ -109,9 +111,20 @@ int main(int argc, char** argv) {
             if (r.lx[i] == 16383) stick_seen = true;
         }
         CHECK(a_presses == 3, "A pressed %d times, want 3 (repeat)", a_presses);
-        CHECK(y_while_running <= 1, "the real pad's Y leaked %d times", y_while_running);   // the last poll, after done
+        CHECK(y_while_running == 0, "Y seen %d times", y_while_running);
         CHECK(stick_seen, "stick not applied");
+        int drift = 0;
+        for (size_t i = 0; i + 1 < r.lx.size(); ++i) if (r.lx[i] == 12000) ++drift;
+        CHECK(drift == 0, "the real stick leaked %d times while the script ran", drift);
         if (g_fail) r.dump();
+    }
+    {   // A real button press ends the script and hands the pad back.
+        Run r;
+        r.takeover_at = 3000;
+        CHECK(r.go("wait 60000\npress A\ndone\n"), "load");
+        CHECK(r.s.failed() && r.logged("the player took over"), "takeover not reported");
+        CHECK(r.buttons.back() == 0x8000, "pad not handed back: 0x%X", r.buttons.back());
+        CHECK(r.g.t < 4000, "script ran on until %llu ms", (unsigned long long)r.g.t);
     }
     {   // A press lasts at least two polls even when polls are slower than the press.
         Run r;
@@ -125,7 +138,7 @@ int main(int argc, char** argv) {
         CHECK(r.go("waitlevel Kamino 5\ndone\n"), "load");
         CHECK(r.s.failed(), "should have failed");
         CHECK(r.logged("no level 'Kamino'"), "no timeout reason");
-        CHECK(r.buttons.back() == 0x8000, "pad not handed back: 0x%X", r.buttons.back());
+        CHECK(r.lx.back() == 12000, "pad not handed back: stick %d", r.lx.back());
     }
     {   // No 'done': failed at the end of the file.
         Run r;

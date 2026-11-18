@@ -18,7 +18,8 @@
 //   done                             end: "[SCRIPT] done", the pad goes back to the player
 // BUTTONS: 360 names joined by '+': A B X Y START BACK LB RB LT RT LS RS UP DOWN LEFT RIGHT. They are the 360 pad's buttons,
 // so a script does not depend on the face-button layout (LSWTCS_PADLAYOUT).
-// A wait past its timeout (default 180 s) ends the script with "[SCRIPT] failed", as does the end of the file without "done".
+// A wait past its timeout (default 180 s) ends the script with "[SCRIPT] failed", as does the end of the file without "done",
+// and so does any button really pressed on player 1's pad while it runs (the player takes over).
 #pragma once
 #include <cstdint>
 #include <string>

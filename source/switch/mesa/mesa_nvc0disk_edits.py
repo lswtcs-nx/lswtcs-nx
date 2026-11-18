@@ -155,6 +155,7 @@ lsw_disk_start_over(void)
    FILE *f = fopen(lsw_disk_path, "wb");
    if (!f)
       return NULL;
+   setvbuf(f, NULL, _IOFBF, 256 << 10);
    memset(&h, 0, sizeof(h));
    h.magic = LSW_DISK_MAGIC;
    memcpy(h.id, lsw_disk_id, 20);
@@ -307,6 +308,8 @@ lsw_disk_load(void)
             fclose(t);
       }
       lsw_disk_out = why ? lsw_disk_start_over() : fopen(lsw_disk_path, "ab");
+      if (lsw_disk_out && !why)
+         setvbuf(lsw_disk_out, NULL, _IOFBF, 256 << 10);
    }
    printf("[NVC0DISK] %s: %u translations loaded (%u KB, %u not kept) in %.1f ms%s%s%s%s\n", lsw_disk_path, lsw_disk_loaded,
           kb, dropped, (os_time_get_nano() - t0) / 1e6, cut ? "; a cut record at the end dropped" : "",
@@ -362,8 +365,7 @@ lsw_disk_write(const struct lsw_dedup_entry *e)
    pthread_mutex_lock(&lsw_disk_lock);
    if (lsw_disk_out && ftell(lsw_disk_out) + (long)r.bytes <= LSW_DISK_MAX_BYTES &&
        fwrite(&r, sizeof(r), 1, lsw_disk_out) == 1 && fwrite(buf, 1, pay, lsw_disk_out) == pay) {
-      fflush(lsw_disk_out);
-      ++lsw_disk_written;
+      ++lsw_disk_written;   /* reaches the card when the 256 KB buffer fills (log117; a flush per record cost run 119) */
    }
    pthread_mutex_unlock(&lsw_disk_lock);
    FREE(buf);

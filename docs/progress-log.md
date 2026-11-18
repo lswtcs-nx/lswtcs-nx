@@ -4651,3 +4651,39 @@ privately. The disk translations are on by default; the async translation stays 
 **Console test, with the other changes:** two sessions in a row on the same build. The first writes the file, and the
 second's boot queue and area entries should build programs much faster: `[GLPROG]` worker time per program and
 `[GLSTALL]` at the hub's and `Gungan`'s entries, against run 118.
+
+## Run 119: log116's kept nvc0 translations on the console; log117 writes them in blocks
+
+Two handheld sessions in a row on log116 (`run119-log116`, about 180 s each): the hub, `Gungan_A`, `Gungan_B`, the
+hub. No crash. Run 118 (log112, one session, no file) is the reference.
+
+| | Run 118 | Session 1 (writes the file) | Session 2 (uses it) |
+| --- | --- | --- | --- |
+| `[NVC0DISK]` loaded, used, checked, differed | - | 0 | 1348 (5.0 MB in 981 ms), 1347, 57, **0** |
+| Programs built, compile worker time | 1508, 259 s | 1479, 352 s | 1503, **41.6 s** (28 ms each) |
+| Saved-program queue | empty by the end | 27 left at 184 s | **empty at 36 s**, before the hub |
+| `[GLSTALL]` (replays over 250 ms) | 1872, 881, 433 ms | 10, up to 1813 ms | **one, 272 ms** (`Gungan_B`'s entry, textures) |
+| Play frames over 100 ms (`frames.log`) | 20, 7.1 s in all | 24, 9.0 s | **13, 2.6 s** |
+| Longest frame | 1874 ms | 1815 ms | **597 ms** |
+| Frames held for programs | 855 ms | 2645 ms | **99 ms** |
+
+- From the second session on, the nvc0 back end is skipped for nearly every stage. A program costs 28 ms of worker
+  time instead of 170-240 ms, so the whole saved list (about 1450 programs) builds in the first 36 s, and area entries
+  no longer wait for programs. The 57 loaded translations checked against a fresh one were all the same.
+- The writing session paid for it: 352 s of worker time against run 118's 259 s, and 2.6 s of held frames against
+  0.9 s. log116 flushed the file after every record (1332 records, about 4 KB each) on the compile threads.
+
+**Log 117:** the file is written through a 256 KB buffer, which reaches the card when it fills. The game closed from
+the HOME menu loses the buffer's last records, as a cut record already did: the next session drops the cut and makes
+those translations again. Emulator: a session wrote 351 records and was closed by the harness; the next loaded 324,
+dropped the cut, made the other 27 again, and 18 checks gave 0 differences. The emulator cannot show the card's write
+cost, so the console's next first session will tell.
+
+**The known GPU-driver crash, twice in the emulator.** The first run after a rebuild of log114 and the one after
+log117's both ended entering the hub: render thread, `arena_fence` -> `nvc0_flush` -> `pushbuf_flush` ->
+`nouveau_bo_del` -> `nvAddressSpaceUnmap` at address 0. In both, the xlate cache had just been invalidated, so the hub's
+entry built about 99 new translations at once. Neither run had log116's Mesa change. That load may be a way to
+reproduce it.
+
+**Build:** `0.0.99-log117` (`build-nvpgo`, Mesa rebuilt), NRO `a7811116…`, ELF kept privately; on the SD folder for the
+next test.

@@ -158,6 +158,9 @@ def main():
                     else stub + " " + emu_args)
     if args.input_id:
         emu_args = emu_args.replace("{nro}", f"--input-id-1 {args.input_id} {{nro}}")
+    elif args.record and emu_args.startswith("--no-gui") and "--use-main-config" not in emu_args:
+        # The controller set up in the emulator's own window (Options > Settings > Input) is used only with this flag.
+        emu_args = emu_args.replace("--no-gui", "--no-gui --use-main-config", 1)
     cmd = [str(emu), *[a.replace("{nro}", str(nro)) for a in shlex.split(emu_args, posix=False)]]
     if args.record:
         print("recording: play in the emulator's window, then close it to stop")

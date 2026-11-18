@@ -23,6 +23,7 @@ Usage:
 import argparse
 import datetime
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -156,11 +157,36 @@ def main():
         stub = f"--enable-gdb-stub --gdb-stub-port {args.gdb_port}"
         emu_args = (emu_args.replace("--no-gui", "--no-gui " + stub, 1) if emu_args.startswith("--no-gui")
                     else stub + " " + emu_args)
+    if args.record and not args.input_id:
+        # The first connected gamepad. (--use-main-config would take the window's controller, but also its other settings:
+        # with them, ignore_missing_services was false and the emulator died on a missing service, 18 November 2026.)
+        # The listing prints the ids and then goes on running, so read until the list is out and stop the process we started.
+        import tempfile
+        with tempfile.TemporaryFile() as out:
+            lister = subprocess.Popen([str(emu), "--no-gui", "--list-input-ids", "x.nro"], stdout=out,
+                                      stderr=subprocess.STDOUT, cwd=str(emu.parent))
+            text, seen = "", 0
+            for _ in range(60):   # at most 30 s
+                time.sleep(0.5)
+                out.seek(0)
+                text = out.read().decode("utf-8", "replace")
+                if "Input Ids:" in text:
+                    seen += 1
+                if seen >= 3 or lister.poll() is not None:   # 1 s after the list began: all its lines are out
+                    break
+            if lister.poll() is None:
+                lister.terminate()
+                try:
+                    lister.wait(10)
+                except subprocess.TimeoutExpired:
+                    lister.kill()
+        pads = re.findall(r"- (\S+) \(\"(?!All keyboards)([^\"]+)\"\)", text)
+        if not pads:
+            sys.exit("no controller found by the emulator (connect it, or pass --input-id; 0 is the keyboard)")
+        args.input_id = pads[0][0]
+        print(f"controller: {pads[0][1]} ({args.input_id})")
     if args.input_id:
         emu_args = emu_args.replace("{nro}", f"--input-id-1 {args.input_id} {{nro}}")
-    elif args.record and emu_args.startswith("--no-gui") and "--use-main-config" not in emu_args:
-        # The controller set up in the emulator's own window (Options > Settings > Input) is used only with this flag.
-        emu_args = emu_args.replace("--no-gui", "--no-gui --use-main-config", 1)
     cmd = [str(emu), *[a.replace("{nro}", str(nro)) for a in shlex.split(emu_args, posix=False)]]
     if args.record:
         print("recording: play in the emulator's window, then close it to stop")

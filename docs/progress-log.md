@@ -4333,3 +4333,32 @@ for `FAILED`.
     `eaa95225…`.
 - **Console test asked for:** docked, the boot by script, then the Gungan route by hand. It is for `[CHAIN]` and
   `[WORK]`.
+
+## Emulator runs 7-11: log111 in Ryubing, with the PC free
+
+About 9.7 GB free for every run.
+- **`--no-gui` must be the first argument.** With the GDB options in front of it, Ryubing opened its window and loaded
+  nothing (run 7). `emu_run.py` now puts them after it.
+- **Run 8 (10 min): no first guest frame.** After "render thread ready", every thread sat at 0 % CPU. The `[THREADS]`
+  lines kept the log growing, so the stall check never fired; it now ignores timer-driven lines.
+- **Run 9, thread dump (`--gdb-on-stall`; the tool works, with the ELF's names):**
+  - the main thread waited in `gpu_d3d12_present` for the render thread;
+  - the render thread and a worker waited on Mesa's GLSL built-ins mutex;
+  - compile worker 1 (core 0) held that mutex and never ran;
+  - the sampling profiler sat inside `svcSetThreadActivity`, the call that pauses a thread to read its PC.
+  The likely reading is that a thread the profiler paused was never resumed by the emulator.
+- **Run 10, `LSWTCS_HWPROF=0`:** another stall at boot, with every guest thread in `sched_wait_turn`. A lost wake-up
+  on the scheduler's condition variable is suspected but not shown: run 11 was meant to print `g_sched_turn` through
+  GDB, and did not stall.
+- **Run 11 (`LSWTCS_HWPROF=0`, 150 s): the script ran end to end.**
+  - Loads are near instant in the emulator (300-580 MB/s), so the first two load episodes ended by 13 s and the menu
+    presses fell at other moments than on the console. The hub never loaded: after the last press the game sat on
+    light frames for 120 s with the music streaming (`[LOADEP]` every 2 s).
+  - Frames ran at 350-720 ms, most of it in the ring walk.
+  - `[WORK]` printed real counts (53 nvc0 draws, 124 KB vertex and 52 KB pixel program bytes per replay on the menus),
+    so the Mesa counters are linked.
+- **Next:**
+  - `LSWTCS_HWPROF=0` for emulator runs;
+  - a capture after each menu press, to see which screen each press lands on;
+  - waits on screens rather than load counts for the menus;
+  - the scheduler stall, if it comes back, with `--gdb-ex "print g_sched_turn"`.

@@ -37,8 +37,12 @@ GAME_FILES = ["default.xex", "game.DAT", "game1.DAT"]
 RYUBING_ARGS = ("--no-gui --disable-docked-mode --skip-user-profiles-manager --ignore-controller-applet "
                 "--ignore-missing-services --graphics-backend OpenGl {nro}")
 # The clock monitor reads the GPU load with an nvhost-ctrl-gpu ioctl (0x80044715) the emulator does not have.
-EMU_ENV = ["LSWTCS_CLOCKLOG=0"]
+# The sampling profiler (LSWTCS_HWPROF) pauses threads with svcSetThreadActivity; in emulator run 9 a paused thread
+# never came back and the boot deadlocked.
+EMU_ENV = ["LSWTCS_CLOCKLOG=0", "LSWTCS_HWPROF=0"]
 GDB = Path("C:/devkitPro/msys2/opt/devkitpro/devkitA64/bin/aarch64-none-elf-gdb.exe")
+QUIET_OK = ("[THREADS]", "[CLOCK]", "[HEAP]", "[HEAPGL]", "[CPULOAD]", "[AUDIO]", "[AUDIOQ]", "[AUDIOOFF]", "[OFFCORE]",
+            "[GLSTEP]", "[GLPROG]", "[NVC0DEDUP]", "[LONGWAIT]", "[KWAITLONG]")
 CRASH_MARKS = ["[CRASH]", "[FATAL]", "std::bad_alloc", "terminate called", "[EXCEPTION]"]
 
 
@@ -66,11 +70,14 @@ def free_ram_mb():
     return st.ullAvailPhys // (1 << 20) if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(st)) else None
 
 
+GDB_EXTRA = []   # --gdb-ex: more commands after the stacks (e.g. "print g_sched_turn")
+
+
 def gdb_dump(gdb, elf, port, base, out):
     """Attaches to the emulator's GDB stub and writes every guest thread's stack to `out`, then detaches (the emulator
     keeps running). The NRO is position-independent and loaded at `base` (Ryubing logs it: "Loading image 0 at ...")."""
     cmds = ["set pagination off", "set confirm off", "set width 0", f"add-symbol-file {elf} -o {base}",
-            f"target remote 127.0.0.1:{port}", "info threads", "thread apply all bt 12", "detach"]
+            f"target remote 127.0.0.1:{port}", "info threads", "thread apply all bt 12", *GDB_EXTRA, "detach"]
     argv = [str(gdb), "-nx", "-batch", *sum((["-ex", c] for c in cmds), [])]
     try:
         r = subprocess.run(argv, capture_output=True, text=True, timeout=180)
@@ -99,7 +106,9 @@ def main():
     ap.add_argument("--gdb", default=str(GDB))
     ap.add_argument("--gdb-port", type=int, default=55555)
     ap.add_argument("--nro-base", default="0x8500000", help="where the emulator loads the NRO (Ryubing 1.3.3: 0x8500000)")
+    ap.add_argument("--gdb-ex", action="append", default=[], help="a GDB command to run after the stacks (repeatable)")
     args = ap.parse_args()
+    GDB_EXTRA.extend(args.gdb_ex)
     if args.gdb_on_stall and not args.elf:
         sys.exit("--gdb-on-stall needs --elf")
 
@@ -133,7 +142,10 @@ def main():
     emu = Path(args.emu).resolve()
     emu_args = args.emu_args
     if args.gdb_on_stall and "--enable-gdb-stub" not in emu_args:
-        emu_args = f"--enable-gdb-stub --gdb-stub-port {args.gdb_port} " + emu_args
+        # Ryubing takes headless mode only when --no-gui is the first argument (with it later, the window opens).
+        stub = f"--enable-gdb-stub --gdb-stub-port {args.gdb_port}"
+        emu_args = (emu_args.replace("--no-gui", "--no-gui " + stub, 1) if emu_args.startswith("--no-gui")
+                    else stub + " " + emu_args)
     cmd = [str(emu), *[a.replace("{nro}", str(nro)) for a in shlex.split(emu_args, posix=False)]]
     print("starting:", " ".join(cmd))
     t0 = time.time()
@@ -154,9 +166,10 @@ def main():
                     chunk = f.read()
                 cut = chunk.rfind(b"\n") + 1   # whole lines only
                 pos += cut
-                if cut:
-                    last_growth = time.time()
                 for raw in chunk[:cut].decode("utf-8", "replace").splitlines():
+                    # Timer-driven lines keep coming while the game is stuck: they do not count as progress.
+                    if not raw.startswith(QUIET_OK):
+                        last_growth = time.time()
                     if raw.startswith("[SCRIPT] line"):
                         last_step = raw
                         print(raw)

@@ -151,6 +151,9 @@ in [docs/progress-log.md](docs/progress-log.md).
   Fetch constants come from one block per draw.
 - Mesa: unchanged constant-buffer binds are skipped, quads are drawn as indexed triangles instead of through a
   geometry shader, and 2x MSAA surfaces render at one sample per pixel.
+- A colour resolve that copies a whole render target and then clears it hands the target's storage to the
+  destination instead of copying (since v0.4.0): about 1.3 ms less GPU per heavy handheld frame. The destination
+  samples it through a texture view that sees only its rows (a small Mesa change), so no shader changes.
 - The handheld GPU runs at 460.8 MHz, Nintendo's official handheld configuration, not an overclock
   (`LSWTCS_GPUBOOST=0` keeps 307.2 MHz).
 
@@ -158,7 +161,8 @@ in [docs/progress-log.md](docs/progress-log.md).
 - Every shader program the game used is saved on the SD card. Later boots prepare the list in the background, the
   current level's programs first.
 - Shader translations are saved too (`sdmc:/lswtcs/glprogs2/xlate.bin`), so from the second session the hub's long
-  first frames are gone; the first few loaded are re-translated and compared.
+  first frames are gone; the first few loaded are re-translated and compared. Since v0.4.0 the file is tied to a hash
+  of the translator's own sources, not the build, so app updates that leave the translator alone keep it.
 - Mesa reuses the nvc0 translation of an identical shader stage, which cut the cost per program by about 45 %; a
   sample is re-translated and compared.
 - Those nvc0 translations are also kept on the SD card (`sdmc:/lswtcs/mesacache/lsw_nvc0.bin`, since v0.3.0), so from

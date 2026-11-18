@@ -3,6 +3,17 @@
 What changes for players in each release. The engineering record behind every change is in
 [docs/progress-log.md](docs/progress-log.md).
 
+## v0.4.0 (18 November 2026)
+
+**Performance**
+- Faster heavy scenes in handheld. At the end of each frame the game copies the finished image out of the render
+  target; when it then clears that target, the copy is now skipped and the image is handed over instead. In the test
+  session the GPU time of heavy frames fell from 26.7 to 25.4 ms (median, about 5 %), and the heaviest areas went from
+  32.8 to 34.1 FPS. `LSWTCS_GLHANDOVER=0` in `env.txt` turns it off.
+- Saved shader translations (`sdmc:/lswtcs/glprogs2/xlate.bin`) now survive app updates that do not change the shader
+  translator, so a new version no longer brings back the first-session stutters for them. This update itself starts
+  the file over once.
+
 ## v0.3.0 (18 November 2026)
 
 **Performance**

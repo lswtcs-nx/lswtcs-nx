@@ -37,7 +37,8 @@ compiler on core 3 prepares the saved list in the background; the queue empties 
 
 Since log109 the translations themselves are saved in `sdmc:/lswtcs/glprogs2/xlate.bin`. Run 117 loaded 175 in
 184 ms at boot and the hub's longest frame fell from 976 ms to 391 ms; what remains is the area load (textures and
-programs). The first session of each build still translates, about 21 ms a program, mostly in SPIRV-Cross and the
+programs). Since log122 (v0.4.0) the file is tied to the translator's sources, not the build, so only a build that
+changes the translator translates again, about 21 ms a program, mostly in SPIRV-Cross and the
 GLSL clean-up. Open: one 1.6 s wait in Mesa at the hub's first frame in run 116, seen once.
 
 Since log116 (release v0.3.0), nouveau's own translation of each shader stage is kept in `sdmc:/lswtcs/mesacache/lsw_nvc0.bin`, across

@@ -317,6 +317,34 @@ bool xlate_cross(XlateJob& j) {
         glsl.erase(at + 1, 10);   // "invariant "
     }
   }
+  // log121 (LSWTCS_GLVSPOSINV=1, off by default): vertex shaders keep invariance only where it is needed, on the position.
+  // Xenia marks every vertex-shader value precise and every output invariant; gl_Position itself is not declared invariant.
+  // Here `precise` and the outputs' `invariant` go, and gl_Position is declared invariant after its gl_PerVertex block, so
+  // Mesa's GLSL compiler marks precise exactly what flows into the position (propagate_invariance) and lets the rest
+  // (texture coordinates, colours) be optimised and fused.
+  if (j.stage == kLswGlVertex) {
+    static const bool pos_only = [] { const char* e = getenv("LSWTCS_GLVSPOSINV"); return e && e[0] == '1'; }();
+    const std::string block = "out gl_PerVertex\n{\n    vec4 gl_Position;\n";
+    const size_t b = glsl.find(block);
+    // The global statement after the block, not a qualifier on its member: Mesa keeps no invariant flag on block members
+    // (glsl_struct_field), so a member qualifier would be dropped silently and leave the position unprotected.
+    const size_t end = b == std::string::npos ? b : glsl.find("};\n", b);
+    if (pos_only && end != std::string::npos) {
+      glsl.insert(end + 3, "invariant gl_Position;\n");
+      for (size_t at = glsl.find(" invariant out "); at != std::string::npos; at = glsl.find(" invariant out ", at))
+        glsl.erase(at + 1, 10);   // "invariant "
+      std::string o;
+      o.reserve(glsl.size());
+      for (size_t i = 0; i < glsl.size();) {
+        if (glsl.compare(i, 8, "precise ") == 0 && (i == 0 || !(isalnum(uint8_t(glsl[i - 1])) || glsl[i - 1] == '_'))) {
+          i += 8;
+          continue;
+        }
+        o += glsl[i++];
+      }
+      glsl.swap(o);
+    }
+  }
   glsl = lsw_glsl_fold_fetch(glsl);
   // This translation's own bindings. The shader's (GetTextureBindingsAfterTranslation) are the first translation's,
   // and kLswTexturesUnsigned changes them: a shader drawn with unsigned and later with signed textures, or the

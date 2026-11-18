@@ -4807,3 +4807,25 @@ is not 22 % less time: texture reads do not shrink, and the scene's main shader 
 between a few % and about 15 % of GPU time, if the ALU share is as run 56 put it. Measure with `[GLGPU]` medians.
 
 **Build:** `0.0.99-log120` (`build-nvpgo`), NRO `f965a1d0…`, ELF kept privately; on the SD folder (setting off).
+
+## Log 121: vertex-shader invariance on the position only (`LSWTCS_GLVSPOSINV=1`), vertex code -3 %
+
+Xenia marks every vertex-shader value `precise` and every output `invariant`; `gl_Position` itself is not declared
+invariant. With `LSWTCS_GLVSPOSINV=1`, vertex shaders lose `precise` and their outputs' `invariant`, and an
+`invariant gl_Position;` statement follows the `gl_PerVertex` block. Mesa's `propagate_invariance` then marks precise
+whatever flows into the position.
+
+**A trap found on the way.** The first version put `invariant` on the block's member (`invariant vec4 gl_Position;`).
+Mesa keeps no invariant flag on block members (`glsl_struct_field`), so it was dropped without an error, and the
+position lost its protection. That version showed vertex code -18.9 %, nearly all of it from the unprotected position
+(passes could then compute slightly different depths: z-fighting). The global statement is the form Mesa applies
+(`ast_to_hir.cpp`, the `invariant` redeclaration).
+
+**Emulator, warm, with `LSWTCS_GLPSINVARIANT=0` as well (two runs):** vertex code per draw -3.2 % in `Gungan_B`, -0.1
+to -2.0 % in the hub. Pixel code -18.4 / -21.1 % in `Gungan_B`, -0.8 / -18.2 % in the hub (the first run rebuilt its
+programs during the route, which shifts the windows). Same game, 0 compile failures. The gain is small because Xenia
+keeps registers in arrays, and invariance propagates per variable.
+
+**Build:** `0.0.99-log121` (`build-nvpgo`), NRO on the SD folder, ELF kept privately. Both settings are off by
+default. The console test to ask for: `LSWTCS_GLPSINVARIANT=0` against off, `[GLGPU]` medians and heavy-frame FPS;
+`LSWTCS_GLVSPOSINV=1` only if the first pays, and with a look for flicker on overlapping surfaces.

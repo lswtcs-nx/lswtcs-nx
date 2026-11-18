@@ -97,6 +97,22 @@ start (title, user selection) and add `mark`, `log` or `capture` where wanted, t
 Long routes with combat and jumps may drift from the recording; short, fixed scenes (stand in a heavy area, turn the
 camera) replay best. How far a route holds is not known yet.
 
+## Moving a save between the console and the emulator
+
+Save managers do not list the port's save (its ID, `054C535443530000`, is not an installed title), so the NRO copies it
+itself (log112):
+- `LSWTCS_SAVEEXPORT=1`: at launch, the selected user's save is copied to
+  `sdmc:/lswtcs/save_export/<date>_<user>/`. It only reads the save: nothing in it is changed, deleted or committed.
+- `LSWTCS_SAVEIMPORT=<folder>` (a bare name is under `sdmc:/lswtcs/save_export/`): at launch, the folder's files are
+  copied into the save only if the save has no files at all, then committed. A save with anything in it is never
+  replaced.
+
+Checked in the emulator on 18 November 2026:
+- a test folder was imported into the empty save, then exported back identical, byte for byte;
+- a second import over the now non-empty save was refused.
+
+The emulator keeps the port's save in `portable/bis/user/save/0000000000000001/0/`.
+
 ## Recording a route in the emulator
 
 Menu timing differs between the console and the emulator. In the emulator, the legal screen and the opening crawl ran

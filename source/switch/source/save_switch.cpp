@@ -1,8 +1,15 @@
 // Native account save storage. Runs before guest threads, GPU or audio startup.
 #include <switch.h>
 #include "lsw_save_platform.h"
+#include <cctype>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <ctime>
+#include <dirent.h>
+#include <string>
+#include <sys/stat.h>
+#include <vector>
 
 namespace {
 AccountUid user{};
@@ -19,6 +26,116 @@ bool fail(const char* where, Result rc) {
 }
 
 extern "C" void lsw_boot_mark(const char* what);   // main.cpp: [BOOT] milliseconds since the process started
+
+// log112: copying a save to and from the SD card, to move it between the console and a PC emulator.
+//   LSWTCS_SAVEEXPORT=1       at boot, copy the selected user's save to sdmc:/lswtcs/save_export/<date>_<user>/. It only reads
+//                             the save: nothing in it is changed, deleted or committed.
+//   LSWTCS_SAVEIMPORT=<dir>   at boot, copy the files of <dir> (a bare name is under sdmc:/lswtcs/save_export/) into the save,
+//                             only when the save has no files at all; a save with anything in it is left alone. Then commit.
+// Both off unless set. [SAVECOPY] lines report every file and the result.
+namespace {
+struct CopyStats { unsigned files = 0, dirs = 0, failed = 0; unsigned long long bytes = 0; };
+
+bool copy_file(const std::string& from, const std::string& to, CopyStats& st) {
+    FILE* in = fopen(from.c_str(), "rb");
+    if (!in) { ++st.failed; printf("[SAVECOPY] cannot read %s\n", from.c_str()); return false; }
+    FILE* out = fopen(to.c_str(), "wb");
+    if (!out) { fclose(in); ++st.failed; printf("[SAVECOPY] cannot write %s\n", to.c_str()); return false; }
+    std::vector<char> buf(64 * 1024);
+    unsigned long long n = 0;
+    bool ok = true;
+    for (size_t k; (k = fread(buf.data(), 1, buf.size(), in)) > 0;) {
+        if (fwrite(buf.data(), 1, k, out) != k) { ok = false; break; }
+        n += k;
+    }
+    if (ferror(in)) ok = false;
+    fclose(in);
+    if (fclose(out) != 0) ok = false;
+    if (!ok) { ++st.failed; printf("[SAVECOPY] copy failed: %s -> %s\n", from.c_str(), to.c_str()); return false; }
+    ++st.files;
+    st.bytes += n;
+    printf("[SAVECOPY]   %s (%llu bytes)\n", to.c_str(), n);
+    return true;
+}
+
+// Copies every file and folder under `from` into `to` (which must exist). Reads `from` only.
+void copy_tree(const std::string& from, const std::string& to, CopyStats& st, int depth = 0) {
+    if (depth > 16) return;
+    DIR* d = opendir(from.c_str());
+    if (!d) { ++st.failed; printf("[SAVECOPY] cannot open folder %s\n", from.c_str()); return; }
+    std::vector<std::pair<std::string, bool>> entries;
+    while (dirent* e = readdir(d)) {
+        if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
+        std::string src = from + (from.back() == '/' ? "" : "/") + e->d_name;
+        struct stat s{};
+        const bool dir = stat(src.c_str(), &s) == 0 && S_ISDIR(s.st_mode);
+        entries.emplace_back(e->d_name, dir);
+    }
+    closedir(d);
+    for (auto& [name, dir] : entries) {
+        const std::string src = from + (from.back() == '/' ? "" : "/") + name, dst = to + (to.back() == '/' ? "" : "/") + name;
+        if (dir) {
+            mkdir(dst.c_str(), 0777);
+            ++st.dirs;
+            copy_tree(src, dst, st, depth + 1);
+        } else {
+            copy_file(src, dst, st);
+        }
+    }
+}
+
+bool folder_empty(const std::string& path) {
+    DIR* d = opendir(path.c_str());
+    if (!d) return false;
+    bool empty = true;
+    while (dirent* e = readdir(d))
+        if (strcmp(e->d_name, ".") && strcmp(e->d_name, "..")) { empty = false; break; }
+    closedir(d);
+    return empty;
+}
+
+void save_export() {
+    const char* e = getenv("LSWTCS_SAVEEXPORT");
+    if (!e || e[0] != '1') return;
+    char stamp[32] = "undated";
+    const time_t now = time(nullptr);
+    if (const tm* t = localtime(&now); t && t->tm_year >= 120) strftime(stamp, sizeof stamp, "%Y-%m-%d_%H-%M-%S", t);
+    std::string who;
+    for (const char* p = nickname; *p; ++p) who += (isalnum(static_cast<unsigned char>(*p)) || *p == '-' || *p == '_') ? *p : '_';
+    mkdir("sdmc:/lswtcs/save_export", 0777);
+    const std::string dst = std::string("sdmc:/lswtcs/save_export/") + stamp + "_" + (who.empty() ? "user" : who);
+    if (mkdir(dst.c_str(), 0777) != 0) { printf("[SAVECOPY] export: cannot make %s; the save was not touched\n", dst.c_str()); return; }
+    CopyStats st;
+    printf("[SAVECOPY] export: %s -> %s (the save is only read)\n", lsw_save::root, dst.c_str());
+    copy_tree(lsw_save::root, dst, st);
+    printf("[SAVECOPY] export %s: %u files, %u folders, %llu bytes, %u failed\n", st.failed ? "INCOMPLETE" : "done", st.files,
+           st.dirs, st.bytes, st.failed);
+    fflush(stdout);
+}
+
+void save_import() {
+    const char* e = getenv("LSWTCS_SAVEIMPORT");
+    if (!e || !*e || !strcmp(e, "0")) return;
+    std::string src = e;
+    if (src.find(':') == std::string::npos) src = "sdmc:/lswtcs/save_export/" + src;
+    if (!folder_empty(lsw_save::root)) {
+        printf("[SAVECOPY] import skipped: this user's save already has files, and an import never replaces a save\n");
+        fflush(stdout);
+        return;
+    }
+    DIR* d = opendir(src.c_str());
+    if (!d) { printf("[SAVECOPY] import: no folder %s\n", src.c_str()); fflush(stdout); return; }
+    closedir(d);
+    CopyStats st;
+    printf("[SAVECOPY] import: %s -> %s (the save was empty)\n", src.c_str(), lsw_save::root);
+    copy_tree(src, lsw_save::root, st);
+    const Result rc = fsdevCommitDevice(lsw_save::mount_name);
+    printf("[SAVECOPY] import %s: %u files, %u folders, %llu bytes, %u failed; commit 0x%X\n",
+           st.failed ? "INCOMPLETE" : "done", st.files, st.dirs, st.bytes, st.failed, rc);
+    fflush(stdout);
+}
+}  // namespace
+
 extern "C" bool lsw_save_init() {
     if (mounted) return true;
     user = {};
@@ -82,6 +199,8 @@ extern "C" bool lsw_save_init() {
     last_error = 0;
     printf("[SAVEFS] native account storage ready; application=%016llX; selected user '%s'\n",
            static_cast<unsigned long long>(lsw_save::application_id), nickname);
+    save_export();   // log112: before the game opens anything, so the copy is the save as it was at launch
+    save_import();
     return true;
 }
 

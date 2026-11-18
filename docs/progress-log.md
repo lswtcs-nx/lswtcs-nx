@@ -4375,3 +4375,25 @@ About 9.7 GB free for every run.
   emulator's window with `LSWTCS_INPUTRECORD=1` and converts the recording when the window is closed. Not tried yet.
 - The captures show only the left quarter of the picture: the emulator draws the frame wrongly, so captures there are
   not yet a visual check.
+
+## Log 112: copying a save to and from the SD card
+
+**Why:** to test in the emulator from the tester's own progress. Save managers such as JKSV do not list the port's
+save, since its ID is not an installed title.
+
+**Change** (`source/switch/source/save_switch.cpp`, right after the save is mounted, before the game opens anything):
+- `LSWTCS_SAVEEXPORT=1` copies the selected user's save to `sdmc:/lswtcs/save_export/<date>_<user>/`. It only reads the
+  save: no write, delete or commit on it.
+- `LSWTCS_SAVEIMPORT=<folder>` copies a folder into the save only when the save has no files, then commits. An import
+  never replaces a save.
+- `[SAVECOPY]` lines list every file and the totals. Both are off unless set.
+
+**Emulator check:**
+- import of a test folder (2 files, 70,011 bytes) into the empty save, commit 0x0;
+- export back, `cmp` identical;
+- a second import refused ("already has files").
+The test files were then removed from the emulator's save. The emulator keeps the port's save in
+`portable/bis/user/save/0000000000000001/0/`.
+
+**Build:** `0.0.99-log112` (`build-nvpgo`), NRO `d6ec1d35…`, ELF kept privately; `validate_tcs360_switch.py` passed.
+The staged `env.txt` has `LSWTCS_SAVEEXPORT=1` for one launch, next to log111's test script.

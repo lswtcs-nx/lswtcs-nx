@@ -1,0 +1,3 @@
+# Boots and stops (for boot-time features such as the save copy).
+waitlight 1000 120
+done

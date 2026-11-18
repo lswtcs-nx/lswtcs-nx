@@ -126,7 +126,17 @@ python tools/emu_run.py --emu _work/emu/ryubing-1.3.3/Ryujinx.exe --sd _work/emu
 ```
 
 The window opens; play, then close it. The pad changes become `tests/scripts/to_hub.txt`, which replays with
-`--script to_hub.txt`. Not tried yet.
+`--script to_hub.txt`.
+
+A route replayed by the clock drifts: the tester's emulator route reached the hub but never entered `Gungan_A`. For
+routes inside levels, record and replay frame by frame with a fixed frame time (log113), from the same save each time:
+
+```
+python tools/emu_run.py ... --record emu_gungan --fixed-dt --fresh-save console_gabriel
+python tools/padrec_to_script.py <run>/stdout.log --frames --from-level Map -o tests/scripts/emu_gungan_frames.txt
+```
+
+Then put `emu_to_hub.txt`'s boot and menu steps in front, and replay with `--fixed-dt --fresh-save console_gabriel`.
 
 **Captures in the emulator are not faithful yet:** the probe's captures show only the left quarter of the picture.
 The emulator draws the port's frame wrongly, so comparing captures there flags this, not the build. This was not

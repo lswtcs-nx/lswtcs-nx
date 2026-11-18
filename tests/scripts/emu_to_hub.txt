@@ -1,0 +1,25 @@
+# Emulator: boot to the hub on an imported save. The title comes about 30 s in there (emulator run 12), then the
+# tester's own menu path from the console recording (tests/scripts/console_gungan.txt): START, DOWN + A, A, UP + A, A.
+log emu_to_hub
+waitlight 2000 120
+wait 30000                  # legal screen and opening crawl
+capture
+press START
+wait 1500
+press DOWN
+wait 600
+press A
+wait 1500
+press A
+wait 1000
+press UP
+wait 600
+press A
+wait 4500
+capture
+press A
+waitlevel Map 90
+waitplay 3000 120
+capture
+wait 5000
+done

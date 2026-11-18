@@ -4397,3 +4397,41 @@ The test files were then removed from the emulator's save. The emulator keeps th
 
 **Build:** `0.0.99-log112` (`build-nvpgo`), NRO `d6ec1d35…`, ELF kept privately; `validate_tcs360_switch.py` passed.
 The staged `env.txt` has `LSWTCS_SAVEEXPORT=1` for one launch, next to log111's test script.
+
+## Run 118: log112, handheld, the save copied out; emulator run 13 boots to the hub on it
+
+Run 118 (`run118-log112`, about 180 s, handheld, GPU 460.8): boot, the hub, `Gungan_A`, `Gungan_B`, the hub.
+- **The save copy worked.** `[SAVECOPY] export done: 5 files, 2 folders, 32692 bytes, 0 failed`, before the game opened
+  anything; the save was only read. The script did not run (`sdmc:/lswtcs/tests/` was not copied), so the tester played
+  by hand.
+- **The pad was recorded from boot:** 962 changes, now `tests/scripts/console_gungan.txt`. It confirms the menu path of
+  `boot_to_hub.txt`: START, DOWN + A, A, UP + A, A. Its start waits for the title's load instead of the recorded 20 s.
+- **`[CHAIN]` in handheld heavy frames** (four windows of 60, 1300+ draws, ms p50):
+
+  | Step | ms |
+  | --- | --- |
+  | Swap to swap | 30-32 (one window 37.7) |
+  | Game work (posted to next `VdSwap`) | 19-21 (24 in the first window) |
+  | `VdSwap`'s walk | 8-9 |
+  | Wait for the previous frame | 0-4.6 |
+  | Render pickup | 0 |
+  | Replay | 19.6-22.9 |
+  | Present and swap | 2-10 |
+
+  The render thread was idle when 57-60 of each 60 frames were posted. The GPU draws 28-32 ms with no idle gap
+  (`[GLSPAN]`), so in handheld the GPU is still the limit. The main thread's side (game work plus `VdSwap`'s walk) is
+  as long, though, so a GPU saving alone would expose the CPU side at once.
+  - New fact: about 9 ms of every heavy frame is the main thread in `VdSwap` waiting for, or doing, the ring walk. That
+    is the first link to check docked.
+- **CPU per guest call:** 131 ns (90 %: 129-134), as in runs 111-112.
+- **`[WORK]` per level (handheld):** the hub 341 draws, 1362 KB vertex and 528 KB pixel program bytes, 66k guest calls
+  per replay; `Gungan_B` 1454 draws, 6496 KB and 1445 KB, 121k calls.
+
+**Emulator run 13 (`emu_to_hub.txt`, 96 s, no one at the pad):**
+- the save was imported (`[SAVECOPY] import done: 5 files ... commit 0x0`);
+- the title came after about 30 s, the tester's menu path loaded it, and the run reached `Map\Map` and play frames;
+- the hub capture shows Obi-Wan and the HUD, in the left quarter of the picture as before;
+- `[WORK]` in the hub: 357 draws, 1371 KB vertex and 884 KB pixel program bytes, 73k guest calls per replay. That is
+  near the console's 341 / 1362 / 528 / 66k, at another place in the hub.
+
+So the emulator now reaches the hub from the tester's save without anyone playing.

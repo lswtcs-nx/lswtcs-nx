@@ -113,6 +113,12 @@ def main():
     ap.add_argument("--gdb-port", type=int, default=55555)
     ap.add_argument("--nro-base", default="0x8500000", help="where the emulator loads the NRO (Ryubing 1.3.3: 0x8500000)")
     ap.add_argument("--gdb-ex", action="append", default=[], help="a GDB command to run after the stacks (repeatable)")
+    ap.add_argument("--fresh-save", metavar="FOLDER",
+                    help="start from this save every run: empty the EMULATOR's save of the port (portable/bis/user/save/"
+                         "<id>/0 and 1, beside the SD folder) and import FOLDER (under sdmc:/lswtcs/save_export/) at boot. "
+                         "Only the emulator's own files are touched")
+    ap.add_argument("--save-id", default="0000000000000001", help="the emulator's save folder of the port (Ryubing: "
+                                                                   "0000000000000001, emulator run 13)")
     args = ap.parse_args()
     GDB_EXTRA.extend(args.gdb_ex)
     if bool(args.script) == bool(args.record):
@@ -134,6 +140,20 @@ def main():
     nro = Path(args.nro).resolve()
     if not nro.exists():
         sys.exit(f"no NRO {nro}")
+
+    if args.fresh_save:
+        if not (game / "save_export" / args.fresh_save).is_dir():
+            sys.exit(f"no save folder {game / 'save_export' / args.fresh_save}")
+        save_dir = sd.parent / "bis" / "user" / "save" / args.save_id   # portable/sdcard -> portable/bis/user/save/<id>
+        if not save_dir.is_dir():
+            sys.exit(f"no emulator save folder {save_dir} (boot the NRO once in the emulator first)")
+        for sub in ("0", "1"):
+            d = save_dir / sub
+            if d.is_dir():
+                for child in d.iterdir():
+                    shutil.rmtree(child) if child.is_dir() else child.unlink()
+        args.env.append(f"LSWTCS_SAVEIMPORT={args.fresh_save}")
+        print(f"emulator save emptied ({save_dir}); {args.fresh_save} is imported at boot")
 
     # Settings and scripts on the emulated card.
     (game / "tests").mkdir(exist_ok=True)

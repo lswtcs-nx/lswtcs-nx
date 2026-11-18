@@ -20,7 +20,7 @@ python tools/emu_test.py --baseline main --env LSWTCS_X=1    # an A/B switch, wi
 ```
 
 It runs `emu_run.py` with the quick route (`tests/scripts/emu_gungan_quick.txt`: menus, hub, `Gungan_A`, the first
-1500 frames of `Gungan_B`), `--fixed-dt`, `--fresh-save console_gabriel`, `profiles/emulator.env` and a GDB dump on a
+1500 frames of `Gungan_B`), `--fixed-dt`, `--fresh-save console_save`, `profiles/emulator.env` and a GDB dump on a
 stall. `--route full` replays the whole route back to the hub (about 6 minutes). Baselines are kept in
 `private/emu-baselines/`. `--compare <run folder>` reports on a finished run without running again.
 
@@ -185,11 +185,11 @@ A route replayed by the clock drifts: the tester's emulator route reached the hu
 routes inside levels, record and replay frame by frame with a fixed frame time (log113), from the same save each time:
 
 ```
-python tools/emu_run.py ... --record emu_gungan --fixed-dt --fresh-save console_gabriel
+python tools/emu_run.py ... --record emu_gungan --fixed-dt --fresh-save console_save
 python tools/padrec_to_script.py <run>/stdout.log --frames --from-level Map -o tests/scripts/emu_gungan_frames.txt
 ```
 
-Then put `emu_to_hub.txt`'s boot and menu steps in front, and replay with `--fixed-dt --fresh-save console_gabriel`.
+Then put `emu_to_hub.txt`'s boot and menu steps in front, and replay with `--fixed-dt --fresh-save console_save`.
 
 **Captures in the emulator are not faithful yet:** the probe's captures show only the left quarter of the picture.
 The emulator draws the port's frame wrongly, so comparing captures there flags this, not the build. This was not

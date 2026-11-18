@@ -3,6 +3,17 @@
 What changes for players in each release. The engineering record behind every change is in
 [docs/progress-log.md](docs/progress-log.md).
 
+## v0.3.0 (18 November 2026)
+
+**Performance**
+- Far fewer stutters from the second session on. The GPU driver's own compiled shaders are now kept on the SD card too
+  (`sdmc:/lswtcs/mesacache/lsw_nvc0.bin`), so each shader program builds in about 28 ms instead of 170-240 ms. In the
+  test session the saved shader list was ready 36 s after boot, the waits for shaders at area entries fell from
+  0.9-2.6 s in all to 0.1 s, and the longest frame from 1.9 s to 0.6 s.
+- The file survives updates of the app (it only depends on the GPU driver), so a new version does not start it over.
+  The first session after a clean install builds it, and the first few loaded each session are checked against a
+  fresh compile.
+
 ## v0.2.0 (16 November 2026)
 
 **Performance**

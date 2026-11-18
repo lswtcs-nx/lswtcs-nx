@@ -40,7 +40,7 @@ Since log109 the translations themselves are saved in `sdmc:/lswtcs/glprogs2/xla
 programs). The first session of each build still translates, about 21 ms a program, mostly in SPIRV-Cross and the
 GLSL clean-up. Open: one 1.6 s wait in Mesa at the hub's first frame in run 116, seen once.
 
-Since log116, nouveau's own translation of each shader stage is kept in `sdmc:/lswtcs/mesacache/lsw_nvc0.bin`, across
+Since log116 (release v0.3.0), nouveau's own translation of each shader stage is kept in `sdmc:/lswtcs/mesacache/lsw_nvc0.bin`, across
 builds of the port. Run 119's second session loaded 1348 of them: programs built in 28 ms of worker time instead of
 170-240, the saved list was done 36 s after boot, and frames held for programs fell from 0.9-2.6 s to 0.1 s. The session
 that first writes the file pays extra (log117 writes it in blocks to cut that). `LSWTCS_GLXLATEASYNC=1` (off by

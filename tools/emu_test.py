@@ -3,7 +3,7 @@
 Runs tools/emu_run.py with everything a reproducible run needs:
   - the route script (tests/scripts/emu_gungan_quick.txt by default, about 3 minutes; --route full for the whole
     hub / Gungan A / Gungan B / hub route, about 6);
-  - --fixed-dt (the game's frame time fixed at 1/60 s) and --fresh-save console_gabriel (the same save every run);
+  - --fixed-dt (the game's frame time fixed at 1/60 s) and --fresh-save console_save (the same save every run);
   - the emulator profile (profiles/emulator.env), a GDB thread dump on a stall, the ELF beside the NRO.
 Then it reports:
   - the result: done, failed (with the step), stall, crash;
@@ -190,7 +190,7 @@ def main():
         nro = Path(args.nro)
         elf = Path(args.elf) if args.elf else nro.with_suffix(".elf")
         cmd = [sys.executable, str(ROOT / "tools/emu_run.py"), "--emu", str(EMU), "--sd", str(SD), "--nro", str(nro),
-               "--script", ROUTES[args.route], "--fixed-dt", "--fresh-save", "console_gabriel",
+               "--script", ROUTES[args.route], "--fixed-dt", "--fresh-save", "console_save",
                "--timeout", "600" if args.route == "full" else "360", "--gdb-on-stall", "60", "--elf", str(elf)]
         for e in args.env:
             cmd += ["--env", e]

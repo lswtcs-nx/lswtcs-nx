@@ -161,6 +161,9 @@ in [docs/progress-log.md](docs/progress-log.md).
   first frames are gone; the first few loaded are re-translated and compared.
 - Mesa reuses the nvc0 translation of an identical shader stage, which cut the cost per program by about 45 %; a
   sample is re-translated and compared.
+- Those nvc0 translations are also kept on the SD card (`sdmc:/lswtcs/mesacache/lsw_nvc0.bin`, since v0.3.0), so from
+  the second session a program builds in about 28 ms instead of 170-240 ms, and area entries no longer wait for
+  shaders. The file outlives app updates; the first ones loaded each session are checked against a fresh compile.
 - Two shader compilers; with four cores, the second takes only programs nothing is waiting for.
 - New textures are made before the draw loop, decoded on three threads and uploaded as each one is ready. Texture
   storage is pooled, and uploads are staged from Mesa's GART suballocator.

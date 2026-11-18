@@ -4447,7 +4447,7 @@ So the emulator now reaches the hub from the tester's save without anyone playin
   (`--input-id-1 0`), which nobody presses by accident.
 - **Menus:** the recorded menu presses fell before the title, because boot timing varies between emulator boots.
   `emu_gungan.txt` now uses `emu_to_hub.txt`'s boot and menu part, then the recording from the hub on.
-- **Full replay (`--fresh-save console_gabriel`):**
+- **Full replay (`--fresh-save console_save`):**
   - the run reached the hub at about 104 s, and the moves played out as recorded;
   - the character never entered `Gungan_A`, and the script failed on its `waitlevel` after 180 s.
   - Frame pacing is not the cause: play frames ran at 17.5 ms (recording) and 17.1 ms (replay) at p50, with game frame
@@ -4486,11 +4486,11 @@ hub play frames (real time p50 20.2 ms); `[PADREC] ... frame 3003`.
 
 ## Emulator run 17: the tester's route replays frame for frame
 
-The tester recorded the route again with `--fixed-dt --fresh-save console_gabriel`: the hub, `Gungan_A`, `Gungan_B` and
+The tester recorded the route again with `--fixed-dt --fresh-save console_save`: the hub, `Gungan_A`, `Gungan_B` and
 back, 972 pad changes. `tests/scripts/emu_gungan.txt` combines `emu_to_hub.txt`'s boot and menus with the recording from
 the hub on, converted by frame (`padrec_to_script.py --frames --from-level Map`).
 
-**Replay (`--fixed-dt --fresh-save console_gabriel`, 350 s, nobody at the pad):** `[SCRIPT] done`, with the same levels
+**Replay (`--fixed-dt --fresh-save console_save`, 350 s, nobody at the pad):** `[SCRIPT] done`, with the same levels
 in the same order. The guest frames between level changes match exactly:
 
 | Stretch | Recording | Replay |
@@ -4850,3 +4850,16 @@ setting stays off. Code size is not a usable proxy for GPU time here.
 **Stutter:** A, the first session of a new build with the kept nvc0 file (1358 loaded), had 17 play frames over 100 ms
 and 0.5 s of frames held for programs; its worst, 2.1 s, is the translation cache starting over for the new build. B
 compiled every changed pixel shader again (43 s of long frames), as expected.
+
+## v0.3.0: the kept nvc0 translations
+
+- **Code:** log121's, built as the play build with `-DLSW_RELEASE_VERSION=0.3.0`, so the NACP version is `0.3.0`.
+  On by default: the kept nvc0 translations (logs 116-119). Off: `LSWTCS_GLXLATEASYNC`, `LSWTCS_GLLOOPEND`,
+  `LSWTCS_GLPSINVARIANT`, `LSWTCS_GLVSPOSINV`.
+- **Checks:** `validate_tcs360_switch.py` passed on the build folder; `xex_image_check.py`, `run_draw_identity.py`,
+  `xlate_cache_check.py`, `input_script_check.py` and `glsl_loop_check.py` passed.
+- **Hardware:** log121 ran in run 120 (two sessions, no crash). This exact NRO differs only in its version and was not
+  booted before the draft.
+- **Files:** `lswtcs-v0.3.0.zip`, `lswtcs.nro` (`3c9ba370…`) and `SHA256SUMS.txt`; notes from `CHANGELOG.md`. The ELF is
+  kept privately for crash reports.
+- **Also:** the emulator's save folder is named `console_save` in the tools and docs.

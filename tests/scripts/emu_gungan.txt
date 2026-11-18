@@ -1,6 +1,6 @@
 # Emulator route, frame-exact (log113): emu_to_hub.txt's boot and menus, then the tester's recording from the hub
 # on (run 2026-11-18 12:00, --fixed-dt), Gungan A and B and back, replayed by guest frame.
-# Replay with: emu_run.py --script emu_gungan.txt --fixed-dt --fresh-save console_gabriel
+# Replay with: emu_run.py --script emu_gungan.txt --fixed-dt --fresh-save console_save
 log emu_gungan
 waitlight 2000 120
 wait 30000                  # legal screen and opening crawl

@@ -322,7 +322,8 @@ std::unordered_map<uint32_t, Resolved> g_resolved;
 // storage through a texture view that sees only its rows (lsw_gl_texture_sample_height, mesa_handover_edits.py): no shader changes.
 // The next hand-over into the same destination gives the target its previous storage back, so each pair ping-pongs two storages.
 extern "C" void lsw_gl_texture_sample_height(GLuint id, GLuint rows);
-bool handover_on() { static const bool on = env_on("LSWTCS_GLHANDOVER", false); return on; }
+bool g_handover_ab = false;   // state o of LSWTCS_ABSTATES (gl_backend.cpp), for an A/B within one session
+bool handover_on() { static const bool on = env_on("LSWTCS_GLHANDOVER", false); return on || g_handover_ab; }
 std::vector<HostTex> g_spare_storage;   // storages no target or destination holds
 std::map<std::pair<GLuint, uint32_t>, GLuint> g_storage_views;   // (storage, rows) -> view
 uint64_t g_handovers = 0;

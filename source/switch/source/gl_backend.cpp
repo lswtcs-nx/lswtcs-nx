@@ -3451,6 +3451,7 @@ void ab_cycle_tick() {
     lsw_shm_age_set(has('E'));
     lsw_quantum_div_set(has('Q') ? 4 : 0);
     g_polyofs_on = has('O');
+    g_handover_ab = has('o');   // o (log123): resolve hand-over instead of the copy (gl_rt.inc resolve_hand_over)
     g_sc.key_valid = false;
     stitch_set(has('S'));
     ++g_ab_changes;

@@ -1,6 +1,6 @@
-# Emulator route: the boot and menus of emu_to_hub.txt (their timing varies between boots), then the tester's
-# recording from the hub on (tests/scripts/emu_gungan.txt as recorded, 18 November 2026): Gungan A and B, back to the hub.
-# Start each run from the console save: emu_run.py --fresh-save console_gabriel.
+# Emulator route, frame-exact (log113): emu_to_hub.txt's boot and menus, then the tester's recording from the hub
+# on (run 2026-11-18 12:00, --fixed-dt), Gungan A and B and back, replayed by guest frame.
+# Replay with: emu_run.py --script emu_gungan.txt --fixed-dt --fresh-save console_gabriel
 log emu_gungan
 waitlight 2000 120
 wait 30000                  # legal screen and opening crawl
@@ -17,1455 +17,1905 @@ wait 600
 press A
 wait 4500
 press A
-waitlevel Map 90
-waitplay 500
-wait 1835
-stick L 0.06 0
-stick L 0.19 0
-stick L 0.38 -0.06
-stick L 0.5 -0.06
-stick L 0.81 -0.12
-stick L 0.94 -0.25
-hold A 183
-wait 191
-stick L 0.94 -0.31
-wait 114
-stick L 0.88 -0.31
-hold A 227
-stick L 0.94 -0.25
-wait 24
-stick L 0.69 -0.12
-stick L 0.69 -0.06
-wait 98
-stick L 0.38 -0.06
-stick L 0.31 0
-stick L 0.25 0
-stick L 0.19 0
-wait 99
-stick L 0.12 0
-stick L 0.06 0
-wait 33
-stick L 0 0
-wait 296
-stick L 0.12 0
-stick L 0.25 0
-stick L 0.5 0
-stick L 0.81 0
-stick L 0.88 0
-stick L 0.94 0
-wait 133
-stick L 0.88 0
-stick L 0.75 0
-wait 20
-stick L 0.56 0
-stick L 0.44 0
-stick L 0.31 0
-stick L 0.25 0
-stick L 0 0
-hold A 162
-stick L 0.06 0
-stick L 0.12 0
-stick L 0.5 0
-stick L 0.94 0
-wait 33
-stick L 0.94 -0.06
-wait 50
-stick L 0.94 0
-wait 117
-stick L 0.81 0
-stick L 0.69 0
-stick L 0.5 0
-stick L 0.19 0
-stick L 0.06 0
-stick L 0 0
-wait 167
-hold A 166
-wait 50
-stick L 0.06 0
-stick L 0.31 0.06
-stick L 0.69 0.06
-stick L 0.88 0.06
-wait 22
-stick L 0.94 0.12
-wait 201
-stick L 0.19 0
-stick L 0 0
-hold X 1554
-wait 183
-stick L 0.06 0.19
-stick L 0.19 0.56
-stick L 0.25 0.88
-stick L 0.25 0.94
-wait 34
-stick L 0.19 0.94
-stick L 0.12 0.94
-wait 34
+waitlevel Map 180
+waitplay 0 180
+frameset
+pad -
+waitframe 122
+stick L 0 0.31
+waitframe 123
+stick L 0.12 0.75
+waitframe 125
 stick L 0.06 0.94
-stick L 0 0.94
-wait 150
+waitframe 127
 stick L -0.06 0.94
-wait 150
+waitframe 128
 stick L -0.12 0.94
-wait 84
-stick L -0.19 0.94
-wait 33
-stick L -0.25 0.94
-wait 33
-stick L -0.31 0.94
-stick L -0.31 0.88
-stick L -0.38 0.88
-wait 33
-stick L -0.44 0.88
-wait 50
-stick L -0.44 0.81
-wait 167
-stick L -0.44 0.88
-wait 66
-stick L -0.38 0.88
-wait 34
-stick L -0.44 0.88
-hold A 116
-wait 50
-stick L -0.44 0.81
-stick L -0.5 0.81
-wait 87
-stick L -0.56 0.81
-wait 30
-stick L -0.56 0.75
-hold A 166
-stick L -0.62 0.75
-wait 67
-stick L -0.62 0.69
-wait 67
-stick L -0.69 0.69
-stick L -0.62 0.69
-stick L -0.19 0.19
-stick L -0.12 0.12
-stick L 0 0
-hold X 942
-wait 1318
-stick L 0.06 0
-stick L 0.12 0
-stick L 0.38 0.06
-stick L 0.62 0.19
-stick L 0.81 0.25
-stick L 0.88 0.38
-wait 50
-stick L 0.88 0.44
-wait 184
-stick L 0.88 0.38
-wait 50
-stick L 0.88 0.31
-wait 34
-stick L 0.94 0.31
-wait 466
-stick L 0.94 0.25
-wait 50
-stick L 0.94 0.19
-wait 34
-stick L 0.94 0.12
-stick L 0.94 0.06
-wait 34
-stick L 0.94 0
-wait 100
-stick L 0.94 -0.06
-wait 83
-stick L 0.94 -0.12
-wait 83
-stick L 0.94 -0.19
-wait 50
-stick L 0.94 -0.25
-wait 67
-stick L 0.94 -0.31
-stick L 0.88 -0.38
-hold A 100
-wait 67
-stick L 0.75 -0.38
-stick L 0.69 -0.31
-stick L 0.62 -0.25
-hold A 100
-stick L 0.38 -0.12
-stick L 0.19 -0.06
-stick L 0 0
-wait 67
-hold X 766
-wait 1770
-stick L 0 0.06
-stick L 0 0.12
-wait 33
-stick L 0 0.19
-wait 84
-stick L 0 0.12
-wait 50
-stick L 0 0.06
-wait 166
-stick L 0 0.12
-wait 34
-stick L 0 0.19
-stick L 0 0.25
-wait 34
-stick L 0 0.31
-wait 133
-stick L 0 0.25
-wait 200
-stick L 0 0.31
-wait 50
-stick L 0 0.38
-wait 67
-stick L 0 0.44
-stick L 0 0.5
-stick L -0.06 0.5
-stick L -0.06 0.56
-stick L -0.06 0.62
-wait 50
-stick L -0.12 0.62
-wait 117
-stick L -0.19 0.62
-stick L -0.19 0.56
-wait 100
-stick L -0.25 0.56
-stick L -0.19 0.5
-wait 84
-stick L -0.25 0.56
-wait 150
-stick L -0.25 0.62
-wait 50
-stick L -0.38 0.69
-stick L -0.44 0.75
-wait 34
-stick L -0.5 0.81
-wait 33
-stick L -0.56 0.75
-wait 1133
-stick L -0.62 0.75
-wait 240
-stick L -0.56 0.75
-wait 343
-stick L -0.25 0.94
-wait 491
-stick L -0.19 0.94
-stick L -0.12 0.94
+waitframe 130
 stick L -0.06 0.94
+waitframe 131
 stick L 0 0.94
-wait 85
+waitframe 138
+stick L 0.06 0.94
+waitframe 142
+stick L 0 0.94
+waitframe 145
+stick L -0.06 0.94
+waitframe 171
+stick L 0 0.94
+waitframe 175
+stick L 0.06 0.94
+waitframe 176
+stick L 0.12 0.94
+waitframe 177
 stick L 0.19 0.94
-wait 357
-stick L 0.38 0.88
-wait 971
-stick L 0 0
-wait 1706
-stick L 0.12 -0.06
-wait 33
-stick L 0.12 -0.12
-stick L 0.19 -0.12
-wait 33
-stick L 0.25 -0.19
-wait 75
-stick L 0.5 -0.31
-stick L 0.62 -0.38
-stick L 0.69 -0.44
-wait 34
-stick L 0.75 -0.44
-wait 367
-stick L 0.75 -0.38
-wait 133
-stick L 0.81 -0.25
-stick L 0.81 -0.19
-wait 33
-stick L 0.81 -0.12
-wait 33
-stick L 0.81 -0.06
-wait 69
-stick L 0.88 0
-wait 175
-stick L 0.88 0.31
-stick L 0.88 0.38
-wait 285
-stick L 0.81 0.44
-wait 105
-stick L 0.75 0.5
-wait 1255
-stick L 0.06 0.06
-wait 440
-stick L 0 0.06
-stick L 0 0
-wait 885
-stick L 0 0.06
-stick L 0.06 0.12
-stick L 0.06 0.19
-wait 33
-stick L 0.12 0.25
-wait 34
-stick L 0.12 0.38
-stick L 0.12 0.5
-stick L 0.19 0.62
-wait 33
-stick L 0.19 0.69
-wait 72
-stick L 0.19 0.75
-wait 362
+waitframe 179
+pad A
+stick L 0.25 0.94
+waitframe 185
+pad -
+waitframe 191
+pad A
+waitframe 192
+stick L 0.19 0.94
+waitframe 199
+pad -
+waitframe 210
+pad X
+waitframe 211
+stick L 0.19 0.88
+waitframe 212
 stick L 0.12 0.81
-stick L 0.12 0.88
-wait 453
-stick L 0.06 0.88
-wait 34
-stick L 0 0.88
-wait 66
-stick L -0.06 0.88
-wait 50
-stick L -0.12 0.88
-wait 117
-stick L -0.19 0.88
-wait 167
-stick L -0.25 0.88
-wait 944
-stick L -0.31 0.88
-wait 117
-stick L -0.38 0.88
-wait 33
-stick L -0.44 0.88
-wait 96
-stick L -0.44 0.81
-stick L -0.5 0.81
-wait 567
-stick L -0.56 0.81
-wait 66
-stick L -0.56 0.75
-stick L -0.5 0.75
-stick L -0.44 0.62
-stick L -0.44 0.56
-stick L -0.31 0.44
-stick L -0.19 0.25
-stick L -0.06 0.06
-stick L 0 0.06
+waitframe 213
 stick L 0 0
-wait 583
-hold A 164
-wait 791
-hold A 161
-wait 100
-hold A 100
-wait 83
-hold A 101
-wait 466
-hold A 123
-wait 100
-hold A 100
-wait 83
-hold A 84
-wait 116
-hold A 84
-wait 116
-hold A 84
-wait 200
-hold A 133
-waitlevel Gungan_A
-wait 2938
-hold START 183
-waitlevel Gungan_B
-waitplay 500
-wait 9890
-stick L 0.06 0.12
-wait 22
+waitframe 223
+pad -
+waitframe 228
+pad X
+waitframe 235
+pad -
+waitframe 237
+pad X
+waitframe 243
+pad -
+waitframe 336
+stick L 0 0.06
+waitframe 337
+stick L 0 0.12
+waitframe 338
 stick L 0.06 0.25
-wait 22
-stick L 0.06 0.44
-wait 39
-stick L 0.06 0.69
-wait 22
-stick L 0.06 0.75
-wait 22
-stick L 0.12 0.88
-wait 1076
-stick L 0.12 0.94
-wait 556
-stick L 0.06 0.94
-wait 24
-stick L 0 0.94
-wait 807
-stick L -0.06 0.94
-wait 329
-stick L -0.12 0.94
-wait 1289
-stick L -0.06 0.94
-wait 1988
-stick L 0 0.94
-wait 408
-stick L -0.06 0.94
-wait 98
-stick L -0.12 0.94
-wait 375
-stick L -0.19 0.94
-wait 364
-stick L -0.12 0.94
-wait 49
-stick L -0.06 0.94
-wait 126
-stick L -0.12 0.94
-wait 37
-stick L -0.19 0.94
-wait 25
-stick L -0.25 0.94
-wait 53
-stick L -0.5 0.81
-stick L -0.69 0.56
-stick L -0.81 0.25
-stick L -0.88 0.19
-stick L -0.88 0.06
-hold A 118
-stick L -0.75 0
-wait 24
-stick L -0.62 0
-wait 24
-stick L -0.25 -0.06
-wait 23
-stick L -0.12 -0.06
-stick L -0.06 -0.06
-stick L 0 0
-hold X 97
-wait 143
-stick L -0.31 -0.06
-wait 24
-stick L -0.44 -0.06
-wait 26
-stick L -0.94 -0.12
-wait 143
-stick L -0.94 -0.06
-wait 27
-stick L -0.69 0
-wait 23
-stick L -0.12 0
-wait 23
-stick L -0.06 0
-wait 24
-stick L 0 0
-wait 24
-stick L 0 0.06
-wait 24
-stick L 0.12 0.25
-wait 24
-stick L 0.25 0.44
-wait 24
-stick L 0.38 0.69
-wait 24
-stick L 0.44 0.88
-wait 24
-stick L 0.44 0.81
-wait 73
-stick L 0.44 0.88
-wait 151
-stick L 0.38 0.88
-wait 77
-stick L 0.31 0.88
-wait 94
-stick L 0.31 0.94
-wait 117
-stick L 0.25 0.94
-wait 740
-stick L 0.19 0.94
-wait 73
-stick L 0.12 0.94
-wait 48
-stick L 0.06 0.94
-wait 23
-stick L 0 0.94
-wait 149
-stick L -0.06 0.94
-wait 23
-stick L -0.12 0.94
-wait 24
-stick L -0.19 0.94
-wait 71
-stick L -0.25 0.94
-wait 70
-stick L -0.31 0.94
-wait 147
-hold A 151
-wait 82
-stick L -0.31 0.88
-stick L -0.38 0.88
-stick L -0.44 0.81
-stick L -0.5 0.81
-stick L -0.62 0.75
-hold A 127
-stick L -0.62 0.69
-wait 55
-stick L -0.69 0.69
-wait 24
-stick L -0.56 0.62
-wait 33
-stick L -0.25 0.31
-stick L 0 0
-hold X 1359
-wait 329
-stick L 0.06 0.06
-wait 25
-stick L 0.12 0.12
-wait 22
-stick L 0.12 0.19
-wait 25
-stick L 0.19 0.25
-wait 23
-stick L 0.25 0.31
-wait 24
-stick L 0.25 0.38
-wait 144
-stick L 0.19 0.38
-wait 46
-stick L 0.12 0.44
-wait 24
+waitframe 339
+stick L 0.06 0.31
+waitframe 340
 stick L 0.12 0.5
-wait 69
-stick L 0.19 0.5
-wait 48
-stick L 0.19 0.38
-wait 23
-stick L 0.12 0.25
-wait 22
-stick L 0.06 0.12
-wait 23
-stick L 0 0
-wait 1383
-hold B 1339
-wait 187
-stick L 0 0.25
-wait 23
-stick L 0 0.44
-wait 23
-stick L 0 0.62
-wait 24
-stick L 0 0.75
-wait 699
-stick L 0 0.81
-wait 23
-stick L 0 0.94
-wait 48
-stick L 0.06 0.94
-wait 1013
-stick L 0.12 0.94
-wait 658
+waitframe 341
+stick L 0.12 0.75
+waitframe 342
+stick L 0.19 0.88
+waitframe 343
 stick L 0.19 0.94
-wait 3265
+waitframe 344
+stick L 0.25 0.94
+waitframe 363
+stick L 0.31 0.94
+waitframe 366
+stick L 0.31 0.88
+waitframe 367
+stick L 0.38 0.88
+waitframe 373
+stick L 0.44 0.88
+waitframe 389
+stick L 0.38 0.88
+waitframe 408
+stick L 0.31 0.88
+waitframe 409
+stick L 0.25 0.94
+waitframe 410
 stick L 0.12 0.94
-wait 208
+waitframe 412
 stick L 0.06 0.94
-wait 260
+waitframe 413
 stick L 0 0.94
-wait 90
-stick L -0.06 0.94
-wait 67
+waitframe 429
 stick L -0.12 0.94
-wait 426
-stick L -0.06 0.94
-wait 530
-stick L -0.12 0.94
+waitframe 431
 stick L -0.19 0.94
+waitframe 432
 stick L -0.25 0.94
-stick L -0.31 0.94
-hold A 164
-wait 79
-stick L -0.31 0.88
-stick L -0.38 0.88
-stick L -0.38 0.81
-hold A 143
-stick L -0.25 0.5
-wait 23
-stick L -0.19 0.38
-wait 23
-stick L 0 0.06
-wait 23
-stick L 0 0
-wait 46
-hold X 1123
-wait 549
-stick L 0.06 0
-wait 23
-stick L 0.19 0
-wait 22
-stick L 0.62 0.06
-wait 22
-stick L 0.81 0.06
-wait 22
-stick L 0.94 0.06
-wait 432
-stick L 0.62 0.12
-wait 22
-stick L 0.5 0.19
-wait 22
-stick L 0.38 0.19
-wait 21
-stick L 0.44 0.19
-wait 22
-stick L 0.44 0.25
-wait 89
-stick L 0.38 0.25
-wait 23
-stick L 0.31 0.19
-wait 25
-stick L 0.12 0.19
-wait 21
-stick L 0.06 0.19
-wait 47
-stick L 0 0.12
-stick L 0 0.06
-stick L 0 0
-hold B 1124
-wait 113
-hold B 1665
-wait 89
-hold B 2099
-wait 75
-stick L 0 0.06
-wait 25
-stick L 0 0.12
-wait 47
-stick L 0 0.19
-wait 27
-stick L 0 0.25
-wait 27
+waitframe 435
+stick L -0.19 0.94
+waitframe 437
+stick L -0.12 0.94
+waitframe 439
+stick L -0.06 0.94
+waitframe 442
+stick L 0 0.94
+waitframe 447
+stick L 0.06 0.94
+waitframe 450
+stick L 0.12 0.94
+waitframe 478
+stick L 0.19 0.94
+waitframe 485
+stick L 0.12 0.88
+waitframe 486
+stick L 0.06 0.56
+waitframe 487
 stick L 0 0.31
-wait 24
-stick L 0 0.44
-wait 25
-stick L 0 0.5
-wait 24
-stick L 0 0.56
-wait 25
-stick L 0 0.62
-wait 265
-stick L 0 0.69
-wait 49
-stick L 0 0.75
-wait 23
-stick L 0 0.88
-wait 24
-stick L 0 0.94
-wait 24
-stick L -0.06 0.94
-wait 153
-stick L -0.12 0.94
-wait 50
-hold A 195
-wait 262
-stick L -0.19 0.94
-wait 109
-stick L -0.25 0.94
-wait 79
-stick L -0.31 0.94
-wait 100
-stick L -0.31 0.88
-wait 139
-stick L -0.19 0.56
-wait 23
-stick L -0.12 0.38
-wait 29
-stick L -0.06 0.19
-wait 24
-stick L 0 0.12
-wait 24
+waitframe 488
 stick L 0 0.06
-wait 25
+waitframe 489
 stick L 0 0
-wait 119
-hold A 117
-wait 78
-hold A 121
-wait 112
-hold X 1415
-wait 280
-stick L 0 -0.06
-wait 24
-stick L 0 -0.12
-wait 358
-stick L 0 -0.25
-wait 23
-stick L 0 -0.31
-wait 22
-stick L -0.06 -0.44
-wait 25
-stick L -0.06 -0.56
-wait 23
-stick L -0.06 -0.69
-wait 23
-stick L -0.06 -0.88
-wait 22
-stick L -0.12 -0.94
-wait 69
-stick L -0.19 -0.94
-wait 135
-stick L -0.12 -0.94
-wait 22
-stick L 0 -0.94
-wait 22
-stick L 0.12 -0.94
-wait 23
-stick L 0.38 -0.88
-wait 22
-stick L 0.56 -0.75
-wait 23
-stick L 0.69 -0.62
-wait 24
-stick L 0.75 -0.62
-wait 22
-stick L 0.81 -0.5
-wait 22
-stick L 0.81 -0.44
-wait 24
+waitframe 529
+stick L 0.06 0
+waitframe 531
+stick L 0.25 -0.06
+waitframe 532
+stick L 0.38 -0.06
+waitframe 533
+stick L 0.56 -0.12
+waitframe 534
+stick L 0.69 -0.19
+waitframe 535
+stick L 0.94 -0.25
+waitframe 536
 stick L 0.88 -0.31
-wait 22
-stick L 0.94 -0.25
-wait 45
-stick L 0.94 -0.12
-wait 23
-stick L 0.94 0
-wait 46
-stick L 0.94 0.19
-wait 22
-stick L 0.81 0.5
-wait 45
-stick L 0.56 0.75
-wait 23
-stick L 0.38 0.88
-wait 22
-stick L 0.31 0.94
-wait 22
-stick L 0.19 0.94
-wait 23
-stick L 0.12 0.94
-wait 23
-stick L 0.06 0.94
-wait 22
-stick L 0 0.94
-wait 22
-stick L -0.06 0.94
-wait 23
-stick L -0.12 0.94
-wait 23
-stick L -0.19 0.94
-wait 46
-stick L -0.25 0.94
-wait 22
-stick L -0.31 0.94
-wait 22
-stick L -0.38 0.88
-wait 44
-stick L -0.44 0.88
-wait 45
-stick L -0.44 0.81
-wait 21
-stick L -0.5 0.81
-wait 94
-stick L -0.56 0.81
-wait 22
-stick L -0.56 0.75
-wait 69
-stick L -0.62 0.75
-wait 91
-stick L -0.62 0.69
-wait 92
-stick L -0.69 0.69
-wait 135
-stick L -0.62 0.69
-wait 22
-stick L -0.62 0.75
-wait 24
-stick L -0.56 0.75
-wait 268
-stick L -0.5 0.81
-wait 46
-stick L -0.44 0.88
-wait 22
-stick L -0.38 0.88
-wait 22
-stick L -0.31 0.94
-wait 22
-stick L -0.25 0.94
-wait 45
-stick L -0.19 0.94
-wait 309
-stick L -0.12 0.94
-wait 44
-stick L -0.06 0.94
-wait 71
-stick L 0 0.94
-hold A 135
-wait 47
-stick L 0.06 0.94
-wait 22
-stick L 0.12 0.94
-wait 22
-stick L 0.19 0.94
-stick L 0.25 0.94
-hold X 116
-wait 45
-stick L 0.31 0.94
-wait 707
-stick L 0.31 0.88
-wait 23
-stick L 0.38 0.88
-wait 21
-stick L 0.44 0.88
-wait 23
-stick L 0.44 0.81
-wait 46
-stick L 0.5 0.81
-wait 96
-stick L 0.56 0.81
-wait 22
-stick L 0.56 0.75
-wait 297
-stick L 0.69 0.69
-wait 23
-stick L 0.75 0.56
-wait 23
-stick L 0.88 0.44
-wait 24
-stick L 0.94 0.25
-wait 25
-stick L 0.94 0
-wait 23
-stick L 0.94 -0.25
-wait 25
-stick L 0.75 -0.62
-wait 22
-stick L 0.62 -0.75
-wait 24
-stick L 0.5 -0.81
-wait 23
-stick L 0 -0.94
-wait 24
-stick L -0.19 -0.94
-wait 20
-stick L -0.38 -0.88
-wait 25
-stick L -0.5 -0.81
-wait 22
-stick L -0.56 -0.81
-wait 23
-stick L -0.56 -0.75
-wait 23
-stick L -0.62 -0.75
-wait 23
-stick L -0.69 -0.69
-wait 24
-stick L -0.75 -0.56
-wait 22
-stick L -0.81 -0.5
-wait 23
-stick L -0.88 -0.44
-wait 23
-stick L -0.88 -0.38
-wait 24
-stick L -0.94 -0.25
-wait 24
-stick L -0.94 -0.12
-wait 23
-stick L -0.94 -0.06
-wait 24
-stick L -0.94 0
-wait 47
-stick L -0.94 0.06
-wait 21
-stick L -0.94 0.12
-wait 46
-stick L -0.94 0.31
-wait 25
-stick L -0.88 0.38
-wait 46
-stick L -0.88 0.44
-wait 23
-stick L -0.81 0.5
-wait 23
-stick L -0.75 0.56
-wait 23
-stick L -0.69 0.69
-wait 46
-stick L -0.62 0.69
-wait 23
-stick L -0.56 0.75
-wait 22
-stick L -0.5 0.81
-stick L -0.44 0.88
-stick L -0.31 0.94
-stick L -0.19 0.94
-stick L -0.06 0.94
-wait 33
-stick L 0.06 0.94
-stick L 0.19 0.94
-wait 21
-stick L 0.25 0.94
-wait 73
-stick L 0.31 0.94
-stick L 0.31 0.88
-stick L 0.38 0.88
-wait 36
-stick L 0.44 0.88
-wait 21
-stick L 0.5 0.81
-wait 39
-stick L 0.56 0.81
-wait 27
-stick L 0.56 0.75
-wait 28
-stick L 0.62 0.75
-wait 30
-stick L 0.69 0.69
-wait 30
-stick L 0.69 0.62
-wait 92
-stick L 0.62 0.69
-wait 32
-stick L 0.56 0.75
-wait 32
-stick L 0.5 0.81
-wait 31
-stick L 0.44 0.88
-wait 29
-stick L 0.38 0.88
-wait 54
-stick L 0.31 0.88
-wait 234
-stick L 0.31 0.94
-wait 321
-stick L 0.31 0.88
-stick L 0.38 0.88
-stick L 0.31 0.88
-stick L 0.31 0.94
-stick L 0.25 0.94
-stick L 0.19 0.94
-hold B 1223
-stick L 0.12 0.94
-wait 24
-stick L 0.06 0.94
-wait 22
-stick L 0 0.94
-wait 188
-stick L -0.06 0.94
-wait 53
-stick L -0.12 0.94
-wait 35
-stick L -0.19 0.94
-wait 48
-stick L -0.25 0.94
-wait 472
-stick L -0.31 0.94
-wait 51
-stick L -0.31 0.88
-wait 34
-stick L -0.38 0.88
-wait 1787
-stick L -0.44 0.88
-wait 633
-stick L -0.38 0.88
-hold A 184
-stick L -0.31 0.88
-stick L -0.31 0.94
-wait 56
-stick L -0.25 0.94
-wait 402
-stick L -0.19 0.94
-wait 184
-stick L -0.12 0.94
-wait 67
-hold A 168
-wait 133
-stick L -0.06 0.94
-hold A 217
-wait 589
-stick L 0 0.94
-wait 67
-stick L 0.06 0.94
-stick L 0.19 0.94
-stick L 0.25 0.94
-stick L 0.31 0.88
-stick L 0.38 0.88
-stick L 0.44 0.88
-stick L 0.5 0.81
-stick L 0.56 0.81
-stick L 0.56 0.75
-stick L 0.62 0.75
-wait 51
-stick L 0.62 0.69
-wait 33
-stick L 0.69 0.69
-stick L 0.69 0.62
-wait 33
-stick L 0.75 0.62
-wait 51
-stick L 0.75 0.56
-wait 34
-stick L 0.81 0.56
-stick L 0.81 0.5
-wait 83
-stick L 0.81 0.44
-stick L 0.88 0.44
-wait 187
-hold A 134
-wait 100
-stick L 0.81 0.44
-stick L 0.81 0.5
-hold A 184
-wait 585
-stick L 0.81 0.56
-stick L 0.75 0.56
-wait 117
-stick L 0.75 0.62
-wait 50
-stick L 0.69 0.62
-stick L 0.69 0.69
-hold A 186
-stick L 0.62 0.69
-wait 71
-stick L 0.62 0.75
-stick L 0.56 0.75
-hold A 219
-wait 66
-stick L 0.56 0.81
-stick L 0.5 0.81
-wait 67
-stick L 0.44 0.81
-wait 33
-stick L 0.44 0.88
-wait 100
-stick L 0.38 0.88
-wait 319
-stick L 0.31 0.88
-wait 417
-stick L 0.38 0.88
-wait 117
-stick L 0.44 0.88
-wait 991
-stick L 0.5 0.81
-wait 418
-stick L 0 0
-wait 402
-stick L 0.06 0
-stick L 0.19 0
-stick L 0.44 0
-stick L 0.5 0
-stick L 0.81 0
-wait 34
-stick L 0.94 0
-wait 294
-stick L 0.94 -0.06
-wait 111
-stick L 0.94 -0.12
-wait 420
-stick L 0.94 -0.06
-wait 66
-stick L 0.94 0
-wait 1584
-stick L 0.94 0.06
-stick L 0.94 0.12
-wait 33
-stick L 0.94 0.25
-wait 33
-stick L 0.94 0.31
-stick L 0.88 0.31
-stick L 0.88 0.38
-wait 34
-stick L 0.88 0.44
-wait 249
-stick L 0.81 0.44
-stick L 0.81 0.5
-wait 133
-stick L 0.81 0.56
-stick L 0.75 0.56
-wait 33
-stick L 0.75 0.62
-wait 200
-stick L 0.75 0.56
-stick L 0.81 0.5
-stick L 0.69 0.38
-stick L 0.5 0.38
-stick L 0.06 0
-stick L 0 0
-wait 117
-hold B 2572
-wait 183
-stick L 0 0.12
-stick L -0.06 0.44
-stick L -0.12 0.56
-stick L -0.25 0.88
-stick L -0.25 0.94
-hold A 200
-wait 134
-stick L -0.31 0.94
-wait 33
-stick L -0.31 0.88
-wait 50
-stick L -0.38 0.88
-wait 183
-stick L -0.31 0.94
-wait 20
-stick L -0.25 0.94
-wait 47
-stick L -0.19 0.94
-stick L -0.12 0.94
-wait 33
-stick L -0.06 0.94
-stick L 0 0.94
-wait 133
-stick L 0.06 0.94
-wait 33
-stick L 0.12 0.94
-wait 34
-stick L 0.19 0.81
-stick L 0.19 0.44
-stick L 0.06 0.06
-stick L 0 0
-stick L 0 -0.12
-stick L 0 -0.31
-stick L 0 -0.38
-stick L 0.06 -0.62
-stick L 0.12 -0.94
-stick L 0.19 -0.94
-wait 100
-stick L 0.25 -0.94
-wait 200
-stick L 0.19 -0.94
-wait 50
-stick L 0.12 -0.94
-stick L 0.06 -0.94
-stick L 0 -0.94
-wait 183
-stick L 0.06 -0.94
-stick L 0.12 -0.94
-stick L 0.25 -0.94
-stick L 0.31 -0.94
-stick L 0.38 -0.88
-stick L 0.44 -0.88
-stick L 0.44 -0.81
-stick L 0.56 -0.75
-stick L 0.62 -0.69
-stick L 0.69 -0.69
-stick L 0.69 -0.62
-stick L 0.75 -0.62
-stick L 0.75 -0.56
-stick L 0.81 -0.5
-wait 33
+waitframe 537
 stick L 0.88 -0.38
-wait 34
-stick L 0.88 -0.31
-stick L 0.94 -0.31
-stick L 0.94 -0.25
-wait 33
-stick L 0.81 -0.19
-stick L 0.75 -0.19
-stick L 0.44 -0.06
-stick L 0.31 0
-stick L 0.19 0
-stick L 0.06 0
-stick L 0 0
-wait 1072
-hold START 201
-wait 283
-stick L 0 -0.06
-stick L 0 -0.75
-stick L 0 -0.94
-wait 34
-stick L -0.06 -0.94
-wait 66
-stick L 0 -0.94
-stick L 0 -0.44
-stick L 0 -0.25
-stick L 0 0
-stick L 0 -0.12
-stick L 0 -0.19
-stick L 0 -0.56
-stick L 0.06 -0.94
-wait 83
-stick L 0.12 -0.94
-stick L 0.06 -0.69
-stick L 0 -0.25
-stick L 0 -0.06
-wait 50
-stick L 0 -0.38
-stick L 0.12 -0.94
-wait 100
-stick L 0.06 -0.81
-stick L 0 -0.38
-stick L 0 0
-wait 133
-hold A 167
-wait 466
-stick L 0 0.25
-stick L 0 0.88
-stick L -0.06 0.94
-wait 34
-stick L -0.12 0.94
-stick L -0.19 0.94
-stick L -0.31 0.88
-stick L -0.31 0.69
-stick L -0.12 0.31
-stick L 0 0
-wait 450
-hold A 185
-wait 2534
-hold A 250
-wait 1583
-hold A 597
-waitlevel Map
-waitplay 500
-wait 1444
-stick L 0 -0.06
-wait 33
-stick L 0 -0.12
-stick L 0 -0.19
-stick L 0 -0.31
-wait 33
-stick L 0.06 -0.44
-stick L 0.06 -0.69
-stick L 0.12 -0.81
-stick L 0.12 -0.94
-stick L 0.19 -0.94
-wait 67
-stick L 0.12 -0.94
-wait 150
-stick L 0.19 -0.94
-wait 600
-stick L 0.12 -0.94
-stick L 0.06 -0.94
-hold A 166
-wait 384
-stick L 0 -0.94
-wait 383
-stick L -0.06 -0.94
-stick L -0.12 -0.94
-wait 33
-stick L -0.19 -0.94
-wait 83
-stick L -0.12 -0.94
-hold A 134
-stick L -0.06 -0.94
-wait 50
-stick L 0 -0.94
-wait 83
-stick L -0.06 -0.94
-stick L -0.12 -0.94
-stick L -0.19 -0.94
-stick L -0.31 -0.94
-stick L -0.31 -0.88
-stick L -0.38 -0.88
-stick L -0.44 -0.88
-stick L -0.44 -0.81
-stick L -0.5 -0.81
-hold X 583
-wait 84
-stick L -0.56 -0.81
-wait 33
-stick L -0.56 -0.75
-wait 33
-stick L -0.62 -0.75
-wait 34
-stick L -0.62 -0.69
-stick L -0.69 -0.69
-wait 34
-stick L -0.75 -0.62
-wait 33
-stick L -0.75 -0.56
-stick L -0.81 -0.56
-stick L -0.81 -0.5
-wait 67
-stick L -0.88 -0.44
-hold A 167
-stick L -0.88 -0.38
-stick L -0.69 -0.25
-stick L -0.56 -0.19
-stick L -0.31 -0.12
-stick L 0 0
-hold A 100
-wait 67
-hold A 105
-wait 78
-hold X 683
-wait 35
-stick L -0.12 0
-stick L -0.56 -0.06
-stick L -0.69 -0.06
-stick L -0.94 -0.06
-wait 200
-stick L -0.94 0
-wait 367
-stick L -0.94 0.06
-wait 297
-stick L -0.94 0.12
-wait 329
-stick L -0.94 0.25
-wait 519
-stick L -0.75 0.56
-stick L -0.69 0.69
-stick L -0.62 0.69
-wait 54
-stick L -0.31 0.88
-stick L -0.19 0.94
-wait 33
-stick L -0.12 0.94
-wait 33
-stick L -0.06 0.94
-wait 50
-stick L 0 0.94
-wait 201
-stick L 0.06 0.94
-wait 86
-stick L 0 0.94
-wait 50
-stick L -0.06 0.94
-wait 33
-stick L -0.12 0.94
-stick L -0.19 0.94
-wait 50
-stick L -0.25 0.94
-wait 67
-stick L -0.31 0.94
-wait 50
-stick L -0.31 0.88
-wait 66
-stick L -0.38 0.88
-wait 67
-stick L -0.44 0.88
-wait 67
-stick L -0.44 0.81
-wait 50
-stick L -0.5 0.81
-wait 602
-stick L 0 0
-wait 534
-stick L 0.06 -0.12
-wait 33
-stick L 0.06 -0.25
-stick L 0.12 -0.31
-stick L 0.19 -0.5
-stick L 0.25 -0.81
-stick L 0.31 -0.88
-wait 33
-stick L 0.38 -0.88
-wait 1067
-stick L 0.31 -0.88
-wait 317
-stick L 0.38 -0.88
-wait 266
-stick L 0.31 -0.88
-wait 50
-stick L 0.31 -0.94
-wait 20
-stick L 0.25 -0.94
-wait 63
-stick L 0.19 -0.94
-wait 50
-stick L 0.12 -0.94
-wait 51
-stick L 0.06 -0.94
-wait 66
-stick L 0.12 -0.94
-wait 50
-stick L 0.19 -0.94
-wait 50
-stick L 0.25 -0.94
-wait 100
-stick L 0.31 -0.94
-wait 283
-stick L 0.31 -0.88
-wait 50
-stick L 0.38 -0.88
-wait 51
-stick L 0.44 -0.88
-stick L 0.5 -0.81
-wait 33
-stick L 0.56 -0.81
-stick L 0.62 -0.75
-stick L 0.69 -0.62
-stick L 0.75 -0.62
+waitframe 543
+stick L 0.88 -0.44
+waitframe 544
+stick L 0.81 -0.5
+waitframe 547
 stick L 0.81 -0.56
-stick L 0.81 -0.5
-wait 33
-stick L 0.88 -0.44
-wait 33
-stick L 0.88 -0.38
-wait 84
-stick L 0.88 -0.44
-wait 33
-stick L 0.81 -0.44
-stick L 0.81 -0.5
-wait 33
+waitframe 548
 stick L 0.75 -0.56
-stick L 0.75 -0.62
-stick L 0.69 -0.62
-stick L 0.69 -0.69
-stick L 0.62 -0.69
-wait 33
-stick L 0.62 -0.75
-wait 67
-stick L 0.56 -0.75
-wait 50
-stick L 0.56 -0.81
-stick L 0.5 -0.81
-wait 34
-stick L 0.44 -0.88
-stick L 0.38 -0.88
-stick L 0.31 -0.94
-stick L 0.25 -0.94
-stick L 0.12 -0.94
-stick L 0 -0.94
-wait 38
-stick L -0.12 -0.94
-wait 79
-stick L -0.06 -0.94
-wait 50
-stick L 0 -0.94
-wait 133
-stick L 0.06 -0.94
-wait 50
-stick L 0.12 -0.94
-wait 317
-stick L 0.06 -0.94
-wait 167
-stick L 0 -0.94
-wait 61
-stick L 0.19 -0.94
-stick L 0.19 -0.62
-stick L 0.12 -0.31
-stick L 0 0
-wait 783
-hold START 200
-wait 350
-stick L 0 -0.19
-stick L 0 -0.62
-stick L 0 -0.81
-stick L 0.06 -0.94
-wait 100
-stick L 0 -0.88
-stick L -0.06 -0.5
-stick L -0.06 -0.12
-stick L 0 0
-wait 33
-stick L -0.06 -0.12
-stick L -0.06 -0.38
-stick L 0 -0.75
-stick L 0 -0.94
-wait 100
-stick L 0 -0.69
-stick L -0.06 -0.25
-stick L -0.06 -0.19
-stick L -0.06 -0.25
-stick L -0.06 -0.75
-stick L 0 -0.94
-wait 133
-stick L 0 -0.62
-stick L 0 -0.19
-stick L 0 0
-wait 50
-hold A 167
-wait 400
-stick L 0 0.12
-stick L -0.12 0.69
-stick L -0.25 0.88
-stick L -0.25 0.94
+waitframe 554
+stick L 0.81 -0.5
+waitframe 556
+stick L 0.88 -0.44
+waitframe 557
+stick L 0.88 -0.38
+waitframe 558
+stick L 0.94 -0.31
+waitframe 559
+stick L 0.94 -0.25
+waitframe 560
+stick L 0.94 -0.12
+waitframe 561
+stick L 0.94 0
+waitframe 562
+stick L 0.94 0.06
+waitframe 563
+stick L 0.94 0.12
+waitframe 564
+stick L 0.94 0.25
+waitframe 566
+stick L 0.94 0.31
+waitframe 571
+stick L 0.88 0.31
+waitframe 572
+stick L 0.88 0.38
+waitframe 575
+stick L 0.88 0.44
+waitframe 578
+stick L 0.81 0.5
+waitframe 580
+stick L 0.75 0.56
+waitframe 583
+stick L 0.75 0.62
+waitframe 597
+stick L 0.69 0.62
+waitframe 600
+stick L 0.69 0.69
+waitframe 603
+stick L 0.62 0.69
+waitframe 650
+stick L 0.62 0.75
+waitframe 651
+stick L 0.56 0.75
+waitframe 654
+stick L 0.56 0.81
+waitframe 655
+stick L 0.5 0.81
+waitframe 659
+stick L 0.44 0.81
+waitframe 662
+stick L 0.44 0.88
+waitframe 673
+stick L 0.38 0.88
+waitframe 675
+stick L 0.31 0.88
+waitframe 676
+stick L 0.31 0.94
+waitframe 683
+stick L 0.25 0.94
+waitframe 687
+stick L 0.19 0.94
+waitframe 688
+stick L 0.12 0.94
+waitframe 689
+stick L 0.06 0.94
+waitframe 690
+stick L 0 0.94
+waitframe 691
+stick L -0.06 0.94
+waitframe 693
+stick L -0.12 0.94
+waitframe 695
 stick L -0.19 0.94
+waitframe 722
 stick L -0.25 0.94
-wait 34
-stick L -0.19 0.56
-stick L 0 0.12
+waitframe 731
+stick L -0.31 0.94
+waitframe 746
+stick L -0.31 0.88
+waitframe 750
+stick L -0.38 0.88
+waitframe 780
+stick L -0.44 0.88
+waitframe 795
+stick L -0.44 0.81
+waitlight 0
+frameset
+stick L -0.5 0.69
+waitframe 2
+stick L -0.31 0.38
+waitframe 3
+stick L -0.12 0.19
+waitframe 4
+stick L -0.06 0.06
+waitframe 5
 stick L 0 0
-hold A 134
+waitframe 138
+pad A
+waitframe 147
+pad -
+waitframe 180
+pad A
+waitframe 188
+pad -
+waitframe 195
+pad A
+waitframe 200
+pad -
+waitframe 214
+pad A
+waitframe 220
+pad -
+waitframe 225
+pad A
+waitframe 231
+pad -
+waitframe 235
+pad A
+waitframe 241
+pad -
+waitframe 246
+pad A
+waitframe 251
+pad -
+waitframe 258
+pad A
+waitframe 262
+pad -
+waitframe 269
+pad A
+waitframe 274
+pad -
+waitframe 280
+pad A
+waitframe 288
+pad -
+waitlevel Gungan_A
+waitframe 590
+pad START
+waitframe 599
+pad -
+waitlevel Gungan_B
+waitplay 0
+frameset
+waitframe 455
+stick L 0 0.81
+waitframe 456
+stick L 0 0.94
+waitframe 457
+stick L 0.12 0.94
+waitframe 458
+stick L 0.19 0.94
+waitframe 459
+stick L 0.25 0.94
+waitframe 462
+stick L 0.31 0.94
+waitframe 469
+stick L 0.31 0.88
+waitframe 470
+stick L 0.38 0.88
+waitframe 483
+stick L 0.31 0.94
+waitframe 484
+stick L 0.25 0.94
+waitframe 485
+stick L 0.19 0.94
+waitframe 486
+stick L 0.12 0.94
+waitframe 487
+stick L 0.06 0.94
+waitframe 494
+stick L 0 0.94
+waitframe 501
+stick L -0.06 0.94
+waitframe 503
+stick L -0.25 0.94
+waitframe 504
+stick L -0.38 0.88
+waitframe 505
+stick L -0.44 0.88
+waitframe 509
+stick L -0.38 0.88
+waitframe 511
+stick L -0.31 0.94
+waitframe 513
+stick L -0.25 0.94
+waitframe 533
+stick L -0.19 0.94
+waitframe 536
+stick L -0.06 0.94
+waitframe 538
+stick L 0 0.94
+waitframe 552
+stick L 0.06 0.94
+waitframe 554
+stick L 0.12 0.94
+waitframe 566
+stick L 0.19 0.94
+waitframe 570
+stick L 0.25 0.94
+waitframe 631
+stick L 0.12 0.94
+waitframe 632
+stick L 0.06 0.94
+waitframe 634
+stick L 0 0.94
+waitframe 716
+stick L -0.06 0.94
+waitframe 797
+stick L -0.12 0.94
+waitframe 799
+stick L -0.19 0.94
+waitframe 809
+stick L -0.25 0.94
+waitframe 814
+stick L -0.31 0.94
+waitframe 835
+stick L -0.31 0.88
+waitframe 837
+stick L -0.38 0.88
+waitframe 897
+stick L -0.31 0.88
+waitframe 898
+stick L -0.31 0.94
+waitframe 904
+stick L -0.25 0.94
+waitframe 913
+stick L -0.19 0.94
+waitframe 916
+stick L -0.12 0.94
+waitframe 919
+stick L -0.06 0.94
+waitframe 948
+stick L 0 0.94
+waitframe 969
+stick L 0.06 0.94
+waitframe 971
+stick L 0.19 0.94
+waitframe 974
+stick L 0.25 0.94
+waitframe 985
+stick L 0.19 0.94
+waitframe 987
+stick L 0.12 0.94
+waitframe 989
+stick L 0.06 0.94
+waitframe 992
+stick L 0 0.94
+waitframe 1019
+stick L -0.06 0.94
+waitframe 1020
+stick L -0.12 0.94
+waitframe 1021
+stick L -0.25 0.94
+waitframe 1023
+stick L -0.31 0.94
+waitframe 1024
+stick L -0.38 0.88
+waitframe 1033
+pad A
+stick L -0.31 0.88
+waitframe 1034
+stick L -0.31 0.94
+waitframe 1035
+stick L -0.25 0.94
+waitframe 1037
+stick L -0.19 0.94
+waitframe 1038
+stick L -0.12 0.94
+waitframe 1039
+stick L -0.06 0.94
+waitframe 1042
+pad -
+waitframe 1045
+stick L -0.19 0.94
+waitframe 1046
+pad A
+stick L -0.25 0.94
+waitframe 1048
+stick L -0.25 0.81
+waitframe 1049
+stick L -0.19 0.69
+waitframe 1050
+stick L -0.19 0.5
+waitframe 1051
+stick L -0.06 0.25
+waitframe 1052
+stick L 0 0.12
+waitframe 1053
+stick L 0 0.06
+waitframe 1054
+pad -
+stick L 0 0
+waitframe 1064
+pad X
+waitframe 1111
+stick L 0.12 0.06
+waitframe 1112
+stick L 0.19 0.12
+waitframe 1113
+stick L 0.25 0.19
+waitframe 1114
+stick L 0.38 0.25
+waitframe 1115
+pad -
+stick L 0.56 0.31
+waitframe 1116
+stick L 0.75 0.38
+waitframe 1117
+stick L 0.88 0.38
+waitframe 1119
+stick L 0.88 0.44
+waitframe 1127
+pad X
+waitframe 1135
+pad -
+waitframe 1147
+stick L 0.88 0.31
+waitframe 1148
+stick L 0.94 0.31
+waitframe 1149
+stick L 0.94 0.25
+waitframe 1150
+stick L 0.94 0.19
+waitframe 1151
+stick L 0.94 0.12
+waitframe 1154
+stick L 0.94 0.06
+waitframe 1156
+stick L 0.94 0
+waitframe 1172
+stick L 0.94 -0.06
+waitframe 1173
+stick L 0.94 -0.12
+waitframe 1174
+stick L 0.94 -0.19
+waitframe 1175
+stick L 0.94 -0.25
+waitframe 1176
+stick L 0.94 -0.31
+waitframe 1180
+stick L 0.94 -0.25
+waitframe 1181
+stick L 0.94 -0.19
+waitframe 1182
+stick L 0.81 0
+waitframe 1183
+pad B
+stick L 0.56 0.06
+waitframe 1184
+stick L 0.06 0
+waitframe 1185
+stick L 0 0
+waitframe 1216
+pad -
+stick L 0 0.12
+waitframe 1217
+stick L 0 0.38
+waitframe 1218
+stick L -0.06 0.94
+waitframe 1220
+stick L 0 0.94
+waitframe 1222
+stick L -0.06 0.94
+waitframe 1223
+stick L -0.06 0.62
+waitframe 1224
+stick L 0 0.31
+waitframe 1225
+stick L 0 0
+waitframe 1228
+pad B
+waitframe 1265
+stick L 0 0.12
+waitframe 1266
+stick L 0 0.19
+waitframe 1267
+stick L 0 0.31
+waitframe 1268
+stick L 0 0.5
+waitframe 1269
+stick L 0 0.69
+waitframe 1270
+stick L 0 0.88
+waitframe 1271
+stick L 0 0.94
+waitframe 1284
+pad -
+waitframe 1423
+stick L 0.06 0.94
+waitframe 1451
+stick L 0.12 0.94
+waitframe 1452
+stick L 0.19 0.94
+waitframe 1455
+stick L 0.25 0.94
+waitframe 1509
+stick L 0.19 0.94
+waitframe 1510
+stick L 0.06 0.94
+waitframe 1520
+stick L 0 0.94
+waitframe 1522
+stick L -0.06 0.94
+waitframe 1524
+stick L -0.12 0.94
+waitframe 1530
+stick L -0.06 0.94
+waitframe 1533
+stick L 0 0.94
+waitframe 1537
+stick L -0.06 0.94
+waitframe 1539
+stick L -0.12 0.94
+waitframe 1541
+stick L -0.19 0.94
+waitframe 1549
+stick L -0.12 0.94
+waitframe 1552
+stick L -0.06 0.94
+waitframe 1556
+stick L 0 0.94
+waitframe 1557
+pad B
+waitframe 1565
+stick L 0.06 0.94
+waitframe 1567
+stick L 0.12 0.94
+waitframe 1569
+stick L 0.19 0.94
+waitframe 1631
+pad -
+waitframe 1709
+stick L 0.12 0.94
+waitframe 1714
+pad A
+waitframe 1721
+pad -
+stick L 0.06 0.94
+waitframe 1722
+stick L 0 0.94
+waitframe 1726
+pad A
+stick L -0.19 0.94
+waitframe 1728
+stick L -0.25 0.94
+waitframe 1733
+pad -
+waitframe 1738
+pad X
+stick L -0.19 0.94
+waitframe 1739
+stick L -0.06 0.94
+waitframe 1740
+stick L 0 0.94
+waitframe 1742
+stick L 0.06 0.81
+waitframe 1743
+stick L 0.06 0.62
+waitframe 1744
+stick L 0.06 0.5
+waitframe 1745
+stick L 0.06 0.38
+waitframe 1746
+stick L 0.06 0.25
+waitframe 1747
+stick L 0 0.19
+waitframe 1748
+stick L 0 0.12
+waitframe 1749
+stick L 0 0.06
+waitframe 1750
+stick L 0 0
+waitframe 1798
+stick L 0 0.06
+waitframe 1803
+pad -
+waitframe 1808
+stick L 0.06 0.12
+waitframe 1809
+stick L 0.12 0.38
+waitframe 1810
+stick L 0.12 0.56
+waitframe 1811
+stick L 0.19 0.75
+waitframe 1812
+stick L 0.19 0.94
+waitframe 1825
+pad X
+waitframe 1827
+stick L 0.25 0.94
+waitframe 1832
+pad -
+waitframe 1836
+pad X
+waitframe 1840
+stick L 0.31 0.94
+waitframe 1841
+stick L 0.31 0.88
+waitframe 1842
+pad -
+stick L 0.38 0.88
+waitframe 1846
+pad X
+waitframe 1850
+pad -
+waitframe 1854
+pad X
+waitframe 1859
+pad -
+waitframe 1865
+pad X
+waitframe 1871
+pad -
+waitframe 1872
+stick L 0.44 0.88
+waitframe 1874
+pad X
+stick L 0.5 0.81
+waitframe 1876
+stick L 0.56 0.81
+waitframe 1877
+stick L 0.56 0.75
+waitframe 1879
+pad -
+waitframe 1883
+pad X
+waitframe 1889
+pad -
+waitframe 1891
+stick L 0.62 0.75
+waitframe 1906
+stick L 0.62 0.69
+waitframe 1907
+stick L 0.69 0.62
+waitframe 1908
+stick L 0.75 0.56
+waitframe 1910
+stick L 0.81 0.5
+waitframe 1911
+stick L 0.88 0.44
+waitframe 1912
+stick L 0.88 0.38
+waitframe 1914
+stick L 0.88 0.31
+waitframe 1915
+stick L 0.94 0.31
+waitframe 1916
+stick L 0.94 0.25
+waitframe 1919
+stick L 0.94 0.19
+waitframe 1927
+stick L 0.94 0.06
+waitframe 1929
+stick L 0.81 0.25
+waitframe 1930
+stick L 0.12 0.5
+waitframe 1931
+stick L -0.25 0.94
+waitframe 1932
+pad X
+stick L -0.31 0.88
+waitframe 1933
+stick L -0.38 0.88
+waitframe 1936
+stick L -0.44 0.88
+waitframe 1937
+stick L -0.44 0.81
+waitframe 1938
+stick L -0.5 0.81
+waitframe 1939
+pad -
+waitframe 1941
+stick L -0.56 0.81
+waitframe 1943
+stick L -0.56 0.75
+waitframe 1946
+stick L -0.62 0.75
+waitframe 1950
+stick L -0.56 0.75
+waitframe 1951
+stick L -0.56 0.81
+waitframe 1952
+stick L -0.5 0.81
+waitframe 1953
+stick L -0.44 0.88
+waitframe 1954
+stick L -0.38 0.88
+waitframe 1955
+stick L -0.31 0.75
+waitframe 1956
+stick L -0.12 0.44
+waitframe 1957
+stick L -0.06 0.25
+waitframe 1958
+stick L 0 0
+waitframe 1990
+stick L 0.06 0
+waitframe 1991
+stick L 0.12 0
+waitframe 1992
+stick L 0.25 0.12
+waitframe 1993
+stick L 0.5 0.31
+waitframe 1994
+stick L 0.69 0.44
+waitframe 1995
+stick L 0.81 0.5
+waitframe 1997
+stick L 0.81 0.44
+waitframe 1998
+stick L 0.62 0.31
+waitframe 1999
+stick L 0.12 0.12
+waitframe 2000
+stick L 0 0
+waitframe 2001
+pad B
+waitframe 2055
+pad -
+waitframe 2060
+pad B
+waitframe 2148
+pad -
+waitframe 2158
+stick L -0.06 0
+waitframe 2159
+stick L -0.75 0.38
+waitframe 2160
+stick L -0.88 0.44
+waitframe 2161
+stick L -0.81 0.44
+waitframe 2162
+stick L -0.88 0.44
+waitframe 2164
+pad B
+waitframe 2167
+stick L -0.81 0.5
+waitframe 2168
+stick L -0.5 0.31
+waitframe 2169
+stick L -0.19 0.12
+waitframe 2170
+stick L 0 0
+waitframe 2203
+stick L 0.19 0.06
+waitframe 2204
+pad -
+stick L 0.56 0.12
+waitframe 2205
+stick L 0.94 0.19
+waitframe 2207
+stick L 0.94 0.25
+waitframe 2210
+pad B
+waitframe 2211
+stick L 0.75 0.25
+waitframe 2212
+stick L 0.12 0.12
+waitframe 2213
+stick L 0.06 0.06
+waitframe 2214
+stick L 0 0
+waitframe 2309
+stick L 0 0.06
+waitframe 2310
+pad -
+stick L 0.12 0.31
+waitframe 2311
+stick L 0.12 0.44
+waitframe 2312
+stick L 0.19 0.81
+waitframe 2313
+stick L 0.25 0.94
+waitframe 2327
+stick L 0.19 0.94
+waitframe 2328
+stick L 0.12 0.94
+waitframe 2329
+stick L 0.06 0.94
+waitframe 2330
+stick L 0 0.94
+waitframe 2332
+stick L -0.12 0.94
+waitframe 2333
+stick L -0.19 0.94
+waitframe 2334
+stick L -0.25 0.94
+waitframe 2335
+stick L -0.31 0.88
+waitframe 2336
+stick L -0.44 0.88
+waitframe 2337
+stick L -0.44 0.81
+waitframe 2338
+stick L -0.5 0.81
+waitframe 2339
+stick L -0.56 0.75
+waitframe 2340
+stick L -0.62 0.75
+waitframe 2341
+stick L -0.69 0.69
+waitframe 2342
+stick L -0.69 0.62
+waitframe 2343
+stick L -0.75 0.56
+waitframe 2344
+stick L -0.81 0.5
+waitframe 2346
+stick L -0.88 0.44
+waitframe 2353
+stick L -0.88 0.38
+waitframe 2355
+stick L -0.94 0.25
+waitframe 2356
+stick L -0.94 0
+waitframe 2357
+stick L -0.94 -0.12
+waitframe 2358
+stick L -0.94 -0.31
+waitframe 2359
+stick L -0.88 -0.38
+waitframe 2360
+stick L -0.88 -0.31
+waitframe 2361
+stick L -0.31 -0.06
+waitframe 2362
+stick L 0 0.06
+waitframe 2363
+stick L 0 0.31
+waitframe 2364
+stick L 0.06 0.75
+waitframe 2365
+stick L 0.19 0.94
+waitframe 2366
+stick L 0.25 0.94
+waitframe 2367
+stick L 0.31 0.94
+waitframe 2368
+stick L 0.31 0.88
+waitframe 2369
+stick L 0.38 0.88
+waitframe 2373
+stick L 0.44 0.88
+waitframe 2374
+stick L 0.5 0.81
+waitframe 2376
+stick L 0.56 0.81
+waitframe 2377
+stick L 0.56 0.75
+waitframe 2379
+stick L 0.62 0.75
+waitframe 2381
+stick L 0.69 0.69
+waitframe 2382
+stick L 0.69 0.62
+waitframe 2383
+stick L 0.75 0.56
+waitframe 2385
+stick L 0.81 0.5
+waitframe 2390
+stick L 0.75 0.56
+waitframe 2391
+pad A
+stick L 0.75 0.62
+waitframe 2392
+stick L 0.69 0.62
+waitframe 2393
+stick L 0.69 0.69
+waitframe 2394
+stick L 0.62 0.69
+waitframe 2395
+stick L 0.62 0.75
+waitframe 2397
+stick L 0.56 0.75
+waitframe 2398
+pad -
+stick L 0.56 0.81
+waitframe 2399
+stick L 0.5 0.81
+waitframe 2402
+stick L 0.44 0.81
+waitframe 2403
+stick L 0.44 0.88
+waitframe 2405
+stick L 0.38 0.88
+waitframe 2406
+pad A
+waitframe 2407
+stick L 0.31 0.88
+waitframe 2408
+stick L 0.31 0.94
+waitframe 2410
+stick L 0.25 0.94
+waitframe 2412
+pad -
+waitframe 2414
+stick L 0.19 0.94
+waitframe 2415
+stick L 0.06 0.94
+waitframe 2416
+stick L 0 0.94
+waitframe 2419
+stick L -0.06 0.94
+waitframe 2420
+stick L -0.19 0.94
+waitframe 2421
+pad X
+stick L -0.31 0.94
+waitframe 2422
+stick L -0.38 0.88
+waitframe 2426
+stick L -0.5 0.81
+waitframe 2427
+stick L -0.44 0.56
+waitframe 2428
+stick L -0.31 0.38
+waitframe 2429
+stick L -0.12 0.19
+waitframe 2430
+stick L 0 0
+waitframe 2481
+pad -
+waitframe 2489
+stick L 0 0.19
+waitframe 2490
+stick L 0 0.44
+waitframe 2491
+stick L -0.06 0.69
+waitframe 2492
+stick L -0.12 0.81
+waitframe 2493
+stick L -0.12 0.94
+waitframe 2522
+stick L -0.12 0.81
+waitframe 2523
+stick L -0.06 0.56
+waitframe 2524
+stick L -0.06 0.44
+waitframe 2525
+stick L 0 0.12
+waitframe 2526
+stick L 0 0
+waitframe 2544
+stick L 0 0.06
+waitframe 2554
+stick L 0 0.19
+waitframe 2555
+stick L 0 0.25
+waitframe 2556
+stick L 0 0.38
+waitframe 2557
+stick L 0 0.62
+waitframe 2558
+stick L -0.06 0.94
+waitframe 2602
+pad A
+waitframe 2607
+pad -
+waitframe 2613
+pad X
+waitframe 2616
+pad -
+waitframe 2752
+stick L -0.12 0.94
+waitframe 2756
+stick L -0.19 0.94
+waitframe 2787
+stick L -0.25 0.94
+waitframe 2798
+stick L -0.31 0.94
+waitframe 2885
+stick L -0.25 0.94
+waitframe 3006
+stick L -0.19 0.94
+waitframe 3010
+stick L -0.12 0.94
+waitframe 3017
+stick L -0.06 0.94
+waitframe 3024
+stick L 0 0.94
+waitframe 3093
+stick L 0.06 0.94
+waitframe 3101
+pad A
+waitframe 3102
+stick L 0.12 0.94
+waitframe 3109
+stick L 0.19 0.94
+waitframe 3113
+pad -
+waitframe 3124
+stick L 0.25 0.94
+waitframe 3131
+stick L 0.31 0.94
+waitframe 3135
+stick L 0.31 0.88
+waitframe 3136
+stick L 0.38 0.88
+waitframe 3138
+pad A
+waitframe 3141
+stick L 0.44 0.88
+waitframe 3145
+stick L 0.5 0.81
+waitframe 3146
+pad -
+waitframe 3150
+stick L 0.56 0.81
+waitframe 3153
+stick L 0.56 0.75
+waitframe 3155
+stick L 0.62 0.75
+waitframe 3161
+stick L 0.62 0.69
+waitframe 3166
+stick L 0.69 0.69
+waitframe 3168
+stick L 0.69 0.62
+waitframe 3177
+stick L 0.69 0.69
+waitframe 3180
+stick L 0.62 0.69
+waitframe 3183
+stick L 0.62 0.75
+waitframe 3187
+stick L 0.56 0.75
+waitframe 3191
+stick L 0.56 0.81
+waitframe 3192
+stick L 0.5 0.81
+waitframe 3201
+stick L 0.56 0.81
+waitframe 3202
+stick L 0.56 0.75
+waitframe 3203
+stick L 0.62 0.75
+waitframe 3204
+stick L 0.62 0.69
+waitframe 3206
+stick L 0.69 0.69
+waitframe 3207
+stick L 0.69 0.62
+waitframe 3210
+stick L 0.75 0.62
+waitframe 3279
+stick L 0.75 0.56
+waitframe 3293
+stick L 0.75 0.62
+waitframe 3342
+stick L 0.69 0.62
+waitframe 3343
+stick L 0.69 0.69
+waitframe 3346
+stick L 0.62 0.69
+waitframe 3353
+stick L 0.62 0.75
+waitframe 3357
+stick L 0.56 0.75
+waitframe 3363
+stick L 0.56 0.81
+waitframe 3368
+stick L 0.5 0.81
+waitframe 3404
+stick L 0.44 0.88
+waitframe 3405
+stick L 0.31 0.88
+waitframe 3407
+stick L 0.31 0.94
+waitframe 3408
+stick L 0.38 0.88
+waitframe 3413
+stick L 0.44 0.88
+waitframe 3415
+stick L 0.44 0.81
+waitframe 3416
+stick L 0.44 0.62
+waitframe 3417
+stick L 0.44 0.5
+waitframe 3418
+stick L 0.38 0.44
+waitframe 3419
+stick L 0.31 0.31
+waitframe 3420
+stick L 0.31 0.25
+waitframe 3421
+stick L 0.25 0.19
+waitframe 3422
+stick L 0.25 0.12
+waitframe 3423
+stick L 0.19 0.06
+waitframe 3424
+stick L 0.12 0
+waitframe 3425
+stick L 0.06 0
+waitframe 3426
+stick L 0 0
+waitframe 3439
+stick L 0.06 0
+waitframe 3441
+stick L 0.12 -0.06
+waitframe 3443
+stick L 0.19 -0.12
+waitframe 3445
+stick L 0.25 -0.12
+waitframe 3446
+stick L 0.31 -0.19
+waitframe 3447
+stick L 0.44 -0.19
+waitframe 3448
+stick L 0.56 -0.25
+waitframe 3449
+stick L 0.62 -0.25
+waitframe 3450
+stick L 0.75 -0.31
+waitframe 3451
+stick L 0.94 -0.31
+waitframe 3452
+stick L 0.94 -0.25
+waitframe 3454
+stick L 0.94 -0.19
+waitframe 3456
+stick L 0.94 -0.12
+waitframe 3460
+stick L 0.94 -0.06
+waitframe 3503
+stick L 0.94 0
+waitframe 3542
+stick L 0.94 0.06
+waitframe 3557
+stick L 0.94 0.12
+waitframe 3560
+stick L 0.94 0.19
+waitframe 3563
+stick L 0.94 0.25
+waitframe 3593
+stick L 0.94 0.31
+waitframe 3594
+stick L 0.88 0.31
+waitframe 3597
+stick L 0.88 0.38
+waitframe 3617
+stick L 0.88 0.44
+waitframe 3619
+stick L 0.81 0.44
+waitframe 3620
+stick L 0.81 0.5
+waitframe 3622
+stick L 0.75 0.56
+waitframe 3628
+stick L 0.75 0.62
+waitframe 3629
+stick L 0.62 0.5
+waitframe 3630
+stick L 0.31 0.38
+waitframe 3631
+stick L 0.19 0.25
+waitframe 3632
+stick L 0 0
+waitframe 3633
+pad B
+waitframe 3783
+pad -
+waitframe 3795
+pad A
+waitframe 3800
+stick L 0 0.06
+waitframe 3801
+stick L 0 0.19
+waitframe 3802
+stick L 0 0.25
+waitframe 3803
+stick L 0 0.69
+waitframe 3804
+stick L 0 0.94
+waitframe 3807
+pad -
+waitframe 3854
+stick L 0.06 0.94
+waitframe 3856
+stick L 0.12 0.94
+waitframe 3858
+stick L 0.19 0.94
+waitframe 3860
+stick L 0.31 0.88
+waitframe 3861
+stick L 0.38 0.81
+waitframe 3862
+stick L 0.5 0.38
+waitframe 3863
+stick L 0.5 0.25
+waitframe 3864
+stick L 0.5 0
+waitframe 3865
+stick L 0.44 -0.06
+waitframe 3866
+stick L 0.44 -0.12
+waitframe 3867
+stick L 0.44 -0.25
+waitframe 3868
+stick L 0.44 -0.31
+waitframe 3869
+stick L 0.44 -0.44
+waitframe 3870
+stick L 0.44 -0.5
+waitframe 3871
+stick L 0.44 -0.56
+waitframe 3872
+stick L 0.44 -0.69
+waitframe 3874
+stick L 0.44 -0.75
+waitframe 3875
+stick L 0.44 -0.81
+waitframe 3877
+stick L 0.44 -0.88
+waitframe 3880
+stick L 0.38 -0.88
+waitframe 3896
+stick L 0.44 -0.88
+waitframe 3904
+stick L 0.44 -0.81
+waitframe 3906
+stick L 0.5 -0.81
+waitframe 3913
+stick L 0.56 -0.81
+waitframe 3914
+stick L 0.56 -0.75
+waitframe 3915
+stick L 0.62 -0.75
+waitframe 3916
+stick L 0.62 -0.69
+waitframe 3917
+stick L 0.69 -0.62
+waitframe 3918
+stick L 0.69 -0.56
+waitframe 3919
+stick L 0.75 -0.5
+waitframe 3920
+stick L 0.75 -0.44
+waitframe 3921
+stick L 0.81 -0.31
+waitframe 3922
+stick L 0.81 -0.25
+waitframe 3923
+stick L 0.88 -0.12
+waitframe 3924
+stick L 0.88 0
+waitframe 3925
+stick L 0.88 0.06
+waitframe 3926
+stick L 0.88 0.12
+waitframe 3927
+stick L 0.88 0.25
+waitframe 3929
+stick L 0.88 0.31
+waitframe 3930
+stick L 0.88 0.38
+waitframe 3932
+stick L 0.88 0.44
+waitframe 3933
+stick L 0.81 0.44
+waitframe 3934
+stick L 0.81 0.5
+waitframe 3937
+stick L 0.81 0.56
+waitframe 3938
+stick L 0.56 0.38
+waitframe 3939
+stick L 0.38 0.31
+waitframe 3940
+stick L 0.19 0.12
+waitframe 3941
+stick L 0 0.06
+waitframe 3942
+stick L 0 0
+waitframe 3945
+stick L 0.06 0
+waitframe 3947
+stick L 0.12 0.06
+waitframe 3948
+stick L 0.38 0.19
+waitframe 3949
+stick L 0.62 0.25
+waitframe 3950
+stick L 0.94 0.25
+waitframe 3952
+stick L 0.94 0.31
+waitframe 3954
+stick L 0.88 0.31
+waitframe 3955
+stick L 0.88 0.38
+waitframe 3958
+stick L 0.88 0.44
+waitframe 3960
+pad A
+waitframe 3962
+stick L 0.81 0.5
+waitframe 3964
+stick L 0.75 0.56
+waitframe 3967
+stick L 0.75 0.62
+waitframe 3973
+pad -
+waitframe 3974
+pad A
+waitframe 3984
+pad -
+waitframe 3996
+stick L 0.69 0.62
+waitframe 3997
+stick L 0.69 0.69
+waitframe 4005
+stick L 0.62 0.69
+waitframe 4009
+stick L 0.62 0.75
+waitframe 4011
+stick L 0.56 0.75
+waitframe 4029
+stick L 0.62 0.75
+waitframe 4031
+stick L 0.69 0.69
+waitframe 4032
+stick L 0.75 0.56
+waitframe 4033
+stick L 0.81 0.5
+waitframe 4034
+stick L 0.88 0.44
+waitframe 4036
+stick L 0.88 0.38
+waitframe 4042
+stick L 0.88 0.31
+waitframe 4046
+stick L 0.94 0.31
+waitframe 4049
+stick L 0.94 0.25
+waitframe 4057
+stick L 0.94 0.19
+waitframe 4060
+pad A
+waitframe 4069
+pad -
+waitframe 4098
+pad X
+waitframe 4109
+pad -
+waitframe 4114
+stick L 0.94 0.25
+waitframe 4129
+stick L 0.94 0.19
+waitframe 4130
+stick L 0.94 0.06
+waitframe 4131
+pad X
+stick L 0.94 0
+waitframe 4132
+stick L 0.94 -0.06
+waitframe 4133
+stick L 0.94 -0.12
+waitframe 4134
+stick L 0.94 -0.25
+waitframe 4135
+stick L 0.88 -0.44
+waitframe 4137
+stick L 0.81 -0.5
+waitframe 4138
+stick L 0.75 -0.56
+waitframe 4139
+pad -
+stick L 0.69 -0.62
+waitframe 4140
+stick L 0.69 -0.69
+waitframe 4141
+stick L 0.56 -0.75
+waitframe 4142
+stick L 0.56 -0.81
+waitframe 4143
+stick L 0.5 -0.81
+waitframe 4145
+stick L 0.44 -0.88
+waitframe 4146
+stick L 0.38 -0.88
+waitframe 4147
+stick L 0.31 -0.88
+waitframe 4148
+stick L 0.25 -0.94
+waitframe 4150
+stick L 0.19 -0.94
+waitframe 4152
+stick L 0.12 -0.94
+waitframe 4159
+stick L 0.19 -0.94
+waitframe 4161
+stick L 0.25 -0.94
+waitframe 4164
+stick L 0.31 -0.94
+waitframe 4166
+stick L 0.31 -0.88
+waitframe 4167
+stick L 0.38 -0.88
+waitframe 4169
+stick L 0.44 -0.88
+waitframe 4170
+stick L 0.44 -0.75
+waitframe 4172
+stick L 0.31 -0.5
+waitframe 4173
+stick L 0.19 -0.31
+waitframe 4174
+stick L 0.06 -0.06
+waitframe 4175
+stick L 0 0
+waitframe 4219
+pad START
+waitframe 4232
+pad -
+waitframe 4248
+stick L 0 -0.19
+waitframe 4249
+stick L -0.06 -0.75
+waitframe 4250
+stick L 0 -0.94
+waitlight 0
+frameset
+waitframe 4
+stick L 0 -0.88
+waitframe 5
+stick L 0 -0.31
+waitframe 6
+stick L 0 0
+waitframe 8
+stick L 0 -0.06
+waitframe 9
+stick L -0.06 -0.19
+waitframe 10
+stick L -0.06 -0.56
+waitframe 11
+stick L -0.06 -0.81
+waitframe 12
+stick L 0 -0.94
+waitframe 18
+stick L 0 -0.31
+waitframe 19
+stick L 0 0
+waitframe 22
+stick L 0 -0.12
+waitframe 23
+stick L 0 -0.44
+waitframe 24
+stick L 0 -0.75
+waitframe 25
+stick L 0.06 -0.94
+waitframe 31
+stick L 0 -0.44
+waitframe 32
+stick L 0 0
+waitframe 36
+pad A
+waitframe 45
+pad -
+waitframe 74
+stick L 0 0.12
+waitframe 75
+stick L 0.06 0.38
+waitframe 76
+stick L 0 0.81
+waitframe 77
+stick L 0 0.94
+waitframe 80
+stick L -0.06 0.94
+waitframe 81
+stick L -0.19 0.94
+waitframe 83
+stick L -0.12 0.5
+waitframe 84
+stick L -0.12 0.38
+waitframe 85
+stick L 0 0.06
+waitframe 86
+stick L 0 0
+waitframe 89
+pad A
+waitframe 98
+pad -
+waitframe 229
+pad A
+waitframe 242
+pad -
+waitframe 254
+pad A
+waitframe 266
+pad -
+waitframe 705
+pad A
+waitlevel Map
+waitplay 0
+frameset
+waitframe 50
+stick L 0 -0.06
+waitframe 52
+stick L 0 -0.12
+waitframe 53
+stick L 0 -0.19
+waitframe 55
+stick L 0 -0.25
+waitframe 60
+stick L 0 -0.31
+waitframe 66
+stick L 0 -0.38
+waitframe 68
+stick L 0 -0.44
+waitframe 69
+stick L 0 -0.5
+waitframe 71
+stick L 0 -0.62
+waitframe 72
+stick L 0.06 -0.75
+waitframe 73
+stick L 0.06 -0.81
+waitframe 75
+stick L 0.06 -0.88
+waitframe 94
+pad -
+waitframe 100
+stick L 0 -0.88
+waitframe 107
+stick L 0 -0.94
+waitframe 147
+stick L -0.06 -0.94
+waitframe 164
+stick L -0.12 -0.94
+waitframe 167
+stick L -0.19 -0.94
+waitframe 168
+stick L -0.31 -0.94
+waitframe 169
+stick L -0.38 -0.88
+waitframe 170
+stick L -0.44 -0.88
+waitframe 172
+stick L -0.44 -0.81
+waitframe 173
+stick L -0.5 -0.81
+waitframe 176
+stick L -0.56 -0.81
+waitframe 177
+stick L -0.62 -0.75
+waitframe 178
+stick L -0.69 -0.69
+waitframe 179
+stick L -0.75 -0.56
+waitframe 180
+stick L -0.81 -0.56
+waitframe 181
+stick L -0.88 -0.44
+waitframe 182
+stick L -0.88 -0.38
+waitframe 184
+stick L -0.88 -0.31
+waitframe 185
+stick L -0.94 -0.25
+waitframe 186
+stick L -0.94 -0.19
+waitframe 187
+stick L -0.94 -0.12
+waitframe 189
+stick L -0.94 -0.06
+waitframe 191
+stick L -0.94 0
+waitframe 217
+stick L -0.94 -0.12
+waitframe 219
+stick L -0.94 -0.19
+waitframe 220
+stick L -0.94 -0.25
+waitframe 226
+stick L -0.94 -0.19
+waitframe 227
+stick L -0.94 -0.12
+waitframe 228
+stick L -0.94 -0.06
+waitframe 229
+stick L -0.94 0
+waitframe 247
+stick L -0.88 0.44
+waitframe 259
+stick L -0.81 0.44
+waitframe 262
+stick L -0.81 0.5
+waitframe 281
+stick L -0.75 0.56
+waitframe 283
+stick L -0.75 0.62
+waitframe 294
+stick L -0.69 0.62
+waitframe 297
+stick L -0.69 0.69
+waitframe 299
+stick L -0.62 0.69
+waitframe 300
+stick L -0.62 0.75
+waitframe 302
+stick L -0.56 0.75
+waitframe 304
+stick L -0.56 0.81
+waitframe 305
+stick L -0.5 0.81
+waitframe 308
+stick L -0.44 0.81
+waitframe 309
+stick L -0.44 0.88
+waitframe 315
+stick L -0.38 0.88
+waitframe 330
+stick L -0.44 0.88
+waitframe 332
+stick L -0.44 0.81
+waitframe 333
+stick L -0.44 0.69
+waitframe 334
+stick L -0.44 0.62
+waitframe 335
+stick L -0.31 0.44
+waitframe 336
+stick L -0.12 0.12
+waitframe 337
+stick L 0 0
+waitframe 360
+stick L 0 -0.06
+waitframe 361
+stick L 0 -0.19
+waitframe 362
+stick L 0 -0.25
+waitframe 363
+stick L 0 -0.38
+waitframe 364
+stick L 0 -0.56
+waitframe 365
+stick L 0 -0.69
+waitframe 366
+stick L 0.06 -0.94
+waitframe 369
+stick L 0.12 -0.94
+waitframe 375
+stick L 0.06 -0.94
+waitframe 384
+stick L 0 -0.94
+waitframe 396
+stick L -0.06 -0.94
+waitframe 398
+stick L -0.12 -0.94
+waitframe 407
+stick L -0.19 -0.94
+waitframe 411
+stick L -0.25 -0.94
+waitframe 424
+stick L -0.19 -0.94
+waitframe 440
+stick L -0.25 -0.94
+waitframe 443
+stick L -0.31 -0.94
+waitframe 444
+pad A
+stick L -0.38 -0.88
+waitframe 445
+stick L -0.44 -0.88
+waitframe 446
+stick L -0.5 -0.81
+waitframe 447
+stick L -0.56 -0.75
+waitframe 449
+stick L -0.62 -0.69
+waitframe 450
+stick L -0.75 -0.56
+waitframe 451
+stick L -0.88 -0.44
+waitframe 452
+stick L -0.94 -0.25
+waitframe 453
+pad -
+stick L -0.94 -0.12
+waitframe 455
+stick L -0.94 0
+waitframe 457
+pad A
+stick L -0.94 0.06
+waitframe 458
+stick L -0.94 0.25
+waitframe 459
+stick L -0.94 0.31
+waitframe 460
+stick L -0.88 0.38
+waitframe 461
+pad -
+waitframe 462
+stick L -0.88 0.44
+waitframe 463
+stick L -0.81 0.5
+waitframe 466
+pad A
+waitframe 468
+stick L -0.81 0.56
+waitframe 470
+stick L -0.75 0.56
+waitframe 472
+stick L -0.75 0.62
+waitframe 473
+pad -
+stick L -0.69 0.62
+waitframe 474
+stick L -0.69 0.69
+waitframe 476
+stick L -0.62 0.69
+waitframe 477
+stick L -0.62 0.75
+waitframe 478
+pad X
+stick L -0.56 0.75
+waitframe 479
+stick L -0.5 0.81
+waitframe 481
+stick L -0.19 0.44
+waitframe 482
+stick L 0 0.06
+waitframe 483
+stick L 0 0
+waitframe 523
+pad -
+waitframe 524
+stick L 0 -0.06
+waitframe 525
+stick L 0 -0.12
+waitframe 526
+stick L 0 -0.19
+waitframe 527
+stick L 0 -0.31
+waitframe 528
+stick L 0 -0.38
+waitframe 529
+stick L 0 -0.5
+waitframe 530
+stick L 0 -0.69
+waitframe 531
+stick L 0 -0.75
+waitframe 532
+stick L 0 -0.94
+waitframe 535
+stick L 0.06 -0.94
+waitframe 541
+stick L 0.12 -0.94
+waitframe 546
+stick L 0.19 -0.94
+waitframe 554
+stick L 0.25 -0.94
+waitframe 563
+stick L 0.31 -0.94
+waitframe 600
+stick L 0.25 -0.94
+waitframe 612
+stick L 0.19 -0.94
+waitframe 620
+stick L 0.19 -0.69
+waitframe 621
+stick L 0.19 -0.5
+waitframe 622
+stick L 0.12 -0.31
+waitframe 623
+stick L 0.12 -0.19
+waitframe 624
+stick L 0 0
+waitframe 661
+pad START
+waitframe 673
+pad -
+waitframe 692
+stick L 0 -0.12
+waitframe 693
+stick L 0 -0.19
+waitlight 0
+frameset
+stick L 0 -0.81
+waitframe 1
+stick L 0 -0.94
+waitframe 8
+stick L 0 -0.62
+waitframe 9
+stick L 0 -0.19
+waitframe 10
+stick L 0 0
+waitframe 12
+stick L -0.06 -0.25
+waitframe 13
+stick L -0.06 -0.31
+waitframe 14
+stick L 0 -0.94
+waitframe 21
+stick L -0.06 -0.88
+waitframe 22
+stick L -0.06 -0.25
+waitframe 23
+stick L -0.06 -0.12
+waitframe 24
+stick L -0.06 -0.19
+waitframe 25
+stick L -0.06 -0.5
+waitframe 26
+stick L 0 -0.62
+waitframe 27
+stick L 0 -0.94
+waitframe 33
+stick L 0 -0.88
+waitframe 34
+stick L 0 -0.56
+waitframe 35
+stick L 0 -0.12
+waitframe 36
+stick L 0 0
+waitframe 40
+pad A
+waitframe 49
+pad -
+waitframe 73
+stick L 0 0.06
+waitframe 74
+stick L 0 0.38
+waitframe 75
+stick L 0 0.81
+waitframe 76
+stick L -0.06 0.94
+waitframe 78
+stick L -0.12 0.94
+waitframe 79
+stick L -0.25 0.94
+waitframe 80
+stick L -0.31 0.94
+waitframe 81
+stick L -0.25 0.62
+waitframe 82
+stick L -0.06 0.19
+waitframe 83
+stick L 0 0.06
+waitframe 84
+stick L 0 0
+waitframe 87
+pad A
+waitframe 97
+pad -
+pad -
 done

@@ -4483,3 +4483,29 @@ hub play frames (real time p50 20.2 ms); `[PADREC] ... frame 3003`.
 **Build:** `0.0.99-log113` (`build-nvpgo`), NRO `690a2a7e…`, ELF kept privately; `validate_tcs360_switch.py` passed.
 
 **Next:** the tester records the route again with `--fixed-dt`; it replays from the hub on by frame.
+
+## Emulator run 17: the tester's route replays frame for frame
+
+The tester recorded the route again with `--fixed-dt --fresh-save console_gabriel`: the hub, `Gungan_A`, `Gungan_B` and
+back, 972 pad changes. `tests/scripts/emu_gungan.txt` combines `emu_to_hub.txt`'s boot and menus with the recording from
+the hub on, converted by frame (`padrec_to_script.py --frames --from-level Map`).
+
+**Replay (`--fixed-dt --fresh-save console_gabriel`, 350 s, nobody at the pad):** `[SCRIPT] done`, with the same levels
+in the same order. The guest frames between level changes match exactly:
+
+| Stretch | Recording | Replay |
+| --- | --- | --- |
+| Hub to `Gungan_A` | 1700 frames | 1700 |
+| `Gungan_A` to `Gungan_B` | 311 | 311 |
+| `Gungan_B` back to the hub | 5014 | 5014 |
+
+The hub came at another frame (2370 against 1244), since the menus still go by the clock. From there on the game
+played out the same. Frame-exact input with a fixed frame time makes the route reproducible in the emulator.
+
+**`[WORK]` is not as repeatable:** in `Gungan_B`, the replay counted 21 % more nvc0 draws, 19 % more vertex-program
+bytes and 14 % more guest calls than the recording, over nearly the same number of replays (4380 against 4320). The
+render thread replayed every guest frame in both runs (10,200 of 10,200).
+- Likely causes, not separated: draws skipped while a program compiles (timing-dependent), and guest spin loops that
+  count calls while they wait.
+- Before `[WORK]` can judge a build, an A/A pair (the same build twice) has to give its noise. Work counted per guest
+  frame range, not per replay window, would also align two runs better.

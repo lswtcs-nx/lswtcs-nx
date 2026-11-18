@@ -4744,3 +4744,27 @@ blocks as plain code, but by how much is open. Off by default until a console ru
 `EB7221B1AAA62B09`).
 
 **Build:** `0.0.99-log118` (`build-nvpgo`), NRO `eb8dd6d8…`, ELF kept privately; on the SD folder (the setting is off).
+
+## Log 119: the nvc0 file is written every 300 replays; log118's loop removal measured
+
+**A log117 fault.** Through a 256 KB buffer written only when full, an emulator session that made 31 new translations
+saved none of them (the file kept its 14:43 time): a session closed from the HOME menu never flushes. A session that
+makes few new translations would have redone them every time.
+
+**Log 119:** the port asks Mesa to write the buffer every 300 replays (`lsw_nvc0_disk_flush`, on the background file
+thread, never on the render thread), so a closed session loses at most those seconds. Emulator: the next session's 31
+translations reached the file (1306 KB -> 1483 KB), and it played the same game.
+
+**Log 118 measured.** A diagnostic, `LSWTCS_NVC0INFO=1`, prints the code size and registers of each stage nvc0
+translates. With `LSWTCS_GLLOOPEND=1`, one compile worker and the kept file off, one emulator session compiled the
+heavy full-screen pass both ways: the saved list's old programs with the loop, the game's new ones without.
+
+| Program (pixel shader) | Code with the loop | Code without it | Registers |
+| --- | --- | --- | --- |
+| `91834C09` -> `3EEDAF50` | 6872 bytes | 6672 bytes (-2.9 %) | 29 both |
+| `46CE50B7` -> `484D8403` | 6000 bytes | 5792 bytes (-3.5 %) | 29 both |
+
+So the loop is not what makes that pass cost 2.1 ms; its texture reads and arithmetic are. `LSWTCS_GLLOOPEND` stays
+off: it is exact (`tests/glsl_loop_check.py`) but worth about 0.06 ms a frame at best.
+
+**Build:** `0.0.99-log119` (`build-nvpgo`, Mesa rebuilt), ELF kept privately; on the SD folder.

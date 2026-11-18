@@ -105,6 +105,7 @@ size_t nv50_ir_fixup_entry_size(void);
 size_t nv50_ir_reloc_entry_size(void);
 void lsw_nvc0_disk_stats(unsigned *loaded, unsigned *reused, unsigned *written, unsigned *checked, unsigned *differed)
    __attribute__((visibility("default")));
+void lsw_nvc0_disk_flush(void) __attribute__((visibility("default")));
 
 #define LSW_DISK_MAGIC 0x3044564Eu   /* "NVD0" */
 #define LSW_DISK_MAX_BYTES ((long)48 << 20)
@@ -132,6 +133,18 @@ lsw_nvc0_disk_stats(unsigned *loaded, unsigned *reused, unsigned *written, unsig
    pthread_mutex_lock(&lsw_disk_lock);
    *loaded = lsw_disk_loaded; *reused = lsw_disk_reused; *written = lsw_disk_written;
    *checked = lsw_disk_checked; *differed = lsw_disk_differed;
+   pthread_mutex_unlock(&lsw_disk_lock);
+}
+
+/* log119: the port calls this every few seconds from its background file thread, so a session closed from the HOME menu
+   (no exit, no fclose) loses at most those seconds of the 256 KB buffer. log117 only wrote when the buffer filled, and an
+   emulator session that made 31 translations saved none of them. */
+void
+lsw_nvc0_disk_flush(void)
+{
+   pthread_mutex_lock(&lsw_disk_lock);
+   if (lsw_disk_out)
+      fflush(lsw_disk_out);
    pthread_mutex_unlock(&lsw_disk_lock);
 }
 
@@ -440,6 +453,8 @@ edit('src/gallium/drivers/nouveau/nvc0/nvc0_program.c', [
      '            const bool same = diff == 0;\n            if (e->from_disk)\n               lsw_disk_check_result(same);\n', 1),
     ('            lsw_dedup_table[bucket] = e;\n            lsw_dedup_bytes += bytes;\n',
      '            lsw_dedup_table[bucket] = e;\n            lsw_dedup_bytes += bytes;\n            added = e;\n', 1),
+    ('   if (!nvc0_program_translate_uncached(prog, chipset, debug))\n      return false;\n\n   pthread_mutex_lock(&lsw_dedup_lock);\n   ++lsw_dedup_misses;',
+     '   if (!nvc0_program_translate_uncached(prog, chipset, debug))\n      return false;\n   {   /* log119 diagnostics (LSWTCS_NVC0INFO=1): what each stage translation made, to compare two versions of a shader */\n      static int info = -1;\n      if (info < 0)\n         info = lsw_dedup_env("LSWTCS_NVC0INFO", 0);\n      if (info) {\n         printf("[NVC0INFO] type %u, TGSI %02x%02x%02x%02x: %u bytes of code, %u GPRs\\n", prog->type, sha[0], sha[1], sha[2],\n                sha[3], prog->code_size, prog->num_gprs);\n         fflush(stdout);\n      }\n   }\n\n   pthread_mutex_lock(&lsw_dedup_lock);\n   ++lsw_dedup_misses;', 1),
     ('   pthread_mutex_unlock(&lsw_dedup_lock);\n   return true;\n}\n\nuint32_t\nnvc0_program_symbol_offset(',
      '   pthread_mutex_unlock(&lsw_dedup_lock);\n   if (added)\n      lsw_disk_write(added);\n   return true;\n}\n\n'
      'uint32_t\nnvc0_program_symbol_offset(', 1),

@@ -156,6 +156,7 @@ extern "C" void lsw_nvc0_dedup_stats(unsigned* hits, unsigned* misses, unsigned*
                                      unsigned* kb) __attribute__((weak));   // mesa_dedup_edits.py (log103)
 extern "C" void lsw_nvc0_disk_stats(unsigned* loaded, unsigned* reused, unsigned* written, unsigned* checked,
                                     unsigned* differed) __attribute__((weak));   // mesa_nvc0disk_edits.py (log116)
+extern "C" void lsw_nvc0_disk_flush() __attribute__((weak));   // mesa_nvc0disk_edits.py (log119)
 extern "C" void lsw_nvc0_work_stats(unsigned long long* draws, unsigned long long* vertices, unsigned long long* vp_bytes,
                                     unsigned long long* fp_bytes) __attribute__((weak));   // mesa_work_edits.py (log111)
 extern "C" unsigned lswtcs_gil_ctr;   // kernel_stubs.cpp: +1 at every guest function entry
@@ -3790,6 +3791,9 @@ PresentSrc replay() {
     g_replay_serial = f.serial;
     ++g_replays;
     level_watch();
+    // log119: the kept nvc0 translations reach the card every 300 replays (Mesa writes them through a 256 KB buffer, and a
+    // session closed from the HOME menu never flushes it), on the background file thread.
+    if (lsw_nvc0_disk_flush && g_replays % 300 == 0) lsw_bg_submit_other(1, [] { lsw_nvc0_disk_flush(); });
     // log114: the GLSL of shaders translated off-thread (LSWTCS_GLXLATEASYNC) is read from here on, so every translation queued
     // so far must be done; queued ones run here meanwhile. (log115 also asked for the programs of draws already translated while
     // waiting; in the emulator that changed nothing measurable, so it was taken out in log116.)

@@ -205,6 +205,10 @@ def main():
             sys.exit("no controller found by the emulator (connect it, or pass --input-id; 0 is the keyboard)")
         args.input_id = pads[0][0]
         print(f"controller: {pads[0][1]} ({args.input_id})")
+    if not args.input_id:
+        # A replay needs a controller connected for player 1, or the game sees none ([PADS] no controller, 18 November
+        # 2026: the script ran and the game ignored it). The keyboard ("0") is one that nobody touches by accident.
+        args.input_id = "0"
     if args.input_id:
         emu_args = emu_args.replace("{nro}", f"--input-id-1 {args.input_id} {{nro}}")
     cmd = [str(emu), *[a.replace("{nro}", str(nro)) for a in shlex.split(emu_args, posix=False)]]

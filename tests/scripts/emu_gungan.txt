@@ -1,40 +1,23 @@
-# from stdout.log, 8240-203482 ms, 971 pad changes
-wait 18794
-hold START 200
-wait 887
-stick L 0 -0.06
-stick L 0 -0.25
-stick L 0 -0.81
-wait 20
-stick L 0 -0.94
-wait 100
-stick L 0.06 -0.94
-stick L 0.06 -0.75
-stick L 0 -0.38
-stick L 0 -0.06
-stick L 0 0
-wait 583
-hold A 155
-wait 584
-hold A 149
-wait 284
-stick L 0 0.06
-stick L 0 0.12
-stick L 0 0.38
-stick L 0 0.44
-stick L 0 0.62
-stick L -0.06 0.62
-stick L -0.06 0.69
-wait 83
-stick L 0 0.44
-stick L 0 0.38
-stick L 0 0.12
-stick L 0 0
-wait 250
-hold A 122
-wait 3433
-hold A 184
-waitlevel Map
+# Emulator route: the boot and menus of emu_to_hub.txt (their timing varies between boots), then the tester's
+# recording from the hub on (tests/scripts/emu_gungan.txt as recorded, 18 November 2026): Gungan A and B, back to the hub.
+# Start each run from the console save: emu_run.py --fresh-save console_gabriel.
+log emu_gungan
+waitlight 2000 120
+wait 30000                  # legal screen and opening crawl
+press START
+wait 1500
+press DOWN
+wait 600
+press A
+wait 1500
+press A
+wait 1000
+press UP
+wait 600
+press A
+wait 4500
+press A
+waitlevel Map 90
 waitplay 500
 wait 1835
 stick L 0.06 0

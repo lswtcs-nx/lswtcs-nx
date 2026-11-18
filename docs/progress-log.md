@@ -4435,3 +4435,24 @@ Run 118 (`run118-log112`, about 180 s, handheld, GPU 460.8): boot, the hub, `Gun
   near the console's 341 / 1362 / 528 / 66k, at another place in the hub.
 
 So the emulator now reaches the hub from the tester's save without anyone playing.
+
+## Emulator runs 14-16: replaying the tester's emulator route
+
+- **Recording:** the tester recorded the hub, `Gungan_A`, `Gungan_B` and back in the emulator (971 pad changes,
+  195 s) with `emu_run.py --record`. Two fixes were needed first:
+  - `--use-main-config` brought the window's settings with it, including `ignore_missing_services: false`, and the
+    emulator died at boot. `--record` now finds the controller by its id instead.
+  - The input-id listing never exits on its own, so it is read and then stopped.
+- **First replay:** `[PADS] no controller`, so the game ignored the script. Replays now give player 1 the keyboard
+  (`--input-id-1 0`), which nobody presses by accident.
+- **Menus:** the recorded menu presses fell before the title, because boot timing varies between emulator boots.
+  `emu_gungan.txt` now uses `emu_to_hub.txt`'s boot and menu part, then the recording from the hub on.
+- **Full replay (`--fresh-save console_gabriel`):**
+  - the run reached the hub at about 104 s, and the moves played out as recorded;
+  - the character never entered `Gungan_A`, and the script failed on its `waitlevel` after 180 s.
+  - Frame pacing is not the cause: play frames ran at 17.5 ms (recording) and 17.1 ms (replay) at p50, with game frame
+    time 16.7-16.8 ms in both.
+  - Left open: timing jitter accumulating over hundreds of time-based stick changes (each applied to whichever frame
+    comes next), a different start position or camera, or randomness in the game.
+- **Next:** a deterministic replay. Record and replay by game frame number with a fixed 1/60 s frame time, so the same
+  inputs reach the same frames. Randomness would remain if the game seeds it from the clock.

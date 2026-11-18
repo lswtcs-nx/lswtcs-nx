@@ -4687,3 +4687,33 @@ reproduce it.
 
 **Build:** `0.0.99-log117` (`build-nvpgo`, Mesa rebuilt), NRO `a7811116…`, ELF kept privately; on the SD folder for the
 next test.
+
+## What is left after run 119 (analysis only)
+
+**Long play frames in run 119's second session** (`frames.log`, 60 ms or more):
+- `Gungan_B`'s entry: one 272 ms replay (91 new textures: upload 120 ms, decode 24 ms, programs 50 ms), then 301 ms
+  of the game reading 2.8 MB.
+- At 116 s, a 597 ms frame. The game thread waited 575 ms for two card reads of 96 KB in all (`[GSPIKE]` io_ms). That
+  is a card latency spike, likely beside the testing profile's own log writes, which a player's session does not make.
+- The rest, 60-100 ms in `Gungan_B`: heavy GPU frames with no stall.
+
+**The walk (`hwprof.txt`, heavy frames):** on the walker thread, `pm4_extract_ib` is 25 % of the samples, spread over
+many lines (none above 2 %). On the main thread, frames with the walk in the stack are 17.6 % of samples, about 5 ms
+of a 31 ms frame. In handheld the GPU is the limit (31.4 ms per heavy frame, as in run 118), so a shorter walk would
+not raise the frame rate there; docked, it would.
+
+**The GPU in heavy frames (`[GLGPU]`, 55 samples):**
+- Per category: plain 11.5 ms, rects 7.9, quads 5.7, resolves 4.6, present 1.1.
+- Per program, averages are misleading: the "costliest" pixel shader, a pass-through (`C31909D155CB8E75`), shows
+  2.8 ms per frame from a single 154 ms sample; it normally costs 0.03 ms. Medians:
+
+  | Shader | Draws | Median per frame |
+  | --- | --- | --- |
+  | `EB7221B1AAA62B09`, full-screen post pass (4 fetches) | 1 | 2.1 ms |
+  | `A2D183873C322D09`, full-screen | 1 | 1.5 ms |
+  | `CEF661992D489E4B`, smoke/fog | 45 | 1.5 ms |
+  | `EDC7892A1E6561C2` | 16 | 1.6 ms |
+  | `D669ECCA44168448`, most of the scene | 1118 | 1.1 ms |
+
+- The full-screen post pass keeps the translator's `for (;;)` with a skip flag around its body. Making such passes
+  cheaper means changing how the translator emits them, and only the console can measure it.

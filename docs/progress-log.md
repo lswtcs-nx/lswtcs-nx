@@ -4894,3 +4894,24 @@ compiled every changed pixel shader again (43 s of long frames), as expected.
   `[GLGPU]` resolves and GPU per heavy frame. DIAG switches: `LSWTCS_GLHANDOVERFULL=1` (view sees every row),
   `LSWTCS_GLHANDOVERNOVIEW=1` (the storage itself).
 - **Build:** `0.0.99-log123` (build-nvpgo, Mesa rebuilt with the new edit).
+
+## Run 121: log123 on the console, one handheld session (18 November 2026)
+
+Route: hub, Gungan A, B and C, hub. No crash. `LSWTCS_ABCYCLE=6` alternated the copy and the hand-over (state `o`);
+`LSWTCS_GLXLATEASYNC=1` all session.
+
+- **Resolve hand-over:** 18 logged hand-overs (the two 1280x704 world copies, then the ping-pong). Heavy frames (GPU
+  over 20 ms), 75 per state: GPU median 26.70 -> 25.38 ms (-1.3 ms, -5 %), mean 28.78 -> 25.20 ms; resolves median
+  4.79 -> 3.15 ms. FPS at 1300+ draws: 32.8 -> 34.1 (both buckets together). The picture is judged by the tester.
+- **Translation off the guest thread (item 2):** no clear gain. The render thread still waited 1.8 s in 46 waits
+  for translations; the worst stall (Gungan entry, 2.4 s, mostly programs) is like run 120's (2.1 s). It stays off.
+- **Caches:** `xlate.bin` started over once (the card had log121's build-ID identity; from log122 on it survives
+  builds that do not touch the translator). `lsw_nvc0.bin`: 1582 loaded, all used, 66 checked, 0 differed, so the
+  Mesa rebuild did not reset it.
+
+## log124: the resolve hand-over on by default
+
+- The tester saw nothing wrong on screen in run 121 while the hand-over switched every 6 s, and the GPU gain was
+  measured there (-1.3 ms median per heavy frame), so it is now on by default; `LSWTCS_GLHANDOVER=0` turns it off.
+- Emulator: same game, 14 hand-overs logged. Build `0.0.99-log124`, NRO `05617e89…`, on the staged SD with the normal
+  `env.txt`.

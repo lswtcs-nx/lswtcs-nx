@@ -314,7 +314,7 @@ struct Resolved {
 };
 std::unordered_map<uint32_t, Resolved> g_resolved;
 
-// ---- resolve hand-over (log123, LSWTCS_GLHANDOVER=1, default off until the console measures it) -------------------------------
+// ---- resolve hand-over (log123; on by default since log124, LSWTCS_GLHANDOVER=0 turns it off) -------------------------------
 // A colour resolve that copies a whole render target from the origin into the origin of a destination exactly as wide, and then
 // clears the target, leaves nothing in the target worth keeping. Instead of the copy (run 120: resolves 4.7 ms of a 29.3 ms heavy
 // handheld GPU frame; run 56's bench: 1.9 ms for these copies), the destination takes the target's storage and the target takes a
@@ -323,7 +323,8 @@ std::unordered_map<uint32_t, Resolved> g_resolved;
 // The next hand-over into the same destination gives the target its previous storage back, so each pair ping-pongs two storages.
 extern "C" void lsw_gl_texture_sample_height(GLuint id, GLuint rows);
 bool g_handover_ab = false;   // state o of LSWTCS_ABSTATES (gl_backend.cpp), for an A/B within one session
-bool handover_on() { static const bool on = env_on("LSWTCS_GLHANDOVER", false); return on || g_handover_ab; }
+bool handover_on() { static const bool on = env_on("LSWTCS_GLHANDOVER", true);   // on since log124 (run 121: GPU -5 %, picture normal)
+    return on || g_handover_ab; }
 std::vector<HostTex> g_spare_storage;   // storages no target or destination holds
 std::map<std::pair<GLuint, uint32_t>, GLuint> g_storage_views;   // (storage, rows) -> view
 uint64_t g_handovers = 0;

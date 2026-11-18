@@ -4829,3 +4829,24 @@ keeps registers in arrays, and invariance propagates per variable.
 **Build:** `0.0.99-log121` (`build-nvpgo`), NRO on the SD folder, ELF kept privately. Both settings are off by
 default. The console test to ask for: `LSWTCS_GLPSINVARIANT=0` against off, `[GLGPU]` medians and heavy-frame FPS;
 `LSWTCS_GLVSPOSINV=1` only if the first pays, and with a look for flicker on overlapping surfaces.
+
+## Run 120: log121 on the console, `LSWTCS_GLPSINVARIANT=0` does not pay
+
+Two handheld sessions on log121 (`run120-log121`, about 190 and 210 s), the same route: A with the defaults, B with
+`LSWTCS_GLPSINVARIANT=0`. No crash.
+
+| | A (defaults) | B (pixel outputs without `invariant`) |
+| --- | --- | --- |
+| GPU per heavy frame (`[GLGPU]`, median) | 26.1 ms (69 samples) | 27.2 ms (60) |
+| Heavy frames (1300+ draws), median | 29.5 ms, 33.9 FPS | 30.2 ms, 33.1 FPS |
+| The 10 costliest pixel shaders, sum of medians | 12.8 ms | 13.4 ms (+4 %) |
+| The heaviest full-screen pass (`EB7221B1AAA62B09`) | 2.11 ms | 2.06 ms (-2 %) |
+
+The emulator's -22 % of pixel code did not become GPU time: the differences are within the ±10 % between sessions,
+per shader both ways (-8 % to +25 %). So the handheld frame is not limited by the pixel shaders' arithmetic
+instructions; run 56's trivial shaders (-58 %) also dropped the texture reads, which is where the time is. The
+setting stays off. Code size is not a usable proxy for GPU time here.
+
+**Stutter:** A, the first session of a new build with the kept nvc0 file (1358 loaded), had 17 play frames over 100 ms
+and 0.5 s of frames held for programs; its worst, 2.1 s, is the translation cache starting over for the new build. B
+compiled every changed pixel shader again (43 s of long frames), as expected.

@@ -1,0 +1,30 @@
+# Probe: the boot_to_hub presses, with a capture after each one to see which screen it lands on.
+log menu_probe
+waitlight 2000 120
+capture
+press A
+wait 3000
+capture
+press START
+wait 2500
+capture
+press DOWN
+wait 1000
+capture
+press A
+wait 2500
+capture
+press A
+wait 2500
+capture
+press UP
+wait 1000
+capture
+press A
+wait 4000
+capture
+press A
+wait 8000
+capture
+wait 3000
+done

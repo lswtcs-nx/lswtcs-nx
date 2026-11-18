@@ -94,7 +94,12 @@ def main():
     ap.add_argument("--emu-args", default=RYUBING_ARGS, help="arguments template; {nro} is the NRO's path (default: Ryubing 1.3.3 headless)")
     ap.add_argument("--sd", required=True, help="the emulator's SD card folder")
     ap.add_argument("--nro", required=True)
-    ap.add_argument("--script", required=True, help="a file in tests/scripts/ (copied to sdmc:/lswtcs/tests/)")
+    ap.add_argument("--script", help="a file in tests/scripts/ (copied to sdmc:/lswtcs/tests/)")
+    ap.add_argument("--record", metavar="NAME",
+                    help="record instead of replaying: the emulator's window opens, you play with your controller, and when "
+                         "you close the window the pad changes ([PADREC]) become tests/scripts/NAME.txt")
+    ap.add_argument("--input-id", help="the emulator's input id for player 1 (list them: Ryujinx.exe --no-gui "
+                                       "--list-input-ids x.nro); without it the emulator's default device is used")
     ap.add_argument("--profile", default=str(ROOT / "profiles/hardware-ab.env"))
     ap.add_argument("--env", action="append", default=[], help="extra KEY=VALUE lines for env.txt")
     ap.add_argument("--timeout", type=int, default=900, help="seconds")
@@ -109,6 +114,10 @@ def main():
     ap.add_argument("--gdb-ex", action="append", default=[], help="a GDB command to run after the stacks (repeatable)")
     args = ap.parse_args()
     GDB_EXTRA.extend(args.gdb_ex)
+    if bool(args.script) == bool(args.record):
+        sys.exit("give --script (replay) or --record NAME (record), one of them")
+    if args.record and args.timeout == 900:
+        args.timeout = 3600   # recording ends when the window is closed
     if args.gdb_on_stall and not args.elf:
         sys.exit("--gdb-on-stall needs --elf")
 
@@ -117,9 +126,10 @@ def main():
     missing = [f for f in GAME_FILES if not (game / f).exists()]
     if missing:
         sys.exit(f"the emulated SD card lacks {', '.join(missing)} in {game} (copy the disc's files there, as docs/playing.md says)")
-    script = ROOT / "tests/scripts" / args.script
-    if not script.exists():
-        sys.exit(f"no script {script}")
+    if args.script:
+        script = ROOT / "tests/scripts" / args.script
+        if not script.exists():
+            sys.exit(f"no script {script}")
     nro = Path(args.nro).resolve()
     if not nro.exists():
         sys.exit(f"no NRO {nro}")
@@ -133,7 +143,7 @@ def main():
     if had_env and not backup.exists():
         shutil.copyfile(env_path, backup)
     profile = Path(args.profile).read_bytes().decode("utf-8")
-    extra = [f"LSWTCS_INPUTSCRIPT={args.script}", *EMU_ENV, *args.env]
+    extra = [f"LSWTCS_INPUTSCRIPT={args.script}" if args.script else "LSWTCS_INPUTRECORD=1", *EMU_ENV, *args.env]
     env_path.write_bytes((profile.rstrip("\n") + "\n# emu_run.py\n" + "\n".join(extra) + "\n").encode())
 
     free = free_ram_mb()
@@ -146,7 +156,11 @@ def main():
         stub = f"--enable-gdb-stub --gdb-stub-port {args.gdb_port}"
         emu_args = (emu_args.replace("--no-gui", "--no-gui " + stub, 1) if emu_args.startswith("--no-gui")
                     else stub + " " + emu_args)
+    if args.input_id:
+        emu_args = emu_args.replace("{nro}", f"--input-id-1 {args.input_id} {{nro}}")
     cmd = [str(emu), *[a.replace("{nro}", str(nro)) for a in shlex.split(emu_args, posix=False)]]
+    if args.record:
+        print("recording: play in the emulator's window, then close it to stop")
     print("starting:", " ".join(cmd))
     t0 = time.time()
     result, reason, log_dir, last_step, crash = "timeout", f"no result in {args.timeout} s", None, "", []
@@ -214,7 +228,7 @@ def main():
         print("crash line:", c)
     if log_dir is not None:
         stamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        dest = Path(args.out) / f"{stamp}-{Path(args.script).stem}-{result}"
+        dest = Path(args.out) / f"{stamp}-{Path(args.script).stem if args.script else 'record-' + args.record}-{result}"
         shutil.copytree(log_dir, dest)
         print("logs:", dest)
         if thread_dump is not None and thread_dump.exists():
@@ -224,6 +238,12 @@ def main():
             subprocess.run([sys.executable, str(ROOT / "tools/analyze_run.py"), str(dest)])
     else:
         print("no log folder appeared: the NRO did not start (check the emulator's own log)")
+    if args.record and log_dir is not None:
+        out_script = ROOT / "tests/scripts" / f"{args.record}.txt"
+        r = subprocess.run([sys.executable, str(ROOT / "tools/padrec_to_script.py"), str(dest / "stdout.log"), "-o", str(out_script)])
+        if r.returncode == 0:
+            print(f"script: {out_script} (read it, trim the start, then replay it with --script {out_script.name})")
+        return r.returncode
     return 0 if result == "done" and not crash else 1
 
 

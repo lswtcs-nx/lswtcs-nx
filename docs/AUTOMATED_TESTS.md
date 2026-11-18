@@ -97,6 +97,25 @@ start (title, user selection) and add `mark`, `log` or `capture` where wanted, t
 Long routes with combat and jumps may drift from the recording; short, fixed scenes (stand in a heavy area, turn the
 camera) replay best. How far a route holds is not known yet.
 
+## Recording a route in the emulator
+
+Menu timing differs between the console and the emulator. In the emulator, the legal screen and the opening crawl ran
+longer, and the title came about 30 s in (emulator probe, 18 November 2026). A route recorded on one does not replay on
+the other, so record each where it will be replayed. In the emulator:
+
+```
+_work/emu/ryubing-1.3.3/Ryujinx.exe --no-gui --list-input-ids x.nro      # with the controller connected: its id
+python tools/emu_run.py --emu _work/emu/ryubing-1.3.3/Ryujinx.exe --sd _work/emu/ryubing-1.3.3/portable/sdcard \
+    --nro source/switch/build-nvpgo/lswtcs.nro --record to_hub --input-id <id>
+```
+
+The window opens; play, then close it. The pad changes become `tests/scripts/to_hub.txt`, which replays with
+`--script to_hub.txt`. Not tried yet.
+
+**Captures in the emulator are not faithful yet:** the probe's captures show only the left quarter of the picture.
+The emulator draws the port's frame wrongly, so comparing captures there flags this, not the build. This was not
+investigated further.
+
 ## Running in an emulator
 
 `tools/emu_run.py` writes `env.txt` on the emulated SD card (a profile plus the script), copies `tests/scripts/`,

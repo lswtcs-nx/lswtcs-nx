@@ -4362,3 +4362,16 @@ About 9.7 GB free for every run.
   - a capture after each menu press, to see which screen each press lands on;
   - waits on screens rather than load counts for the menus;
   - the scheduler stall, if it comes back, with `--gdb-ex "print g_sched_turn"`.
+
+## Emulator run 12: where the boot presses land
+
+`tests/scripts/menu_probe.txt` runs the `boot_to_hub` presses with a capture after each one (50 s, profiler off).
+- In the emulator, the console's timing does not fit:
+  - the first A fell on the legal screen;
+  - START opened the "A long time ago" crawl;
+  - DOWN did nothing there, and the next A skipped the crawl;
+  - the title came about 30 s in, and the last presses fell on it.
+  So menu routes have to be recorded where they replay. `emu_run.py --record NAME [--input-id ID]` opens the
+  emulator's window with `LSWTCS_INPUTRECORD=1` and converts the recording when the window is closed. Not tried yet.
+- The captures show only the left quarter of the picture: the emulator draws the frame wrongly, so captures there are
+  not yet a visual check.

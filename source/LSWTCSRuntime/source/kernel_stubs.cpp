@@ -7631,6 +7631,9 @@ static void pm4_process_ring_flat_impl(bool allow_drain) {
 //
 // Then calls gpu_d3d12_present() to blit the frontbuffer to the D3D12 window.
 //
+// log113: frame-limiter override from an input script (-1 = none, 0 = uncapped, N = N fps).
+static std::atomic<int> g_fps_cap_override{-1};
+extern "C" void lsw_set_fps_cap(int fps) { g_fps_cap_override.store(fps, std::memory_order_relaxed); }
 static std::mutex g_vdswap_mutex;  // serialize concurrent VdSwap calls from worker threads
 
 // LSWTCS_FTFLOOR (default on): game frame time = real time at 60 fps; see the block in VdSwap.
@@ -8207,10 +8210,20 @@ PPC_FUNC(__imp__VdSwap) {
             dbg_ram("[FPSCAP] frame limiter active: target=%.0f fps (%s)\n",
                    s_target_fps, s_target_fps > 0 ? "locked" : "uncapped");
         }
-        if (s_target_fps > 0.0) {
+        // log113: an input script's "speed max" / "speed normal" (lsw_set_fps_cap) overrides the target while it runs;
+        // with LSWTCS_FIXEDDT=1 the game then simulates the same frames, only faster than real time.
+        const int cap_override = g_fps_cap_override.load(std::memory_order_relaxed);
+        static int cap_override_prev = -1;
+        if (cap_override != cap_override_prev) {
+            cap_override_prev = cap_override;
+            s_deadline = clock::now();
+            dbg_ram("[FPSCAP] script override: %s\n", cap_override < 0 ? "back to the limiter's target" : cap_override == 0 ? "uncapped" : "set");
+        }
+        const double target_fps = cap_override >= 0 ? double(cap_override) : s_target_fps;
+        if (target_fps > 0.0) {
             GpScope gp_limit(GP_LIMIT);   // GPUPROF: idle time the limiter adds (busy = wall - limit)
             auto period = std::chrono::duration_cast<clock::duration>(
-                              std::chrono::duration<double>(1.0 / s_target_fps));
+                              std::chrono::duration<double>(1.0 / target_fps));
             s_deadline += period;
             auto now = clock::now();
             if (now < s_deadline) {

@@ -18,7 +18,7 @@ from pathlib import Path
 
 WORK = re.compile(r"\[WORK\] per replay \((\d+)\): nvc0 draws ([\d.]+), vertices ([\d.]+) k, vertex program ([\d.]+) KB, "
                   r"pixel program ([\d.]+) KB .*\| guest calls ([\d.]+) k")
-LEVEL = re.compile(r"^\[LEVEL\] (.+)$")
+LEVEL = re.compile(r"^\[LEVEL\] (.+?)(?: \(frame \d+\))?\s*$")
 FIELDS = ["draws", "vertices k", "VS KB", "PS KB", "guest calls k"]
 
 

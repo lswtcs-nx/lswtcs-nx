@@ -4509,3 +4509,40 @@ render thread replayed every guest frame in both runs (10,200 of 10,200).
   count calls while they wait.
 - Before `[WORK]` can judge a build, an A/A pair (the same build twice) has to give its noise. Work counted per guest
   frame range, not per replay window, would also align two runs better.
+
+## Emulator, after run 17: one-command build test, its noise and sensitivity
+
+`tools/emu_test.py` runs the route in the emulator and reports against a baseline (see `docs/AUTOMATED_TESTS.md`). The
+quick route `tests/scripts/emu_gungan_quick.txt` stops 1500 frames into `Gungan_B` and takes about 3 minutes.
+
+**Same game:** the script's framesets (the game turning light or play inside a level) came at the same guest frames in
+every run: hub 796 frames, `Gungan_B` 4252. The frames of a load between levels vary (223-231 into `Gungan_A`), since
+loads go by real time, so they are not compared. `[LEVEL]` lines now carry the guest frame.
+
+**A/A, the same build twice:**
+
+| Route | Draws | Vertices | VS bytes | PS bytes | Guest calls |
+| --- | --- | --- | --- | --- | --- |
+| Quick, `Gungan_B` | -0.3 % | -1.8 % | -0.5 % | -1.2 % | -0.8 % |
+| Quick, hub | +1.2 % | -1.0 % | +1.0 % | +0.9 % | +0.4 % |
+| Full, `Gungan_B` | +0.3 % | +0.9 % | +0.3 % | +0.3 % | -1.0 % |
+| Full, hub | +3.4 % | +11.2 % | +4.3 % | +3.0 % | +3.7 % |
+
+A third quick run against the baseline: `Gungan_B` within 2.6 %, hub up to +4.8 % (guest calls), vertices +7.1 %.
+The run 17 gap (21 % more draws) came from comparing a recording with a replay; replay against replay agrees. Hub
+windows mix in load frames, so `emu_test.py` marks a field beyond 5 %, vertices beyond 12 %; changes are judged in
+`Gungan_B`.
+
+**Sensitivity:** the same build with `LSWTCS_ABSTATES=MAPXSHNLUBIkhwrgq` (without `e` and `d`) showed pixel-program
+bytes +191 % in `Gungan_B` and +75 % in the hub, the other fields within 2 %. The test sees a real change in the field
+it should move.
+
+**Speed:** a script step `speed max` lifts the port's frame limiter from the hub on, and `--vsync-mode Unbounded` is a
+default. The full route took 333 s against about 340 s: the emulator runs the game at about 35 frames per second on
+this PC. With the limiter off in the menus, the title sat until its attract movie, which hangs in the emulator, so the
+menus keep the normal rate.
+
+**Build:** `0.0.99-log113` (`build-nvpgo`) plus the `[LEVEL]` frame and the `speed` step; emulator only.
+
+**Next:** test changes in the emulator first (same game, work), then measure speed on the console. Still open: the
+dock `[CHAIN]` run; the VdSwap walk (about 9 ms per frame in handheld) is a lead.

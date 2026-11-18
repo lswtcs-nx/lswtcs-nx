@@ -3,13 +3,50 @@
 Scripted input lets a session run without anyone playing: on the console (launch it and leave it) or in a Switch
 emulator on a PC. The same script and the same NRO serve both.
 
-**Status (17 November 2026):**
+**Status (18 November 2026):**
 - The script player, the recorder and the converter pass their PC check (`python tests/input_script_check.py`).
-- Ryubing 1.3.3 runs the NRO. It boots, builds the image from `default.xex` (same hash as the console), starts Mesa and
-  audio, the script starts, and the boot logos draw. About 30 s in, the emulator stops: its own log and the NRO's both
-  stop being written. Cause unknown.
-- Nothing has run on a console yet. The two scripts in `tests/scripts/` are drafts: the menu presses in
-  `boot_to_hub.txt` are a guess.
+- Ryubing 1.3.3 runs the NRO from boot to the hub and through `Gungan_A` and `Gungan_B`, from a save copied off the
+  console. The tester's recorded route replays frame for frame (`--fixed-dt`).
+- `python tools/emu_test.py` tests a build in one command (about 3 minutes): same game or not, and the work it did
+  against a baseline. See "Testing a build in the emulator".
+- The console route `tests/scripts/console_gungan.txt` is recorded but has not been replayed on the console yet.
+
+## Testing a build in the emulator
+
+```
+python tools/emu_test.py --save-baseline main      # once: the reference build
+python tools/emu_test.py --baseline main           # each change: build the NRO, then this
+python tools/emu_test.py --baseline main --env LSWTCS_X=1    # an A/B switch, without a rebuild
+```
+
+It runs `emu_run.py` with the quick route (`tests/scripts/emu_gungan_quick.txt`: menus, hub, `Gungan_A`, the first
+1500 frames of `Gungan_B`), `--fixed-dt`, `--fresh-save console_gabriel`, `profiles/emulator.env` and a GDB dump on a
+stall. `--route full` replays the whole route back to the hub (about 6 minutes). Baselines are kept in
+`private/emu-baselines/`. `--compare <run folder>` reports on a finished run without running again.
+
+It prints:
+- **result:** `done`, the failed step, a stall (with the threads' stacks) or a crash.
+- **frames between state changes:** the guest frames between the script's framesets inside one level (the game going
+  light or play: a door, a cutscene). With the frame time fixed these do not change between runs (hub 796, `Gungan_B`
+  4252 in every run so far). If they differ from the baseline, the build did not play the same game.
+- **work per level:** `[WORK]` per replay against the baseline. Fields beyond 5 % (vertices 12 %) are marked.
+- **VERDICT:** `OK` when the route finished and played the same game; `CHECK` otherwise. Work changes are listed beside
+  it and do not fail it, since an optimization is meant to move them.
+
+**Noise and sensitivity (18 November 2026, build `0.0.99-log113`):**
+- A/A, the same build (three quick runs, two full): in `Gungan_B` every field within 2.6 %. The hub is noisier, up to
+  4.8 % (vertices 11 %): its windows mix in load frames, whose number depends on real time. Judge a change in
+  `Gungan_B`, the heavy level.
+- Sensitivity: the same build with `LSWTCS_ABSTATES` minus `e` and `d` (two of the state filters) showed pixel-program
+  bytes +191 % in `Gungan_B` and +75 % in the hub, nothing else beyond 5 %.
+
+**Speed:** the script step `speed max` lifts the port's frame limiter, and `emu_run.py` passes `--vsync-mode Unbounded`.
+The full route went from about 340 s to 333 s: the emulator itself runs the game at about 35 frames per second on this
+PC, so there is little to gain. The menus stay at the normal rate, since with the limiter off the title sat until
+its attract movie, which hangs in the emulator. The run is already headless (`--no-gui`).
+
+What this does not replace: speed. The emulator cannot tell how many milliseconds a frame costs on the X1, so a change
+that passes here and lowers work still needs a console run to claim a gain.
 
 ## What an emulator run can and cannot tell
 

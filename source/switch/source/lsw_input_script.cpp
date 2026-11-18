@@ -68,6 +68,7 @@ const char* op_name(LswInputScript::Op op) {
     case O::Repeat: return "repeat"; case O::End: return "end"; case O::Mark: return "mark"; case O::Capture: return "capture";
     case O::CaptureFull: return "capturefull"; case O::Log: return "log"; case O::Done: return "done";
     case O::FrameSet: return "frameset"; case O::WaitFrame: return "waitframe"; case O::Pad: return "pad";
+    case O::Speed: return "speed";
     }
     return "?";
 }
@@ -123,6 +124,15 @@ bool LswInputScript::load(const std::string& text) {
         } else if (cmd == "WAITFRAME") {
             st.op = Op::WaitFrame;
             if (w.size() < 2 || !parse_u64(w[1], &st.ms) || !arg_timeout(2)) return err("waitframe K [TIMEOUT_S]");
+        } else if (cmd == "SPEED") {
+            st.op = Op::Speed;
+            const std::string v = w.size() == 2 ? upper(w[1]) : "";
+            uint64_t fps = 0;
+            if (v == "MAX") st.count = 0;
+            else if (v == "NORMAL") st.count = -1;
+            else if (parse_u64(v, &fps) && fps >= 1 && fps <= 1000) st.count = int(fps);
+            else return err("speed max | normal | FPS");
+            st.text = w[1];
         } else if (cmd == "PAD") {
             st.op = Op::Pad;
             if (w.size() != 2 || (w[1] != "-" && !parse_buttons(w[1], &st))) return err("pad BUTTONS | -");
@@ -284,6 +294,9 @@ void LswInputScript::poll(const LswScriptWorld& w, LswPadOut* pad, LswScriptActi
                 return;
             }
             wait = true;
+            break;
+        case Op::Speed:
+            act->fps_cap = st.count;
             break;
         case Op::Pad:
             held_.buttons = st.buttons;

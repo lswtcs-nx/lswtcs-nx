@@ -19,6 +19,7 @@ wait 4500
 press A
 waitlevel Map 180
 waitplay 0 180
+speed max                   # from the hub on: frame-exact, so the limiter can go (with --fixed-dt)
 frameset
 pad -
 waitframe 122

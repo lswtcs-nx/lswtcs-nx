@@ -17,6 +17,8 @@
 //   frameset                         the current guest frame becomes frame 0 for waitframe
 //   waitframe K [TIMEOUT_S]          until guest frame 0 + K
 //   pad BUTTONS | -                  hold these buttons from now on (until the next pad step); "-" lets all go
+//   speed max | normal | FPS         the frame limiter: off, back to its target, or FPS; with LSWTCS_FIXEDDT=1 the game
+//                                    simulates the same frames faster than real time (tests only; back to normal at the end)
 //   mark | capture | capturefull     the tester's mark ([MARK]), a light or full capture, as the pad combos do
 //   log TEXT                         a [SCRIPT] line in stdout.log
 //   done                             end: "[SCRIPT] done", the pad goes back to the player
@@ -48,6 +50,7 @@ struct LswScriptWorld {
 struct LswScriptActions {
     int marks = 0;
     int capture = 0;           // 1 light, 2 full
+    int fps_cap = -2;          // speed step: -2 no change, -1 back to the limiter's target, 0 uncapped, N fps
 };
 
 class LswInputScript {
@@ -64,7 +67,7 @@ public:
     size_t steps() const { return steps_.size(); }
 
     enum class Op { Wait, WaitLevel, WaitPlay, WaitLight, WaitLoads, Press, Hold, Stick, Repeat, End, Mark, Capture, CaptureFull, Log, Done,
-                    FrameSet, WaitFrame, Pad };
+                    FrameSet, WaitFrame, Pad, Speed };
     struct Step {
         Op op;
         int line = 0;

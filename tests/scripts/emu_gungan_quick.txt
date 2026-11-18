@@ -1,0 +1,574 @@
+# Quick emulator route: emu_gungan.txt up to 1500 frames into Gungan_B (the heavy part). About 3 minutes.
+# on (run 2026-11-18 12:00, --fixed-dt), Gungan A and B and back, replayed by guest frame.
+# Replay with: emu_run.py --script emu_gungan.txt --fixed-dt --fresh-save console_gabriel
+log emu_gungan
+waitlight 2000 120
+wait 30000                  # legal screen and opening crawl
+press START
+wait 1500
+press DOWN
+wait 600
+press A
+wait 1500
+press A
+wait 1000
+press UP
+wait 600
+press A
+wait 4500
+press A
+waitlevel Map 180
+waitplay 0 180
+speed max                   # from the hub on: frame-exact, so the limiter can go (with --fixed-dt)
+frameset
+pad -
+waitframe 122
+stick L 0 0.31
+waitframe 123
+stick L 0.12 0.75
+waitframe 125
+stick L 0.06 0.94
+waitframe 127
+stick L -0.06 0.94
+waitframe 128
+stick L -0.12 0.94
+waitframe 130
+stick L -0.06 0.94
+waitframe 131
+stick L 0 0.94
+waitframe 138
+stick L 0.06 0.94
+waitframe 142
+stick L 0 0.94
+waitframe 145
+stick L -0.06 0.94
+waitframe 171
+stick L 0 0.94
+waitframe 175
+stick L 0.06 0.94
+waitframe 176
+stick L 0.12 0.94
+waitframe 177
+stick L 0.19 0.94
+waitframe 179
+pad A
+stick L 0.25 0.94
+waitframe 185
+pad -
+waitframe 191
+pad A
+waitframe 192
+stick L 0.19 0.94
+waitframe 199
+pad -
+waitframe 210
+pad X
+waitframe 211
+stick L 0.19 0.88
+waitframe 212
+stick L 0.12 0.81
+waitframe 213
+stick L 0 0
+waitframe 223
+pad -
+waitframe 228
+pad X
+waitframe 235
+pad -
+waitframe 237
+pad X
+waitframe 243
+pad -
+waitframe 336
+stick L 0 0.06
+waitframe 337
+stick L 0 0.12
+waitframe 338
+stick L 0.06 0.25
+waitframe 339
+stick L 0.06 0.31
+waitframe 340
+stick L 0.12 0.5
+waitframe 341
+stick L 0.12 0.75
+waitframe 342
+stick L 0.19 0.88
+waitframe 343
+stick L 0.19 0.94
+waitframe 344
+stick L 0.25 0.94
+waitframe 363
+stick L 0.31 0.94
+waitframe 366
+stick L 0.31 0.88
+waitframe 367
+stick L 0.38 0.88
+waitframe 373
+stick L 0.44 0.88
+waitframe 389
+stick L 0.38 0.88
+waitframe 408
+stick L 0.31 0.88
+waitframe 409
+stick L 0.25 0.94
+waitframe 410
+stick L 0.12 0.94
+waitframe 412
+stick L 0.06 0.94
+waitframe 413
+stick L 0 0.94
+waitframe 429
+stick L -0.12 0.94
+waitframe 431
+stick L -0.19 0.94
+waitframe 432
+stick L -0.25 0.94
+waitframe 435
+stick L -0.19 0.94
+waitframe 437
+stick L -0.12 0.94
+waitframe 439
+stick L -0.06 0.94
+waitframe 442
+stick L 0 0.94
+waitframe 447
+stick L 0.06 0.94
+waitframe 450
+stick L 0.12 0.94
+waitframe 478
+stick L 0.19 0.94
+waitframe 485
+stick L 0.12 0.88
+waitframe 486
+stick L 0.06 0.56
+waitframe 487
+stick L 0 0.31
+waitframe 488
+stick L 0 0.06
+waitframe 489
+stick L 0 0
+waitframe 529
+stick L 0.06 0
+waitframe 531
+stick L 0.25 -0.06
+waitframe 532
+stick L 0.38 -0.06
+waitframe 533
+stick L 0.56 -0.12
+waitframe 534
+stick L 0.69 -0.19
+waitframe 535
+stick L 0.94 -0.25
+waitframe 536
+stick L 0.88 -0.31
+waitframe 537
+stick L 0.88 -0.38
+waitframe 543
+stick L 0.88 -0.44
+waitframe 544
+stick L 0.81 -0.5
+waitframe 547
+stick L 0.81 -0.56
+waitframe 548
+stick L 0.75 -0.56
+waitframe 554
+stick L 0.81 -0.5
+waitframe 556
+stick L 0.88 -0.44
+waitframe 557
+stick L 0.88 -0.38
+waitframe 558
+stick L 0.94 -0.31
+waitframe 559
+stick L 0.94 -0.25
+waitframe 560
+stick L 0.94 -0.12
+waitframe 561
+stick L 0.94 0
+waitframe 562
+stick L 0.94 0.06
+waitframe 563
+stick L 0.94 0.12
+waitframe 564
+stick L 0.94 0.25
+waitframe 566
+stick L 0.94 0.31
+waitframe 571
+stick L 0.88 0.31
+waitframe 572
+stick L 0.88 0.38
+waitframe 575
+stick L 0.88 0.44
+waitframe 578
+stick L 0.81 0.5
+waitframe 580
+stick L 0.75 0.56
+waitframe 583
+stick L 0.75 0.62
+waitframe 597
+stick L 0.69 0.62
+waitframe 600
+stick L 0.69 0.69
+waitframe 603
+stick L 0.62 0.69
+waitframe 650
+stick L 0.62 0.75
+waitframe 651
+stick L 0.56 0.75
+waitframe 654
+stick L 0.56 0.81
+waitframe 655
+stick L 0.5 0.81
+waitframe 659
+stick L 0.44 0.81
+waitframe 662
+stick L 0.44 0.88
+waitframe 673
+stick L 0.38 0.88
+waitframe 675
+stick L 0.31 0.88
+waitframe 676
+stick L 0.31 0.94
+waitframe 683
+stick L 0.25 0.94
+waitframe 687
+stick L 0.19 0.94
+waitframe 688
+stick L 0.12 0.94
+waitframe 689
+stick L 0.06 0.94
+waitframe 690
+stick L 0 0.94
+waitframe 691
+stick L -0.06 0.94
+waitframe 693
+stick L -0.12 0.94
+waitframe 695
+stick L -0.19 0.94
+waitframe 722
+stick L -0.25 0.94
+waitframe 731
+stick L -0.31 0.94
+waitframe 746
+stick L -0.31 0.88
+waitframe 750
+stick L -0.38 0.88
+waitframe 780
+stick L -0.44 0.88
+waitframe 795
+stick L -0.44 0.81
+waitlight 0
+frameset
+stick L -0.5 0.69
+waitframe 2
+stick L -0.31 0.38
+waitframe 3
+stick L -0.12 0.19
+waitframe 4
+stick L -0.06 0.06
+waitframe 5
+stick L 0 0
+waitframe 138
+pad A
+waitframe 147
+pad -
+waitframe 180
+pad A
+waitframe 188
+pad -
+waitframe 195
+pad A
+waitframe 200
+pad -
+waitframe 214
+pad A
+waitframe 220
+pad -
+waitframe 225
+pad A
+waitframe 231
+pad -
+waitframe 235
+pad A
+waitframe 241
+pad -
+waitframe 246
+pad A
+waitframe 251
+pad -
+waitframe 258
+pad A
+waitframe 262
+pad -
+waitframe 269
+pad A
+waitframe 274
+pad -
+waitframe 280
+pad A
+waitframe 288
+pad -
+waitlevel Gungan_A
+waitframe 590
+pad START
+waitframe 599
+pad -
+waitlevel Gungan_B
+waitplay 0
+frameset
+waitframe 455
+stick L 0 0.81
+waitframe 456
+stick L 0 0.94
+waitframe 457
+stick L 0.12 0.94
+waitframe 458
+stick L 0.19 0.94
+waitframe 459
+stick L 0.25 0.94
+waitframe 462
+stick L 0.31 0.94
+waitframe 469
+stick L 0.31 0.88
+waitframe 470
+stick L 0.38 0.88
+waitframe 483
+stick L 0.31 0.94
+waitframe 484
+stick L 0.25 0.94
+waitframe 485
+stick L 0.19 0.94
+waitframe 486
+stick L 0.12 0.94
+waitframe 487
+stick L 0.06 0.94
+waitframe 494
+stick L 0 0.94
+waitframe 501
+stick L -0.06 0.94
+waitframe 503
+stick L -0.25 0.94
+waitframe 504
+stick L -0.38 0.88
+waitframe 505
+stick L -0.44 0.88
+waitframe 509
+stick L -0.38 0.88
+waitframe 511
+stick L -0.31 0.94
+waitframe 513
+stick L -0.25 0.94
+waitframe 533
+stick L -0.19 0.94
+waitframe 536
+stick L -0.06 0.94
+waitframe 538
+stick L 0 0.94
+waitframe 552
+stick L 0.06 0.94
+waitframe 554
+stick L 0.12 0.94
+waitframe 566
+stick L 0.19 0.94
+waitframe 570
+stick L 0.25 0.94
+waitframe 631
+stick L 0.12 0.94
+waitframe 632
+stick L 0.06 0.94
+waitframe 634
+stick L 0 0.94
+waitframe 716
+stick L -0.06 0.94
+waitframe 797
+stick L -0.12 0.94
+waitframe 799
+stick L -0.19 0.94
+waitframe 809
+stick L -0.25 0.94
+waitframe 814
+stick L -0.31 0.94
+waitframe 835
+stick L -0.31 0.88
+waitframe 837
+stick L -0.38 0.88
+waitframe 897
+stick L -0.31 0.88
+waitframe 898
+stick L -0.31 0.94
+waitframe 904
+stick L -0.25 0.94
+waitframe 913
+stick L -0.19 0.94
+waitframe 916
+stick L -0.12 0.94
+waitframe 919
+stick L -0.06 0.94
+waitframe 948
+stick L 0 0.94
+waitframe 969
+stick L 0.06 0.94
+waitframe 971
+stick L 0.19 0.94
+waitframe 974
+stick L 0.25 0.94
+waitframe 985
+stick L 0.19 0.94
+waitframe 987
+stick L 0.12 0.94
+waitframe 989
+stick L 0.06 0.94
+waitframe 992
+stick L 0 0.94
+waitframe 1019
+stick L -0.06 0.94
+waitframe 1020
+stick L -0.12 0.94
+waitframe 1021
+stick L -0.25 0.94
+waitframe 1023
+stick L -0.31 0.94
+waitframe 1024
+stick L -0.38 0.88
+waitframe 1033
+pad A
+stick L -0.31 0.88
+waitframe 1034
+stick L -0.31 0.94
+waitframe 1035
+stick L -0.25 0.94
+waitframe 1037
+stick L -0.19 0.94
+waitframe 1038
+stick L -0.12 0.94
+waitframe 1039
+stick L -0.06 0.94
+waitframe 1042
+pad -
+waitframe 1045
+stick L -0.19 0.94
+waitframe 1046
+pad A
+stick L -0.25 0.94
+waitframe 1048
+stick L -0.25 0.81
+waitframe 1049
+stick L -0.19 0.69
+waitframe 1050
+stick L -0.19 0.5
+waitframe 1051
+stick L -0.06 0.25
+waitframe 1052
+stick L 0 0.12
+waitframe 1053
+stick L 0 0.06
+waitframe 1054
+pad -
+stick L 0 0
+waitframe 1064
+pad X
+waitframe 1111
+stick L 0.12 0.06
+waitframe 1112
+stick L 0.19 0.12
+waitframe 1113
+stick L 0.25 0.19
+waitframe 1114
+stick L 0.38 0.25
+waitframe 1115
+pad -
+stick L 0.56 0.31
+waitframe 1116
+stick L 0.75 0.38
+waitframe 1117
+stick L 0.88 0.38
+waitframe 1119
+stick L 0.88 0.44
+waitframe 1127
+pad X
+waitframe 1135
+pad -
+waitframe 1147
+stick L 0.88 0.31
+waitframe 1148
+stick L 0.94 0.31
+waitframe 1149
+stick L 0.94 0.25
+waitframe 1150
+stick L 0.94 0.19
+waitframe 1151
+stick L 0.94 0.12
+waitframe 1154
+stick L 0.94 0.06
+waitframe 1156
+stick L 0.94 0
+waitframe 1172
+stick L 0.94 -0.06
+waitframe 1173
+stick L 0.94 -0.12
+waitframe 1174
+stick L 0.94 -0.19
+waitframe 1175
+stick L 0.94 -0.25
+waitframe 1176
+stick L 0.94 -0.31
+waitframe 1180
+stick L 0.94 -0.25
+waitframe 1181
+stick L 0.94 -0.19
+waitframe 1182
+stick L 0.81 0
+waitframe 1183
+pad B
+stick L 0.56 0.06
+waitframe 1184
+stick L 0.06 0
+waitframe 1185
+stick L 0 0
+waitframe 1216
+pad -
+stick L 0 0.12
+waitframe 1217
+stick L 0 0.38
+waitframe 1218
+stick L -0.06 0.94
+waitframe 1220
+stick L 0 0.94
+waitframe 1222
+stick L -0.06 0.94
+waitframe 1223
+stick L -0.06 0.62
+waitframe 1224
+stick L 0 0.31
+waitframe 1225
+stick L 0 0
+waitframe 1228
+pad B
+waitframe 1265
+stick L 0 0.12
+waitframe 1266
+stick L 0 0.19
+waitframe 1267
+stick L 0 0.31
+waitframe 1268
+stick L 0 0.5
+waitframe 1269
+stick L 0 0.69
+waitframe 1270
+stick L 0 0.88
+waitframe 1271
+stick L 0 0.94
+waitframe 1284
+pad -
+waitframe 1423
+stick L 0.06 0.94
+waitframe 1451
+stick L 0.12 0.94
+waitframe 1452
+stick L 0.19 0.94
+waitframe 1455
+stick L 0.25 0.94
+pad -
+stick L 0 0
+stick R 0 0
+done

@@ -36,7 +36,7 @@ GAME_FILES = ["default.xex", "game.DAT", "game1.DAT"]
 # Ryubing 1.3.3 (17 November 2026): headless, handheld, no profile picker or controller screen, unimplemented services
 # answered instead of stopping (pcv), and its OpenGL backend: with Vulkan the NRO stopped at its first shader.
 RYUBING_ARGS = ("--no-gui --disable-docked-mode --skip-user-profiles-manager --ignore-controller-applet "
-                "--ignore-missing-services --graphics-backend OpenGl {nro}")
+                "--ignore-missing-services --graphics-backend OpenGl --vsync-mode Unbounded {nro}")
 # The clock monitor reads the GPU load with an nvhost-ctrl-gpu ioctl (0x80044715) the emulator does not have.
 # The sampling profiler (LSWTCS_HWPROF) pauses threads with svcSetThreadActivity; in emulator run 9 a paused thread
 # never came back and the boot deadlocked.
@@ -101,7 +101,7 @@ def main():
                          "you close the window the pad changes ([PADREC]) become tests/scripts/NAME.txt")
     ap.add_argument("--input-id", help="the emulator's input id for player 1 (list them: Ryujinx.exe --no-gui "
                                        "--list-input-ids x.nro); without it the emulator's default device is used")
-    ap.add_argument("--profile", default=str(ROOT / "profiles/hardware-ab.env"))
+    ap.add_argument("--profile", default=str(ROOT / "profiles/emulator.env"))
     ap.add_argument("--env", action="append", default=[], help="extra KEY=VALUE lines for env.txt")
     ap.add_argument("--timeout", type=int, default=900, help="seconds")
     ap.add_argument("--out", default=str(ROOT / "private/emu-runs"))

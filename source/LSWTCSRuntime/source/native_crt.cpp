@@ -42,6 +42,7 @@ extern "C" PPC_FUNC(__imp__sub_824F9068);
 extern "C" PPC_FUNC(__imp__sub_824F8F48);
 extern "C" PPC_FUNC(__imp__sub_8250F7E0);
 
+extern "C" uint64_t lsw_guest_frames();   // kernel_stubs.cpp: VdSwap calls (log113)
 namespace {
 constexpr uint32_t kRegion = 0x20000000u;   // one guest view region (PPC_HOST table entry)
 
@@ -164,7 +165,7 @@ void note_level(uint8_t* base, uint32_t path) {
         if (!hub) seen_level = true;
         else if (seen_level && g_ab_phase.load() < 2) g_ab_phase.store(2);
     }
-    printf("[LEVEL] %s\n", g_level);
+    printf("[LEVEL] %s (frame %llu)\n", g_level, (unsigned long long)lsw_guest_frames());   // log113: the guest frame
     fflush(stdout);
 }
 }  // namespace

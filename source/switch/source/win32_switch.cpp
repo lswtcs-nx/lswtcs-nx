@@ -774,6 +774,7 @@ extern "C" void lsw_log_async_drain();   // log_async.cpp
 extern "C" void lsw_level_name(char* out, size_t capacity);   // native_crt.cpp
 extern "C" uint64_t lsw_load_episodes_done();                 // kernel_stubs.cpp ([LOADEP])
 extern "C" uint64_t lsw_guest_frames();                       // kernel_stubs.cpp: VdSwap calls (log113)
+extern "C" void lsw_set_fps_cap(int fps);                     // kernel_stubs.cpp: script "speed" (log113)
 LswInputScript g_script;
 bool g_script_on = false;
 void script_init() {
@@ -850,6 +851,9 @@ void script_poll(XiState& st) {
         printf("[MARK] %u at %llu ms (script)\n", n, (unsigned long long)w.now_ms);
     }
     if (act.capture) g_capture_request.store(uint32_t(act.capture), std::memory_order_relaxed);
+    static bool speed_changed = false;
+    if (act.fps_cap != -2) { lsw_set_fps_cap(act.fps_cap); speed_changed = act.fps_cap != -1; }
+    if (g_script.finished() && speed_changed) { lsw_set_fps_cap(-1); speed_changed = false; }   // a test never leaves the game fast
     for (const std::string& line : log) printf("%s\n", line.c_str());
     if (!log.empty() || act.marks) {
         fflush(stdout);

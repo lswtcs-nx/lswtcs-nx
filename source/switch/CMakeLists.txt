@@ -227,6 +227,36 @@ target_include_directories(lsw_spirv PRIVATE
     "${GLSLANG}" "${SPIRV_CROSS}" "${LSW_ROOT}/LSWTCSRuntime/include" "${LSW_GEN}")
 target_compile_definitions(lsw_spirv PRIVATE NDEBUG FMT_HEADER_ONLY __gnu_linux__)
 target_compile_options(lsw_spirv PRIVATE ${LSW_ARCH_FLAGS} ${LSW_COMPAT} -O2 -g -w)
+# log122: the translation cache's identity is a hash of what decides a translation (tools/xlate_identity.cmake), not the
+# NRO's build ID: the translator library's sources, the headers they read, the compile options, and the patches.
+get_target_property(LSW_XLATE_SOURCES lsw_spirv SOURCES)
+set(LSW_XLATE_INPUTS "")
+foreach(src IN LISTS LSW_XLATE_SOURCES)
+  if(IS_ABSOLUTE "${src}")
+    list(APPEND LSW_XLATE_INPUTS "${src}")
+  else()
+    list(APPEND LSW_XLATE_INPUTS "${CMAKE_CURRENT_SOURCE_DIR}/${src}")
+  endif()
+endforeach()
+file(GLOB LSW_XLATE_HEADERS "${XG}/*.h" "${XENIA_ROOT}/src/xenia/base/*.h" "${SPIRV_CROSS}/*.hpp" "${GLSLANG}/SPIRV/*.h"
+     "${CMAKE_CURRENT_SOURCE_DIR}/include/lsw_glsl_fold.h" "${CMAKE_CURRENT_SOURCE_DIR}/include/lsw_spirv_glsl.h"
+     "${CMAKE_CURRENT_SOURCE_DIR}/include/lsw_gl_shader.h" "${CMAKE_CURRENT_SOURCE_DIR}/include/lsw_xlate_cache.h"
+     "${LSW_ROOT}/LSWTCSRuntime/include/lsw_gpu_bridge.h" "${LSW_ROOT}/patches/xenia-canary.patch")
+list(APPEND LSW_XLATE_INPUTS ${LSW_XLATE_HEADERS})
+list(FILTER LSW_XLATE_INPUTS EXCLUDE REGEX "lsw_xlate_identity")
+file(WRITE "${LSW_GEN}/xlate_identity_inputs.txt" "")
+foreach(f IN LISTS LSW_XLATE_INPUTS)
+  file(APPEND "${LSW_GEN}/xlate_identity_inputs.txt" "${f}\n")
+endforeach()
+file(APPEND "${LSW_GEN}/xlate_identity_inputs.txt" "options: ${LSW_ARCH_FLAGS} ${LSW_COMPAT} -O2\n")
+add_custom_command(
+    OUTPUT "${LSW_GEN}/lsw_xlate_identity.h"
+    COMMAND ${CMAKE_COMMAND} -DLIST=${LSW_GEN}/xlate_identity_inputs.txt -DOUT=${LSW_GEN}/lsw_xlate_identity.h
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tools/xlate_identity.cmake
+    DEPENDS ${LSW_XLATE_INPUTS} ${CMAKE_CURRENT_SOURCE_DIR}/tools/xlate_identity.cmake
+    COMMENT "translation cache identity")
+target_sources(lsw_spirv PRIVATE "${LSW_GEN}/lsw_xlate_identity.h")
+set_source_files_properties(source/gl_xlate_cache.cc PROPERTIES OBJECT_DEPENDS "${LSW_GEN}/lsw_xlate_identity.h")
 
 # ---- runtime ------------------------------------------------------------------------------
 option(LSW_DEKO_BACKEND "Use the live native Deko renderer" OFF)
@@ -370,7 +400,7 @@ else()
         if(LSW_PGO STREQUAL "generate")
             set(LSW_NACP_VERSION "0.0.99-log97nvg")   # log97: the instrumented NRO of log96's code (wide counts)
         elseif(LSW_PGO STREQUAL "use")
-            set(LSW_NACP_VERSION "0.0.99-log121")   # log107: the image from default.xex, built-in player settings, file checks; log108: log text; log109: shader translations saved on the SD card; log110: scripted input and pad recording; log111: [WORK], [CHAIN], waitloads; log112: save copy to and from the SD card; log113: frame-exact input, fixed frame time; log114: shader translation off the guest thread (LSWTCS_GLXLATEASYNC); log115: programs asked for while translations finish (taken out in log116); log116: nvc0 translations kept on the SD card; log117: written in 256 KB blocks; log118: the exece break before the main loop's end (LSWTCS_GLLOOPEND); log119: nvc0 file flushed every 300 replays; log120: pixel outputs without invariant (LSWTCS_GLPSINVARIANT=0); log121: vertex invariance on the position only (LSWTCS_GLVSPOSINV=1)
+            set(LSW_NACP_VERSION "0.0.99-log122")   # log107: the image from default.xex, built-in player settings, file checks; log108: log text; log109: shader translations saved on the SD card; log110: scripted input and pad recording; log111: [WORK], [CHAIN], waitloads; log112: save copy to and from the SD card; log113: frame-exact input, fixed frame time; log114: shader translation off the guest thread (LSWTCS_GLXLATEASYNC); log115: programs asked for while translations finish (taken out in log116); log116: nvc0 translations kept on the SD card; log117: written in 256 KB blocks; log118: the exece break before the main loop's end (LSWTCS_GLLOOPEND); log119: nvc0 file flushed every 300 replays; log120: pixel outputs without invariant (LSWTCS_GLPSINVARIANT=0); log121: vertex invariance on the position only (LSWTCS_GLVSPOSINV=1); log122: translation cache tied to the translator, not the build
         endif()
     else()
         set(LSW_NACP_VERSION "0.0.99-log93")

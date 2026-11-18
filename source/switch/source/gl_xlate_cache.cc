@@ -6,6 +6,7 @@
 // from the HOME menu, so a record can be cut short: loading stops at the first record whose length or checksum is
 // wrong and keeps the ones before it.
 #include "lsw_xlate_cache.h"
+#include "lsw_xlate_identity.h"   // generated (log122)
 
 #include <sys/stat.h>
 
@@ -185,13 +186,21 @@ void lsw_xlate_cache_open() {
   }
   const char* c = getenv("LSWTCS_GLXLATECHECK");
   g_checks_left = c ? uint32_t(atoi(c)) : 8u;
-  uint8_t build_id[32];
-  if (!nro_build_id(build_id)) {
-    printf("[XLATECACHE] off: no build ID in the NRO header\n");
-    fflush(stdout);
-    return;
+  // log122: the translator's identity (a hash of its sources, headers, options and patches, made at build time by
+  // tools/xlate_identity.cmake), not the NRO's build ID, which changed with any rebuild and started the file over each
+  // time. The first saved translations of each session are still translated again and compared (g_checks_left), so a
+  // change the hash misses starts the file over at once. LSWTCS_GLXLATEBYBUILD=1 goes back to the build ID.
+  std::string v = LSW_XLATE_IDENTITY;
+  if (const char* by = getenv("LSWTCS_GLXLATEBYBUILD"); by && by[0] == '1') {
+    uint8_t build_id[32];
+    if (!nro_build_id(build_id)) {
+      printf("[XLATECACHE] off: no build ID in the NRO header\n");
+      fflush(stdout);
+      return;
+    }
+    v.assign(reinterpret_cast<const char*>(build_id), sizeof build_id);
   }
-  std::string v(reinterpret_cast<const char*>(build_id), sizeof build_id);
+  printf("[XLATECACHE] identity %s\n", LSW_XLATE_IDENTITY);
   for (const char* n : kSettings) {
     const char* x = getenv(n);
     v += n;

@@ -4863,3 +4863,16 @@ compiled every changed pixel shader again (43 s of long frames), as expected.
 - **Files:** `lswtcs-v0.3.0.zip`, `lswtcs.nro` (`3c9ba370…`) and `SHA256SUMS.txt`; notes from `CHANGELOG.md`. The ELF is
   kept privately for crash reports.
 - **Also:** the emulator's save folder is named `console_save` in the tools and docs.
+
+## log122: the translation cache tied to the translator, not the build
+
+- **Why:** `xlate.bin` (log109) took the NRO's build ID as its identity, so any rebuild of anything started it over and
+  the next session translated every shader again (run 120's worst frame, 2.1 s).
+- **Change:** `tools/xlate_identity.cmake` hashes, at build time, the files that decide a translation: the `lsw_spirv`
+  sources, the Xenia GPU, SPIR-V Cross and glslang headers, the port's translator headers, the Xenia patch and the
+  compile options. `gl_xlate_cache.cc` uses that hash plus the GLSL settings. The first 8 saved translations of each
+  session are still translated again and compared. `LSWTCS_GLXLATEBYBUILD=1` goes back to the build ID.
+- **Emulator check:** a session on log122 wrote the file (153 translated); a rebuild that only changed
+  `kernel_stubs.cpp` (different NRO, identity step not rerun) then loaded 152 translations, 8 checked the same, 5
+  translated, same game. Not run on the console.
+- **Build:** `0.0.99-log122` (build-nvpgo), NRO `367c7eb4…`.

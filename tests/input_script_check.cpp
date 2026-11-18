@@ -142,6 +142,26 @@ int main(int argc, char** argv) {
         CHECK(!s.load("frobnicate\n") && s.error().find("unknown step") != std::string::npos, "%s", s.error().c_str());
         CHECK(s.load("press A+B+LT 50\nrepeat 0\npress X\nend\ndone\n"), "valid script refused: %s", s.error().c_str());
     }
+    {   // waitloads: the count of ended load episodes, with a timeout.
+        LswInputScript s;
+        CHECK(s.load("waitloads 2 5\ndone\n"), "load");
+        std::vector<std::string> log;
+        for (uint64_t t = 1000, loads = 0; t < 4000 && !s.finished(); t += 33) {
+            if (t > 2000) loads = 2;
+            LswScriptWorld w; w.now_ms = t; w.loads = loads;
+            LswPadOut pad; LswScriptActions act;
+            s.poll(w, &pad, &act, &log);
+        }
+        CHECK(s.finished() && !s.failed(), "waitloads did not pass");
+        LswInputScript s2;
+        CHECK(s2.load("waitloads 3 2\ndone\n"), "load");
+        for (uint64_t t = 1000; t < 6000 && !s2.finished(); t += 33) {
+            LswScriptWorld w; w.now_ms = t; w.loads = 1;
+            LswPadOut pad; LswScriptActions act;
+            s2.poll(w, &pad, &act, &log);
+        }
+        CHECK(s2.failed(), "waitloads did not time out");
+    }
     {   // repeat 0 skips its body; combined buttons and triggers.
         Run r;
         CHECK(r.go("press A+B+LT 50\nrepeat 0\npress X\nend\ndone\n"), "load");

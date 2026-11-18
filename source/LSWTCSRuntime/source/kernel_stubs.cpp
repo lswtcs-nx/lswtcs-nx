@@ -460,6 +460,7 @@ static void aw_isr_service(PPCContext& ctx);   // log83: run a GPU interrupt the
 static std::atomic<uint64_t> g_pub_serial{0}, g_tex_done_serial{0};
 static bool aw_defer_pending();   // log86: queued walker interrupts are waiting for a replay
 extern "C" __attribute__((weak)) void lsw_gpu_replay_request();   // gl_backend.cpp (log86)
+extern "C" __attribute__((weak)) void lsw_chain_mark(int stage);   // gl_backend.cpp (log111): [CHAIN] frame timeline
 static uint64_t g_replay_requests = 0;
 static uint64_t g_aw_phase_skips = 0;
 // [ASYNCWALK] IB work by thread (top-level IBs, wall time): 0 the main thread, 1 the walker, 2 any other. Run 46: by the walk counters
@@ -627,6 +628,8 @@ enum : uint32_t { kLoadTurnFree = 1, kLoadBigReads = 2 };
 enum { kLoadRead, kLoadOpen, kLoadAttr, kLoadKinds };
 static std::atomic<uint32_t> g_load_mode{0};
 static std::atomic<uint32_t> g_load_swap{0};   // VdSwap count, for the reports
+static std::atomic<uint64_t> g_load_eps_done{0};   // log111: load episodes reported, for the input script's waitloads
+extern "C" uint64_t lsw_load_episodes_done() { return g_load_eps_done.load(std::memory_order_relaxed); }
 extern "C" void lsw_boot_mark(const char* what);   // main.cpp: [BOOT] (log67)
 extern "C" void lsw_level_name(char* out, size_t capacity);   // native_crt.cpp
 extern std::atomic<uint64_t> g_file_bytes_read;   // below: bytes the game read, per call
@@ -672,6 +675,7 @@ void load_ep_report_locked() {   // g_load_mtx held
     LoadEp& e = g_load_ep;
     if (!e.open) return;
     e.open = false;
+    g_load_eps_done.fetch_add(1, std::memory_order_relaxed);
     if (e.card_bytes >= load_big_bytes()) g_load_advance = true;
     char level1[96]; lsw_level_name(level1, sizeof level1);
     const double span = (e.last_ns - e.start_ns) / 1e6, rd = e.ns[kLoadRead] / 1e6;
@@ -7666,6 +7670,7 @@ extern "C" void lsw_ft_ring_dump() {
 
 PPC_FUNC(__imp__VdSwap) {
     PPC_FUNC_PROLOGUE();
+    if (lsw_chain_mark) lsw_chain_mark(0);   // log111: [CHAIN] the guest frame reaches VdSwap
     // DIAG (LSWTCS_SWAPCHAIN=1): the guest call chain of the presenting thread, logged as [SWAPCHAIN] whenever it
     // differs from the previous swap's (which game state is presenting, e.g. during a load's idle wait). Walks the
     // back chain: frame SP s -> caller SP [s], return address saved at [caller SP - 8] (stw r12,-8(r1) prologues).
@@ -7988,6 +7993,7 @@ PPC_FUNC(__imp__VdSwap) {
                 const uint32_t walk_r0 = g_rb_rptr_dwords;
                 pm4_process_ring_flat_impl(!nodrain);   // self-paces off the ring NOP frontier; fills g_geom_verts
                 walk_site_note(WALK_SWAP, walk_t0, walk_r0);
+                if (lsw_chain_mark) lsw_chain_mark(1);   // log111: [CHAIN] the frame's walk is done
                 g_interrupt_ctx = nullptr;
             }
         }

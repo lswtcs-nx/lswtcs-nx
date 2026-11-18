@@ -1,15 +1,29 @@
-# Smoke test: boot to the hub and stand there. Not yet replayed on a console or an emulator: the menu presses below are a
-# guess at the title and load-game screens, to be replaced by a recorded route (tools/padrec_to_script.py).
+# Boot to the hub (the Cantina) on an existing save, then stand there 20 s.
+# Rebuilt from the tester's own presses ([PAD] lines) in runs 112-117, which repeat the same menu path every session:
+#   A (past the intro), START (title), DOWN + A, A, UP + A, then A once more and the hub loads ([LEVEL] Map\Map).
+# The [PAD] lines are Switch buttons; menus read the face buttons by label (layout auto), so Switch A is the 360's A.
+# Which menu items these are is not known; the timing between presses is the tester's, made a little longer.
+# Not yet replayed on a console or in an emulator.
 log boot_to_hub
-waitlight 3000 120          # the title screen
-repeat 6                    # title, then the load-game menus: confirm the defaults
-  press START
-  wait 1500
-  press A
-  wait 1500
-end
-waitlevel Map 120           # the hub is loading
-waitplay 5000 120           # in the hub, 5 s of play frames
+waitlight 2000 120          # boot logos
+press A                     # past the intro
+waitloads 2 120             # the title screen has loaded ([LOADEP] #2 in every run)
+wait 1500
+press START                 # title: press start
+wait 1200
+press DOWN
+wait 500
+press A
+wait 900
+press A
+wait 600
+press UP
+wait 500
+press A
+wait 5000                   # the tester waited 3.7-9 s here
+press A                     # starts the hub's load
+waitlevel Map 120
+waitplay 5000 180           # in the hub, 5 s of play frames
 capture
-wait 20000                  # 20 s standing: a stable window for the frame counters
+wait 20000                  # 20 s standing: a stable window for [WORK] and [CHAIN]
 done

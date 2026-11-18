@@ -4279,3 +4279,40 @@ card. Script `boot_to_hub.txt`, `tools/emu_run.py`.
 
 **Harness defaults now:** the flags above, `--graphics-backend OpenGl`, `--skip-user-profiles-manager`,
 `--ignore-controller-applet`, `--disable-docked-mode`, `--no-gui`, and `LSWTCS_CLOCKLOG=0` in `env.txt`.
+
+## Log 111: work counters, the frame timeline, and a scripted boot to the hub
+
+Built while the tester used the PC, with one compile job; no session yet.
+
+**`[WORK]`: work that is the same on any host.**
+- `source/switch/mesa/mesa_work_edits.py` counts, in nvc0's draw path, each draw, its vertices and the code size of the
+  vertex and pixel programs bound for it.
+- `[WORK]` (every 60 replays, with the GL diagnostics) prints them per replay with the guest calls.
+- `tools/work_compare.py <A> <B>` compares two sessions per level.
+- These counts are what an emulator run can measure: frame times there are the PC's. Pixel-program bytes x draws stands in
+  for shading work, but it does not count pixels.
+
+**`[CHAIN]`: the docked frame chain, step by step.**
+- Every 60 frames of 1300+ draws, it gives p50/p90 of: swap to swap; the game's work (from posting a frame to the next
+  `VdSwap`); `VdSwap`'s walk; the wait for the previous frame; the render thread's pickup; the pipe wait; replay; present
+  and swap. It also gives how often the render thread was idle when a frame was posted.
+- Marks: `lsw_chain_mark` in `VdSwap` (entry, walk done), `gpu_d3d12_present` (present, posted) and the render loop.
+  `LSWTCS_CHAIN=0` turns it off, `LSWTCS_CHAINDRAWS` sets the draw floor.
+- Aim: find which link sets docked heavy frames (~28 ms swap to swap in run 112, with no thread busy that long). It is a
+  console measurement, docked.
+
+**Scripted boot.**
+- New step `waitloads N`: until N load episodes (`[LOADEP]`) have ended since boot.
+- `tests/scripts/boot_to_hub.txt` now follows the menu path from the tester's `[PAD]` presses, the same in every session
+  of runs 112-117: A, START, DOWN + A, A, UP + A, then A and the hub loads.
+- `python tests/input_script_check.py` passes, with new waitloads cases.
+
+**Emulator stalls:** `tools/emu_run.py --gdb-on-stall S --elf <elf>` starts the emulator with its GDB stub and, when
+`stdout.log` is quiet for S seconds, writes every guest thread's stack to `threads.txt`. It uses devkitPro's
+`aarch64-none-elf-gdb` and the NRO's load address in Ryubing (0x8500000). Not tried yet.
+
+**Build:** `0.0.99-log111` (`build-nvpgo`), NRO `365667d9…`, ELF kept privately; `validate_tcs360_switch.py` passed. Not run on hardware or in the emulator.
+
+**Pitfalls:** the counters' function needs `visibility("default")` like `lsw_nvc0_dedup_stats` (Mesa builds with hidden visibility); and `private/session-tools/mesa_rebuild.sh` pipes ninja through `tail`, so a failed Mesa compile still exits 0.
+The first build of this log linked the old Mesa (a missing prototype, `-Werror=missing-prototypes`). Check its output
+for `FAILED`.

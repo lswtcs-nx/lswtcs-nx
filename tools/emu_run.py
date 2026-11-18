@@ -38,6 +38,7 @@ RYUBING_ARGS = ("--no-gui --disable-docked-mode --skip-user-profiles-manager --i
                 "--ignore-missing-services --graphics-backend OpenGl {nro}")
 # The clock monitor reads the GPU load with an nvhost-ctrl-gpu ioctl (0x80044715) the emulator does not have.
 EMU_ENV = ["LSWTCS_CLOCKLOG=0"]
+GDB = Path("C:/devkitPro/msys2/opt/devkitpro/devkitA64/bin/aarch64-none-elf-gdb.exe")
 CRASH_MARKS = ["[CRASH]", "[FATAL]", "std::bad_alloc", "terminate called", "[EXCEPTION]"]
 
 
@@ -65,6 +66,21 @@ def free_ram_mb():
     return st.ullAvailPhys // (1 << 20) if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(st)) else None
 
 
+def gdb_dump(gdb, elf, port, base, out):
+    """Attaches to the emulator's GDB stub and writes every guest thread's stack to `out`, then detaches (the emulator
+    keeps running). The NRO is position-independent and loaded at `base` (Ryubing logs it: "Loading image 0 at ...")."""
+    cmds = ["set pagination off", "set confirm off", "set width 0", f"add-symbol-file {elf} -o {base}",
+            f"target remote 127.0.0.1:{port}", "info threads", "thread apply all bt 12", "detach"]
+    argv = [str(gdb), "-nx", "-batch", *sum((["-ex", c] for c in cmds), [])]
+    try:
+        r = subprocess.run(argv, capture_output=True, text=True, timeout=180)
+        Path(out).write_text(r.stdout + "\n--- stderr ---\n" + r.stderr, encoding="utf-8")
+        return True
+    except (OSError, subprocess.TimeoutExpired) as e:
+        Path(out).write_text(f"gdb failed: {e}\n", encoding="utf-8")
+        return False
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--emu", required=True, help="the emulator's executable")
@@ -76,7 +92,16 @@ def main():
     ap.add_argument("--env", action="append", default=[], help="extra KEY=VALUE lines for env.txt")
     ap.add_argument("--timeout", type=int, default=900, help="seconds")
     ap.add_argument("--out", default=str(ROOT / "private/emu-runs"))
+    ap.add_argument("--gdb-on-stall", type=int, default=0, metavar="S",
+                    help="when stdout.log gets nothing new for S seconds, dump the guest threads' stacks through the emulator's "
+                         "GDB stub (needs --elf; adds --enable-gdb-stub to the emulator's arguments) and stop")
+    ap.add_argument("--elf", help="the ELF the NRO was made from, for --gdb-on-stall")
+    ap.add_argument("--gdb", default=str(GDB))
+    ap.add_argument("--gdb-port", type=int, default=55555)
+    ap.add_argument("--nro-base", default="0x8500000", help="where the emulator loads the NRO (Ryubing 1.3.3: 0x8500000)")
     args = ap.parse_args()
+    if args.gdb_on_stall and not args.elf:
+        sys.exit("--gdb-on-stall needs --elf")
 
     sd = Path(os.path.expandvars(args.sd))
     game = sd / "lswtcs"
@@ -106,12 +131,17 @@ def main():
     if free is not None:
         print(f"free memory before start: {free} MB" + ("  (WARNING: under 6000 MB, the emulator may page and stall)" if free < 6000 else ""))
     emu = Path(args.emu).resolve()
-    cmd = [str(emu), *[a.replace("{nro}", str(nro)) for a in shlex.split(args.emu_args, posix=False)]]
+    emu_args = args.emu_args
+    if args.gdb_on_stall and "--enable-gdb-stub" not in emu_args:
+        emu_args = f"--enable-gdb-stub --gdb-stub-port {args.gdb_port} " + emu_args
+    cmd = [str(emu), *[a.replace("{nro}", str(nro)) for a in shlex.split(emu_args, posix=False)]]
     print("starting:", " ".join(cmd))
     t0 = time.time()
     result, reason, log_dir, last_step, crash = "timeout", f"no result in {args.timeout} s", None, "", []
     pos = 0
     proc = None
+    last_growth = time.time()
+    thread_dump = None
     try:
         proc = subprocess.Popen(cmd, cwd=str(emu.parent), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         while time.time() - t0 < args.timeout:
@@ -124,6 +154,8 @@ def main():
                     chunk = f.read()
                 cut = chunk.rfind(b"\n") + 1   # whole lines only
                 pos += cut
+                if cut:
+                    last_growth = time.time()
                 for raw in chunk[:cut].decode("utf-8", "replace").splitlines():
                     if raw.startswith("[SCRIPT] line"):
                         last_step = raw
@@ -141,6 +173,13 @@ def main():
                     break
             if proc.poll() is not None:
                 result, reason = "exited", f"the emulator exited with {proc.returncode}"
+                break
+            if args.gdb_on_stall and log_dir is not None and time.time() - last_growth >= args.gdb_on_stall:
+                thread_dump = Path(args.out) / "threads-pending.txt"
+                Path(args.out).mkdir(parents=True, exist_ok=True)
+                print(f"stdout.log quiet for {args.gdb_on_stall} s: dumping the guest threads through GDB")
+                gdb_dump(args.gdb, Path(args.elf).resolve().as_posix(), args.gdb_port, args.nro_base, thread_dump)
+                result, reason = "stall", f"stdout.log quiet for {args.gdb_on_stall} s (threads dumped)"
                 break
     finally:
         if proc is not None and proc.poll() is None:   # only the process this run started
@@ -165,6 +204,9 @@ def main():
         dest = Path(args.out) / f"{stamp}-{Path(args.script).stem}-{result}"
         shutil.copytree(log_dir, dest)
         print("logs:", dest)
+        if thread_dump is not None and thread_dump.exists():
+            shutil.move(str(thread_dump), str(dest / "threads.txt"))
+            print("guest threads:", dest / "threads.txt")
         if (dest / "frames.log").exists() and (ROOT / "tools/analyze_run.py").exists():
             subprocess.run([sys.executable, str(ROOT / "tools/analyze_run.py"), str(dest)])
     else:

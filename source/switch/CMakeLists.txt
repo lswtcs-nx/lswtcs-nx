@@ -370,7 +370,7 @@ else()
         if(LSW_PGO STREQUAL "generate")
             set(LSW_NACP_VERSION "0.0.99-log97nvg")   # log97: the instrumented NRO of log96's code (wide counts)
         elseif(LSW_PGO STREQUAL "use")
-            set(LSW_NACP_VERSION "0.0.99-log110")   # log107: the image from default.xex, built-in player settings, file checks; log108: log text; log109: shader translations saved on the SD card; log110: scripted input and pad recording
+            set(LSW_NACP_VERSION "0.0.99-log111")   # log107: the image from default.xex, built-in player settings, file checks; log108: log text; log109: shader translations saved on the SD card; log110: scripted input and pad recording; log111: [WORK], [CHAIN], waitloads
         endif()
     else()
         set(LSW_NACP_VERSION "0.0.99-log93")

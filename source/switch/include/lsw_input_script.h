@@ -7,6 +7,8 @@
 //   waitlevel TEXT [TIMEOUT_S]       until the level path contains TEXT (case-insensitive), e.g. "Map", "Gungan_B"
 //   waitplay MS [TIMEOUT_S]          until the frames have been play frames (not light) for MS in a row
 //   waitlight MS [TIMEOUT_S]         until the frames have been light (title, menus, loading) for MS in a row
+//   waitloads N [TIMEOUT_S]          until N load episodes ([LOADEP], counted from boot) have ended; an episode ends 2 s
+//                                    after its last file call. Runs 112-117 always had 2 by the title screen
 //   press BUTTONS [MS]               hold for MS (default 150), then let go for as long; each at least 2 polls
 //   hold BUTTONS MS                  hold for MS, then let go (no pause after)
 //   stick L|R X Y                    set a stick, X and Y in -1..1; it stays until set again ("stick L 0 0" centres it)
@@ -33,6 +35,7 @@ struct LswScriptWorld {
     uint64_t now_ms = 0;
     bool light = false;        // the frames are light (gl_backend.cpp's g_frame_light)
     const char* level = "";    // native_crt.cpp's level path, "" before the first level
+    uint64_t loads = 0;        // load episodes ended since boot (kernel_stubs.cpp's [LOADEP])
 };
 
 // What a poll asks of the runtime besides the pad.
@@ -54,7 +57,7 @@ public:
     void poll(const LswScriptWorld& w, LswPadOut* pad, LswScriptActions* act, std::vector<std::string>* log);
     size_t steps() const { return steps_.size(); }
 
-    enum class Op { Wait, WaitLevel, WaitPlay, WaitLight, Press, Hold, Stick, Repeat, End, Mark, Capture, CaptureFull, Log, Done };
+    enum class Op { Wait, WaitLevel, WaitPlay, WaitLight, WaitLoads, Press, Hold, Stick, Repeat, End, Mark, Capture, CaptureFull, Log, Done };
     struct Step {
         Op op;
         int line = 0;

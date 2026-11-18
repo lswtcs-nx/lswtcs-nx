@@ -42,8 +42,26 @@ capture                # as the L + R + right stick combo
 done
 ```
 
-Waits follow what the game shows, not the clock: the level path (`[LEVEL]`) and light frames (title, menus, loading;
-the flag the pad layout "auto" uses). That keeps a script in step when loads take longer, as they do in an emulator.
+Waits follow what the game shows, not the clock: the level path (`[LEVEL]`), light frames (title, menus, loading;
+the flag the pad layout "auto" uses) and finished load episodes (`waitloads N`, the `[LOADEP]` count since boot). That
+keeps a script in step when loads take longer, as they do in an emulator.
+
+`tests/scripts/boot_to_hub.txt` follows the menu path the tester took in every session of runs 112-117 ([PAD] lines):
+A, START, DOWN + A, A, UP + A, then A again and the hub loads. It has not been replayed yet.
+
+## Work counters and the frame timeline
+
+With the testing profile's diagnostics (log111):
+- `[WORK]`, every 60 replays: nvc0 draws, vertices, the bytes of vertex and pixel program code bound per draw (summed
+  over draws), and guest calls per replay. These are the same on any host. `python tools/work_compare.py <run A> <run B>`
+  compares two sessions per level. Pixel-program bytes x draws stands in for shading work; pixels are not counted.
+- `[CHAIN]`, every 60 frames of 1300+ draws: p50/p90 of each step from the game's `VdSwap` to the present (walk, the
+  wait for the previous frame, the render thread's pickup, replay, present and swap). It is a console measurement: in
+  an emulator the steps take the PC's time. `LSWTCS_CHAIN=0` turns it off, `LSWTCS_CHAINDRAWS` sets the draw floor.
+
+How to read `[CHAIN]` on the console: if "wait for previous frame" is long, the game waits on the render thread; if
+"render pickup" is long and "render idle when posted" is low, the render thread was still busy with the previous frame;
+if both are short and frames are still slow, the time is in the game's own work ("game") or in the GPU (`[GLSPAN]`).
 
 `stdout.log` gets `[SCRIPT]` lines: each step with its time, level and frame kind, then `[SCRIPT] done in N s` or
 `[SCRIPT] failed at N s: <reason>`.
@@ -92,5 +110,8 @@ repository.
 **Open:** the stop about 30 s in. The likeliest cause is memory: during those runs the PC had about 0.7-1.1 GB of its
 15 GB free (another program held 7.5 GB), and the emulator had 3.3 GB in use and the guest's 4 GB to map, so it was
 probably paging. The emulator's log stopping is weak evidence of a freeze, since it logs little once a game runs.
-`emu_run.py` now prints the free memory at start and warns under 6 GB. First retry with the PC free; if it still stops: run with the window (without `--no-gui`) to see the screen when it stops, and
+`emu_run.py` now prints the free memory at start and warns under 6 GB. First retry with the PC free. If it still
+stops, `--gdb-on-stall 30 --elf private/lswtcs-logN.elf` starts the emulator with its GDB stub and, after 30 s without a
+new `stdout.log` line, writes every guest thread's stack (with the ELF's function names) to `threads.txt` in the run's
+log folder, using devkitPro's `aarch64-none-elf-gdb`. Not tried yet. Otherwise: run with the window (without `--no-gui`) to see the screen when it stops, and
 find whether the emulator itself is stuck (its log stops too) or the NRO waits on the emulated GPU.

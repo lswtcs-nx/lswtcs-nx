@@ -64,7 +64,7 @@ const char* op_name(LswInputScript::Op op) {
     using O = LswInputScript::Op;
     switch (op) {
     case O::Wait: return "wait"; case O::WaitLevel: return "waitlevel"; case O::WaitPlay: return "waitplay";
-    case O::WaitLight: return "waitlight"; case O::Press: return "press"; case O::Hold: return "hold"; case O::Stick: return "stick";
+    case O::WaitLight: return "waitlight"; case O::WaitLoads: return "waitloads"; case O::Press: return "press"; case O::Hold: return "hold"; case O::Stick: return "stick";
     case O::Repeat: return "repeat"; case O::End: return "end"; case O::Mark: return "mark"; case O::Capture: return "capture";
     case O::CaptureFull: return "capturefull"; case O::Log: return "log"; case O::Done: return "done";
     }
@@ -113,6 +113,9 @@ bool LswInputScript::load(const std::string& text) {
         } else if (cmd == "WAITPLAY" || cmd == "WAITLIGHT") {
             st.op = cmd == "WAITPLAY" ? Op::WaitPlay : Op::WaitLight;
             if (w.size() < 2 || !parse_u64(w[1], &st.ms) || !arg_timeout(2)) return err(upper(w[0]) + " MS [TIMEOUT_S]");
+        } else if (cmd == "WAITLOADS") {
+            st.op = Op::WaitLoads;
+            if (w.size() < 2 || !parse_u64(w[1], &st.ms) || !arg_timeout(2)) return err("waitloads N [TIMEOUT_S]");
         } else if (cmd == "PRESS") {
             st.op = Op::Press;
             st.ms = kDefaultPressMs;
@@ -179,9 +182,9 @@ void LswInputScript::begin_step(const LswScriptWorld& w, std::vector<std::string
     polls_in_phase_ = 0;
     if (st.op == Op::Repeat || st.op == Op::End) return;   // silent: the steps inside are logged
     char b[512];
-    snprintf(b, sizeof b, "[SCRIPT] line %d %s%s%s at %.1f s (level %s, %s frames)", st.line, op_name(st.op),
+    snprintf(b, sizeof b, "[SCRIPT] line %d %s%s%s at %.1f s (level %s, %s frames, %llu loads)", st.line, op_name(st.op),
              st.text.empty() ? "" : " ", st.text.c_str(), (w.now_ms - t_begin_) / 1000.0, w.level && *w.level ? w.level : "?",
-             w.light ? "light" : "play");
+             w.light ? "light" : "play", (unsigned long long)w.loads);
     log->push_back(b);
 }
 
@@ -207,6 +210,15 @@ void LswInputScript::poll(const LswScriptWorld& w, LswPadOut* pad, LswScriptActi
         case Op::WaitLevel:
             if (contains_nocase(w.level, st.text)) break;
             if (w.now_ms - t_step_ >= st.timeout_ms) { fail(w, "line " + std::to_string(st.line) + ": no level '" + st.text + "'", log); return; }
+            wait = true;
+            break;
+        case Op::WaitLoads:   // st.ms holds N
+            if (w.loads >= st.ms) break;
+            if (w.now_ms - t_step_ >= st.timeout_ms) {
+                fail(w, "line " + std::to_string(st.line) + ": " + std::to_string(w.loads) + " of " + std::to_string(st.ms) +
+                            " load episodes", log);
+                return;
+            }
             wait = true;
             break;
         case Op::WaitPlay:

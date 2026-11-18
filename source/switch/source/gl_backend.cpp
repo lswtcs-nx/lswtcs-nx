@@ -139,6 +139,7 @@ bool g_gl_ok = false;
 std::mutex g_mtx;
 std::condition_variable g_cv;
 uint64_t g_frames_posted = 0;   // guest swaps
+uint32_t g_chain_draws = 0;   // log111: the replayed frame's draws, for [CHAIN] (render thread only)
 uint64_t g_frames_done = 0;     // guest swaps the render thread has replayed and presented (under g_mtx)
 extern "C" void lswtcs_gil_blocking(void (*fn)(void*), void* arg);   // kernel_stubs.cpp
 extern "C" void lsw_malloc_lock_stats(uint64_t* wait_ns, uint64_t* contended, uint64_t* calls);   // platform_switch.cpp
@@ -147,6 +148,9 @@ extern "C" uint32_t lsw_heap_free_mb();                                         
 extern "C" void lsw_bridge_counts(uint32_t* shaders, uint32_t* translations, uint32_t* memo, uint32_t* memo_clears);   // gl_bridge.cc
 extern "C" void lsw_nvc0_dedup_stats(unsigned* hits, unsigned* misses, unsigned* checks, unsigned* mismatches,
                                      unsigned* kb) __attribute__((weak));   // mesa_dedup_edits.py (log103)
+extern "C" void lsw_nvc0_work_stats(unsigned long long* draws, unsigned long long* vertices, unsigned long long* vp_bytes,
+                                    unsigned long long* fp_bytes) __attribute__((weak));   // mesa_work_edits.py (log111)
+extern "C" unsigned lswtcs_gil_ctr;   // kernel_stubs.cpp: +1 at every guest function entry
 extern "C" void lsw_big_alloc_stats(size_t* bytes, size_t* count) __attribute__((weak));   // rpmalloc_switch.c (LSW_RPMALLOC)
 extern "C" void lsw_bo_pool_stats(uint64_t* hits, uint64_t* misses, uint64_t* kept, uint64_t* dropped, uint64_t* bytes,
                                   int* state, uint64_t* made) __attribute__((weak));   // bo_check.cpp (log78)
@@ -4057,6 +4061,7 @@ PresentSrc replay() {
     }
     g_frame_groups = ut.groups;
     lsw_prof_note_draws(uint32_t(f.draws.size()));
+    g_chain_draws = uint32_t(f.draws.size());
     rp_close(RP_PLAN, t_plan, t_plan_in);
     quad_expand_frame(f);   // state q
     GLuint ebo_bound = g_arena;   // arena_upload bound the arena as the index buffer
@@ -5407,6 +5412,83 @@ void gl_depth_probe() {
 }
 
 // Render thread: guest swap `n` is replayed and presented (releases a guest waiting in gpu_d3d12_present).
+// log111: [CHAIN] the timeline of each heavy frame from the game's VdSwap to the present, to find which link of the chain
+// from the game's frame to the GPU sets the docked frame rate (CPU_ROADMAP.md, "State on 8 November 2026": no single
+// thread is the limit). Stages, CPU clock (gp_now), keyed by the guest swap serial the frame is posted as:
+//   swap     the guest enters VdSwap (kernel_stubs.cpp)          walked   VdSwap's ring walk is done (kernel_stubs.cpp)
+//   present  VdSwap reaches the present                          posted   the previous frame is presented, this one posted
+//   picked   the render thread takes it                          start    replay starts (after the pipe wait)
+//   replayed replay and arena fence done                         done     presented and swapped (frame_done)
+// Every 60 frames of LSWTCS_CHAINDRAWS (default 1300) draws or more, [CHAIN] gives p50/p90 of each step. The GPU's own
+// time is in [GLSPAN]. LSWTCS_CHAIN=0 turns it off; on by default with the GL diagnostics (testing profile).
+namespace {
+enum { CH_SWAP, CH_WALKED, CH_PRESENT, CH_POSTED, CH_PICKED, CH_START, CH_REPLAYED, CH_DONE, CH_N };
+struct ChainRec { uint64_t serial = 0; uint64_t t[CH_N] = {}; uint32_t draws = 0; };
+ChainRec g_chain[64];
+std::mutex g_chain_mtx;
+std::atomic<uint64_t> g_chain_posted{0};
+bool chain_on() {
+    static const bool on = gldiag_on() && env_on("LSWTCS_CHAIN", true);
+    return on;
+}
+void chain_set(uint64_t serial, int stage, uint64_t t, uint32_t draws = 0) {
+    std::lock_guard<std::mutex> lk(g_chain_mtx);
+    ChainRec& r = g_chain[serial % 64];
+    if (r.serial != serial) { r = ChainRec{}; r.serial = serial; }
+    r.t[stage] = t;
+    if (draws) r.draws = draws;
+}
+void chain_report(uint64_t serial) {
+    static const uint32_t min_draws = [] { const char* e = getenv("LSWTCS_CHAINDRAWS"); return e && *e ? uint32_t(atoi(e)) : 1300u; }();
+    static uint64_t prev_swap = 0, prev_posted = 0, prev_serial = 0;
+    ChainRec r;
+    { std::lock_guard<std::mutex> lk(g_chain_mtx); r = g_chain[serial % 64]; }
+    if (r.serial != serial) return;
+    const bool consecutive = prev_serial + 1 == serial;
+    const uint64_t last_swap = prev_swap, last_posted = prev_posted;
+    prev_swap = r.t[CH_SWAP]; prev_posted = r.t[CH_POSTED]; prev_serial = serial;
+    bool complete = true;
+    for (int k = 0; k < CH_N; ++k) if (k != CH_WALKED && !r.t[k]) complete = false;
+    if (!complete || !consecutive || !last_swap || r.draws < min_draws) return;
+    if (!r.t[CH_WALKED]) r.t[CH_WALKED] = r.t[CH_SWAP];   // VdSwap left the walk to the off-turn walker
+    enum { I_PERIOD, I_GUEST, I_WALK, I_TOPRESENT, I_RTWAIT, I_PICKUP, I_PIPE, I_REPLAY, I_TAIL, I_TOTAL, I_N };
+    static const char* const kName[I_N] = {"swap-to-swap", "game (posted..next swap)", "VdSwap walk", "walk..present",
+                                           "wait for previous frame", "render pickup", "pipe wait", "replay", "present+swap",
+                                           "swap..done"};
+    static std::vector<float> v[I_N];
+    static uint32_t idle_pickups = 0;
+    auto ms = [](uint64_t a, uint64_t b) { return b > a ? float((b - a) / 1e6) : 0.0f; };
+    v[I_PERIOD].push_back(ms(last_swap, r.t[CH_SWAP]));
+    v[I_GUEST].push_back(ms(last_posted, r.t[CH_SWAP]));
+    v[I_WALK].push_back(ms(r.t[CH_SWAP], r.t[CH_WALKED]));
+    v[I_TOPRESENT].push_back(ms(r.t[CH_WALKED], r.t[CH_PRESENT]));
+    v[I_RTWAIT].push_back(ms(r.t[CH_PRESENT], r.t[CH_POSTED]));
+    v[I_PICKUP].push_back(ms(r.t[CH_POSTED], r.t[CH_PICKED]));
+    v[I_PIPE].push_back(ms(r.t[CH_PICKED], r.t[CH_START]));
+    v[I_REPLAY].push_back(ms(r.t[CH_START], r.t[CH_REPLAYED]));
+    v[I_TAIL].push_back(ms(r.t[CH_REPLAYED], r.t[CH_DONE]));
+    v[I_TOTAL].push_back(ms(r.t[CH_SWAP], r.t[CH_DONE]));
+    if (ms(r.t[CH_POSTED], r.t[CH_PICKED]) < 0.5f) ++idle_pickups;
+    if (v[0].size() < 60) return;
+    char b[1400];
+    int k = snprintf(b, sizeof b, "[CHAIN] %zu frames of %u+ draws, ms p50/p90:", v[0].size(), min_draws);
+    for (int i = 0; i < I_N; ++i) {
+        std::vector<float>& x = v[i];
+        std::sort(x.begin(), x.end());
+        k += snprintf(b + k, sizeof b - k, "%s %s %.1f/%.1f", i ? ";" : "", kName[i], x[x.size() / 2], x[x.size() * 9 / 10]);
+        x.clear();
+    }
+    snprintf(b + k, sizeof b - k, " | render idle when posted %u/60 | ab=%s", idle_pickups, g_ab_state.empty() ? "-" : g_ab_state.c_str());
+    idle_pickups = 0;
+    puts(b);
+    fflush(stdout);
+}
+}  // namespace
+extern "C" void lsw_chain_mark(int stage) {   // kernel_stubs.cpp: the frame the main thread is building (posted next)
+    if (!chain_on()) return;
+    chain_set(g_chain_posted.load(std::memory_order_relaxed) + 1, stage, gp_now());
+}
+
 void frame_done(uint64_t n) {
     { std::lock_guard<std::mutex> lk(g_mtx); g_frames_done = n; }
     g_cv.notify_all();
@@ -5534,6 +5616,7 @@ void render_thread_main() {
             g_cv.wait(lk, [&] { return g_frames_posted != presented; });
             presented = g_frames_posted;
         }
+        if (chain_on()) chain_set(presented, CH_PICKED, gp_now());
         if (!g_gl_ok) { frame_done(presented); continue; }
         if (g_glpipe) {   // the worker must be done with the previous upload (f.arena goes back to the guest in
                           // replay's gpu_frame_take) and may have at most one swap outstanding
@@ -5548,6 +5631,7 @@ void render_thread_main() {
         { RpScope rp(RP_FENCE); arena_fence(); }
         const uint64_t t_replay = gp_now() - t0;
         g_gpuprof[GP_REPLAY] += t_replay;
+        if (chain_on()) { chain_set(presented, CH_START, t0); chain_set(presented, CH_REPLAYED, t0 + t_replay, g_chain_draws); }
         { RpScope rp(RP_PRESENT); hist_record(shown); }
         const bool captured = g_capture_frame;
         const uint64_t t_capture = gp_now();
@@ -5596,6 +5680,7 @@ void render_thread_main() {
             if (!swapped) ++g_swap_fail;
         }
         frame_done(presented);
+        if (chain_on()) { chain_set(presented, CH_DONE, gp_now()); chain_report(presented); }
         if (gldiag_on()) {   // DIAG: [GLPROF] render-thread stages, average per replay over the last 60
             static uint64_t last[RP_COUNT], replay_ns = 0, max_ns = 0, t_last = 0;
             static uint32_t n = 0;
@@ -5624,6 +5709,22 @@ void render_thread_main() {
                        ch[SC_TEX], ch[SC_SWZ], ch[SC_SMP], ch[SC_STATE], ch[SC_RESET], double(g_blit_count - bl_last) / n,
                        double(g_blit_px - px_last) / n / 1e6);
                 bl_last = g_blit_count; px_last = g_blit_px;
+                {   // log111: [WORK] work done per replay, the same on any host (console or emulator), for comparing builds
+                    // (tools/work_compare.py). Pixel-program bytes x draws stands in for shading work; pixels are not counted.
+                    static unsigned long long w_last[4] = {};
+                    static unsigned calls_last = 0;
+                    unsigned long long w[4] = {};
+                    if (lsw_nvc0_work_stats) lsw_nvc0_work_stats(&w[0], &w[1], &w[2], &w[3]);
+                    const unsigned calls_now = lswtcs_gil_ctr;
+                    const double d = double(n);
+                    printf("[WORK] per replay (%u): nvc0 draws %.0f, vertices %.1f k, vertex program %.1f KB, pixel program %.1f KB "
+                           "(bytes of bound code summed over draws) | guest calls %.0f k | ab=%s\n", n,
+                           (w[0] - w_last[0]) / d, (w[1] - w_last[1]) / d / 1e3, (w[2] - w_last[2]) / d / 1024.0,
+                           (w[3] - w_last[3]) / d / 1024.0, (calls_now - calls_last) / d / 1e3,
+                           g_ab_state.empty() ? "-" : g_ab_state.c_str());
+                    for (int k = 0; k < 4; ++k) w_last[k] = w[k];
+                    calls_last = calls_now;
+                }
                 float load[4];
                 lsw_core_load(load);
                 printf("[CPULOAD] busy %%: core0 %.0f, core1 %.0f, core2 %.0f, core3 %.0f (-1 = no sampler)\n", load[0], load[1],
@@ -5658,6 +5759,7 @@ void gpu_d3d12_present(uint8_t*, uint32_t, uint32_t, uint32_t, uint32_t) {
     // LSWTCS_RTSYNC=0: no wait (the renderer drops frames instead).
     static const bool sync = env_on("LSWTCS_RTSYNC", true);
     const uint64_t t0 = gp_now();
+    if (chain_on()) chain_set(g_chain_posted.load(std::memory_order_relaxed) + 1, CH_PRESENT, t0);
     if (sync) {
         bool behind;
         { std::lock_guard<std::mutex> lk(g_mtx); behind = g_frames_done != g_frames_posted; }
@@ -5667,10 +5769,13 @@ void gpu_d3d12_present(uint8_t*, uint32_t, uint32_t, uint32_t, uint32_t) {
                 g_cv.wait(lk, [] { return g_frames_done == g_frames_posted; });
             }, nullptr);
     }
+    uint64_t posted;
     {
         std::lock_guard<std::mutex> lk(g_mtx);
-        ++g_frames_posted;
+        posted = ++g_frames_posted;
     }
+    if (chain_on()) { chain_set(posted, CH_POSTED, gp_now()); }
+    g_chain_posted.store(posted, std::memory_order_relaxed);
     g_cv.notify_all();
     g_gpuprof[GP_RTWAIT] += gp_now() - t0;
     appletMainLoop();   // HOME / exit requests
@@ -5679,7 +5784,7 @@ bool gpu_d3d12_poll() { return appletMainLoop(); }
 // log86 (kernel_stubs.cpp): one more replay without a guest swap, so a frame published while GPU interrupts wait for it is read.
 // The game's next present waits for it like any other (LSWTCS_RTSYNC).
 extern "C" void lsw_gpu_replay_request() {
-    { std::lock_guard<std::mutex> lk(g_mtx); ++g_frames_posted; }
+    { std::lock_guard<std::mutex> lk(g_mtx); g_chain_posted.store(++g_frames_posted, std::memory_order_relaxed); }
     g_cv.notify_all();
 }
 extern "C" void lswtcs_set_pending_shad(const char*) {}

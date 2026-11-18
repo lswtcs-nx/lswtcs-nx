@@ -772,6 +772,7 @@ extern "C" void lsw_log_async_drain();   // log_async.cpp
 // automated runs on the console or in an emulator. A bare name is read from sdmc:/lswtcs/tests/. [SCRIPT] lines report each
 // step and the result ("done" or "failed"); after either, the pad is the player's again.
 extern "C" void lsw_level_name(char* out, size_t capacity);   // native_crt.cpp
+extern "C" uint64_t lsw_load_episodes_done();                 // kernel_stubs.cpp ([LOADEP])
 LswInputScript g_script;
 bool g_script_on = false;
 void script_init() {
@@ -834,6 +835,7 @@ void script_poll(XiState& st) {
     char level[96];
     lsw_level_name(level, sizeof level);
     w.level = level;
+    w.loads = lsw_load_episodes_done();
     LswPadOut pad{};
     pad.buttons = st.buttons; pad.lt = st.lt; pad.rt = st.rt; pad.lx = st.lx; pad.ly = st.ly; pad.rx = st.rx; pad.ry = st.ry;
     LswScriptActions act;

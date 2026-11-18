@@ -40,6 +40,11 @@ Since log109 the translations themselves are saved in `sdmc:/lswtcs/glprogs2/xla
 programs). The first session of each build still translates, about 21 ms a program, mostly in SPIRV-Cross and the
 GLSL clean-up. Open: one 1.6 s wait in Mesa at the hub's first frame in run 116, seen once.
 
+In progress (log114-116, emulator only so far): nouveau's own translation of each shader stage, about 80 % of a
+program's build when Mesa's cache hits, is kept in `sdmc:/lswtcs/mesacache/lsw_nvc0.bin` from log116, across builds
+of the port. `LSWTCS_GLXLATEASYNC=1` (off by default) moves most of the shader translation off the game's thread.
+Neither has been measured on the console yet.
+
 ## Short audio dropouts in the heaviest scenes
 
 About 1-2 % of a session, in the heaviest combat. Run 107 measured 2.6 s of silence in 203 s, against 8.7 s in run

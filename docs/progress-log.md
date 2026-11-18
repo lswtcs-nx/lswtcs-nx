@@ -4595,3 +4595,59 @@ route as log113 did: same game, work within 3 %.
 **Console test, with the other changes:** a first session simulated without deleting anything:
 `LSWTCS_GLXLATE=0`, `LSWTCS_GLPROGLIST=0` and `MESA_GLSL_CACHE_DISABLE=true` (no cache read or written). Compare the
 hub's first-frame burst with `LSWTCS_GLXLATEASYNC` off and on.
+
+## Logs 115-116: programs asked for early (dropped), nvc0 translations kept on the SD card
+
+**Log 115, programs asked for while translations finish.** With `LSWTCS_GLXLATEASYNC=1`, the render thread waited for
+every queued translation before asking for any program. In log115 it asked for the programs of draws whose shaders
+were already translated while it waited, and the translation worker went one priority below compile worker 0 (0x2E).
+In the emulator (cold quick route, async on, two runs each):
+
+| | log114 | log115 (0x2E) | log116 pass (0x2D, early requests) |
+| --- | --- | --- | --- |
+| Play frames over 100 ms | 52-58 s | 75-90 s | 54-58 s |
+| Frames held for programs | 50-54 s | 40-42 s | 51-54 s |
+| Render thread waiting for translations | 4.7-5.0 s | 38-52 s | 6.3-6.9 s |
+
+At 0x2E the compiles took core 2 from the translations. At 0x2D the early requests changed nothing measurable, so log116
+takes them out and keeps the plain wait.
+
+**Log 116, nvc0 translations kept on the SD card (`mesa_nvc0disk_edits.py`).**
+- **Why:** Mesa's disk cache saves only the GLSL front end, and every session still ran nouveau's whole back end
+  (nv50_ir) once per stage. That is about 80 % of a program's build when the cache hits (run 8's profile) and about
+  95 ms a program on the Switch. Run 118's area entries waited 670-1673 ms for 10-18 programs while the saved list was
+  still queued (1042 programs).
+- **What it does:** `mesa_dedup_edits.py` keeps each stage translation in memory for the session. Now it is also
+  appended to `sdmc:/lswtcs/mesacache/lsw_nvc0.bin`, and the next session loads the file before its first translation.
+- **What a record holds:** the program struct with its pointers zeroed, the code, and the relocation and fixup tables.
+  A fixup's function pointer is saved as its number among the GM107 emitter's two fixup functions.
+- **What the file is tied to:** Mesa and the codegen settings, not the port's build.
+- **Safety:** a sum on each record; a cut record dropped with `ftruncate`. The first 8 loaded translations used in a
+  session are translated again and compared (`LSWTCS_NVC0DISKCHECK`); a difference drops them all and starts the file
+  over.
+- **Switches:** `LSWTCS_NVC0DISK=0` or `MESA_GLSL_CACHE_DISABLE=true` turn it off.
+- **Log lines:** `[NVC0DISK]` at load and with the `[NVC0DEDUP]` stats.
+
+**Emulator, quick route with caches warm (async off):**
+
+| Run | Loaded | Compared, differed | Compile worker time | Same game |
+| --- | --- | --- | --- | --- |
+| First (writes the file) | 0 | - | 43.5 s for 333 programs | yes |
+| Second | 348, all used | 19, 0 | 25.7 s for 335 | yes (797, see below) |
+| Third, rebuilt NRO | 350, all used, 1.2 MB in 84 ms | 19, 0 | 24.0 s for 335 | yes |
+
+The third run shows the file outliving a rebuild of the port. A cut record left by the emulator's closing was dropped.
+The longest frames (PC times) fell from 3.6 s to 1.8 s in one pair, and the frames held for programs stayed at about
+5 s. The emulated Mesa front end is a larger part there than on the console.
+
+**`emu_test.py`: state changes within 3 frames.** The second run saw the hub's light frame at 797 instead of 796:
+`waitlight` began at the same frame, and the light state, which the render thread notices out of step with the guest,
+came 2 frames later. "Same game" now allows 3 frames. A replay that drifts is off by hundreds of frames or misses a
+level.
+
+**Build:** `0.0.99-log116` (`build-nvpgo`, Mesa rebuilt with `mesa_nvc0disk_edits.py`), NRO `0b432561…`, ELF kept
+privately. The disk translations are on by default; the async translation stays off until the console measures it.
+
+**Console test, with the other changes:** two sessions in a row on the same build. The first writes the file, and the
+second's boot queue and area entries should build programs much faster: `[GLPROG]` worker time per program and
+`[GLSTALL]` at the hub's and `Gungan`'s entries, against run 118.

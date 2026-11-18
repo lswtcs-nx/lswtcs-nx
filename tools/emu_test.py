@@ -117,14 +117,31 @@ def stutter_line(st):
             or "none") + f" ({st['translation_ms']:.0f} ms), render thread waited for them {st['translation_wait_ms']:.0f} ms")
 
 
+GAP = re.compile(r"^(.+): (\d+) frames$")
+GAP_TOLERANCE = 3   # frames; see same_game
+
+
+def same_game(gaps, base_gaps):
+    """The light / play state is noticed on the render thread, a frame or two after the guest frame it belongs to, so a state
+    change can be seen 1-2 frames later in one run than in another (log116: the hub's 796 read 797 once, with faster
+    program builds). A run that did not replay the same game is off by hundreds of frames or misses a level."""
+    if len(gaps) != len(base_gaps):
+        return False
+    for a, b in zip(gaps, base_gaps):
+        ma, mb = GAP.match(a), GAP.match(b)
+        if not ma or not mb or ma.group(1) != mb.group(1) or abs(int(ma.group(2)) - int(mb.group(2))) > GAP_TOLERANCE:
+            return False
+    return True
+
+
 def report(cur, base, noise):
     ok = cur["result"] == "done" and not cur["crash"]
     moved = []
     print(f"result: {cur['result']}" + (f"; crash lines: {cur['crash']}" if cur["crash"] else ""))
     print("frames between state changes: " + ("; ".join(cur["gaps"]) or "none"))
     if base:
-        same = cur["gaps"] == base["gaps"]
-        print(f"  baseline: {'; '.join(base['gaps'])}  -> {'same game' if same else 'DIFFERENT (the run did not replay the same)'}")
+        same = same_game(cur["gaps"], base["gaps"])
+        print(f"  baseline: {'; '.join(base['gaps'])}  -> {f'same game (within {GAP_TOLERANCE} frames)' if same else 'DIFFERENT (the run did not replay the same)'}")
         ok = ok and same
     print("work per level, per replay" + (" (against the baseline):" if base else ":"))
     for lv in sorted(cur["work"]):

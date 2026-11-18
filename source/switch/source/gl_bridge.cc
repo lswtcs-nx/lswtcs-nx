@@ -241,7 +241,7 @@ void xlate_log(const LswXlateId& id, const char* how, double ms, double spirv_ms
 // (Xenia's SPIR-V translation, about 15 % of the time on the Switch, runs 116-117) stays on the thread that prepares the draw:
 // it sets the shader's bindings, which the rest of the preparation reads. SPIRV-Cross and the GLSL clean-up (the other 85 %)
 // only make the GLSL and the texture units, which nothing reads before the render thread replays the frame. With
-// LSWTCS_GLXLATEASYNC=1 they run on a worker (core 2) and on the render thread while it waits (lsw_xlate_async_wait), so a
+// LSWTCS_GLXLATEASYNC=1 they run on a worker (core 2) and on the render thread while it waits (gl_backend.cpp replay), so a
 // burst of new shaders (the hub's first frame: 46 at once, 822-886 ms in runs 111-113) no longer runs one after another on
 // the guest's core. The render thread waits for every queued translation before it replays a frame.
 struct XlateJob {
@@ -367,8 +367,10 @@ bool xlate_async_run_one() {
     g_xq.pop_front();
   }
   xlate_cross(*j);   // on failure the shader keeps no GLSL: its programs fail to build and their draws are not drawn
-  g_xq_done.fetch_add(1, std::memory_order_release);
-  { std::lock_guard<std::mutex> lk(g_xq_mtx); }   // a waiter between its check and its wait sees the notify
+  {
+    std::lock_guard<std::mutex> lk(g_xq_mtx);   // also: a waiter between its check and its wait sees the notify
+    g_xq_done.fetch_add(1, std::memory_order_release);
+  }
   g_xq_done_cv.notify_all();
   return true;
 }
@@ -1102,24 +1104,13 @@ extern "C" void lsw_xlate_async_worker() {
   }
 }
 
-// Until every translation queued so far is done, running queued ones on this thread meanwhile. *waited_ns: the time it took
-// when there was anything to wait for; *ran_here: jobs this thread ran; *pending: jobs not done when it started.
-extern "C" void lsw_xlate_async_wait(uint64_t* waited_ns, uint32_t* ran_here, uint32_t* pending) {
-  *waited_ns = 0;
-  *ran_here = 0;
-  *pending = 0;
-  const uint64_t target = g_xq_queued.load(std::memory_order_relaxed);
-  if (g_xq_done.load(std::memory_order_acquire) >= target) return;
-  *pending = uint32_t(target - g_xq_done.load(std::memory_order_relaxed));
-  const auto t0 = std::chrono::steady_clock::now();
-  while (g_xq_done.load(std::memory_order_acquire) < target) {
-    if (xlate_async_run_one()) {
-      ++*ran_here;
-      continue;
-    }
-    std::unique_lock<std::mutex> lk(g_xq_mtx);   // the rest are running on the worker
-    g_xq_done_cv.wait_for(lk, std::chrono::milliseconds(1),
-                          [target] { return g_xq_done.load(std::memory_order_acquire) >= target; });
-  }
-  *waited_ns = uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t0).count());
+// The render thread's side (gl_backend.cpp replay): how many were queued, whether that many are done, one job run here, a
+// short wait.
+extern "C" uint64_t lsw_xlate_queued() { return g_xq_queued.load(std::memory_order_relaxed); }
+extern "C" bool lsw_xlate_done_reached(uint64_t target) { return g_xq_done.load(std::memory_order_acquire) >= target; }
+extern "C" bool lsw_xlate_run_one() { return xlate_async_run_one(); }
+extern "C" void lsw_xlate_wait_done(uint64_t target, int ms) {
+  std::unique_lock<std::mutex> lk(g_xq_mtx);
+  g_xq_done_cv.wait_for(lk, std::chrono::milliseconds(ms),
+                        [target] { return g_xq_done.load(std::memory_order_acquire) >= target; });
 }

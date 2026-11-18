@@ -93,7 +93,10 @@ extern "C" void lsw_log_async_path(char* out, size_t capacity, const char* name)
 extern "C" void lsw_prof_register(const char* name, int sched_id);   // hw_profiler.cpp
 extern "C" bool lsw_xlate_async_on();                                // gl_bridge.cc (log114)
 extern "C" void lsw_xlate_async_worker();
-extern "C" void lsw_xlate_async_wait(uint64_t* waited_ns, uint32_t* ran_here, uint32_t* pending);
+extern "C" uint64_t lsw_xlate_queued();
+extern "C" bool lsw_xlate_done_reached(uint64_t target);
+extern "C" bool lsw_xlate_run_one();
+extern "C" void lsw_xlate_wait_done(uint64_t target, int ms);
 extern "C" int lsw_core3_begin_bursty(const char* name, int prio);   // platform_switch.cpp (log99): fourth core, when there is one
 extern "C" int lsw_core3_active();
 extern "C" void lsw_prof_note_draws(uint32_t draws);
@@ -151,6 +154,8 @@ extern "C" uint32_t lsw_heap_free_mb();                                         
 extern "C" void lsw_bridge_counts(uint32_t* shaders, uint32_t* translations, uint32_t* memo, uint32_t* memo_clears);   // gl_bridge.cc
 extern "C" void lsw_nvc0_dedup_stats(unsigned* hits, unsigned* misses, unsigned* checks, unsigned* mismatches,
                                      unsigned* kb) __attribute__((weak));   // mesa_dedup_edits.py (log103)
+extern "C" void lsw_nvc0_disk_stats(unsigned* loaded, unsigned* reused, unsigned* written, unsigned* checked,
+                                    unsigned* differed) __attribute__((weak));   // mesa_nvc0disk_edits.py (log116)
 extern "C" void lsw_nvc0_work_stats(unsigned long long* draws, unsigned long long* vertices, unsigned long long* vp_bytes,
                                     unsigned long long* fp_bytes) __attribute__((weak));   // mesa_work_edits.py (log111)
 extern "C" unsigned lswtcs_gil_ctr;   // kernel_stubs.cpp: +1 at every guest function entry
@@ -1127,8 +1132,10 @@ void program_cache_init() {
         g_prog_cv.notify_all();
     };
     for (int i = 0; i < g_num_workers; ++i) std::thread(compile_worker_main, i).detach();
-    // log114 (LSWTCS_GLXLATEASYNC=1): SPIRV-Cross for new shaders on core 2, at worker 0's priority (below Mesa's thread and
-    // the audio output there). Not on core 3: threads there can go unrun for seconds (log102), and the frame waits for these.
+    // log114 (LSWTCS_GLXLATEASYNC=1): SPIRV-Cross for new shaders on core 2, at compile worker 0's priority, so neither takes
+    // the core from the other. log115 put it one below (0x2E): in the emulator the translations then waited behind the
+    // compiles and the cold route's long frames grew from 52-58 s to 75-90 s. Not on core 3: threads there can go unrun for
+    // seconds (log102), and the frame waits for these.
     if (lsw_xlate_async_on())
         std::thread([] {
             lsw_prof_register("xlate", -1);
@@ -3779,19 +3786,23 @@ PresentSrc replay() {
     g_inputcheck_rendered=false;
     if (!g_replay_same) { RpScope rp(RP_TAKE); gpu_frame_take(); }
     LswGpuFrame& f = g_gpu_frame_render;   // replayed again if no newer frame was published
-    {   // log114: the GLSL of shaders translated off-thread (LSWTCS_GLXLATEASYNC) is read from here on; queued ones run here too
-        RpScope rp(RP_PROGRAM);
-        uint64_t ns = 0;
-        uint32_t here = 0, pending = 0;
-        lsw_xlate_async_wait(&ns, &here, &pending);
-        if (pending)
-            printf("[XLATEWAIT] replay %llu: %.1f ms for %u translations, %u of them run here\n",
-                   (unsigned long long)(g_replays + 1), ns / 1e6, pending, here);
-    }
     g_snap_keep.clear();          // log88: the previous replay's texture copies
     g_replay_serial = f.serial;
     ++g_replays;
     level_watch();
+    // log114: the GLSL of shaders translated off-thread (LSWTCS_GLXLATEASYNC) is read from here on, so every translation queued
+    // so far must be done; queued ones run here meanwhile. (log115 also asked for the programs of draws already translated while
+    // waiting; in the emulator that changed nothing measurable, so it was taken out in log116.)
+    if (const uint64_t target = lsw_xlate_queued(); !lsw_xlate_done_reached(target)) {
+        RpScope rp(RP_PROGRAM);
+        const uint64_t t0 = gp_now();
+        uint32_t here = 0;
+        while (!lsw_xlate_done_reached(target)) {
+            if (lsw_xlate_run_one()) ++here;
+            else lsw_xlate_wait_done(target, 1);
+        }
+        printf("[XLATEWAIT] replay %llu: %.1f ms, %u run here\n", (unsigned long long)g_replays, (gp_now() - t0) / 1e6, here);
+    }
     ++g_gl_epoch;   // present / capture / clears changed state since the last replay
     g_tex_memo.clear();
     const bool gpurt = gpurt_on();
@@ -4568,6 +4579,12 @@ PresentSrc replay() {
             lsw_nvc0_dedup_stats(&hits, &misses, &checks, &mismatches, &kb);
             printf("[NVC0DEDUP] stage translations: %u reused, %u made, %u reuses checked against a fresh one, %u differed, %u KB kept\n",
                    hits, misses, checks, mismatches, kb);
+        }
+        if (lsw_nvc0_disk_stats) {   // log116: the kept translations on the SD card
+            unsigned loaded = 0, reused = 0, written = 0, checked = 0, differed = 0;
+            lsw_nvc0_disk_stats(&loaded, &reused, &written, &checked, &differed);
+            printf("[NVC0DISK] %u loaded at boot, %u of them used, %u saved this session, %u checked against a fresh "
+                   "translation, %u differed\n", loaded, reused, written, checked, differed);
         }
         printf("[GLDRAW] replay %llu: %u drawn (plain %u / points %u / rects %u / quads %u), %u no program, %u no GS, %u no RT, "
                "%u resolves (%u copies skipped as dead), %u dead draws skipped, %u resolved-texture binds, %u swizzle patches, "

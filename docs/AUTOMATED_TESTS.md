@@ -28,7 +28,8 @@ It prints:
 - **result:** `done`, the failed step, a stall (with the threads' stacks) or a crash.
 - **frames between state changes:** the guest frames between the script's framesets inside one level (the game going
   light or play: a door, a cutscene). With the frame time fixed these do not change between runs (hub 796, `Gungan_B`
-  4252 in every run so far). If they differ from the baseline, the build did not play the same game.
+  4252), give or take 1-2 frames: the render thread notices the light state out of step with the guest. More than 3
+  frames off means the build did not play the same game.
 - **work per level:** `[WORK]` per replay against the baseline. Fields beyond 5 % (vertices 12 %) are marked.
 - **Boot failures:** the emulator sometimes exits or hangs before the first level (5 of about 30 runs on 18 November
   2026, with every build). Such a run is run again, up to `--boot-retries` times (default 2).

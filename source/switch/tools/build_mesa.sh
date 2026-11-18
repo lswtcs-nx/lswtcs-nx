@@ -52,6 +52,7 @@ python "$ROOT/switch/mesa/mesa_zcull_edits.py" "$PWD"
 python "$ROOT/switch/mesa/mesa_texstage_edits.py" "$PWD"
 python "$ROOT/switch/mesa/mesa_dedup_edits.py" "$PWD"
 python "$ROOT/switch/mesa/mesa_work_edits.py" "$PWD"
+python "$ROOT/switch/mesa/mesa_nvc0disk_edits.py" "$PWD"
 W=$(pwd -W)
 # MSYSTEM=MSYS: meson rejects the MSYS python inside devkitPro's default (MinGW-flavoured) shell.
 MSYSTEM=MSYS /c/devkitPro/msys2/usr/bin/bash.exe -lc "cd \"\$(cygpath -u '$W')\" && \

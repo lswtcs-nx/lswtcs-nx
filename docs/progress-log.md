@@ -4768,3 +4768,42 @@ So the loop is not what makes that pass cost 2.1 ms; its texture reads and arith
 off: it is exact (`tests/glsl_loop_check.py`) but worth about 0.06 ms a frame at best.
 
 **Build:** `0.0.99-log119` (`build-nvpgo`, Mesa rebuilt), ELF kept privately; on the SD folder.
+
+## Log 120: pixel-shader outputs without `invariant` (`LSWTCS_GLPSINVARIANT=0`), pixel code -22 % in the emulator
+
+**How it was found.** Run 56's bench put handheld GPU time in the pixel shaders' own work (trivial shaders: -58 %), so
+shader code size is a usable proxy. Two emulator diagnostics were added to `mesa_nvc0disk_edits.py`:
+`LSWTCS_NVC0INFO=1` (each stage's code size and registers) and `LSWTCS_NVC0DUMP=<TGSI hash>,...` (nv50_ir's final
+listing, after register allocation, through `svcOutputDebugString`, which lands in Ryubing's own log).
+- Sizes for run 119's costliest pixel shaders: the scene's main one 472 bytes, smoke 432, the second full-screen pass
+  752, the first full-screen pass 6872 (29 registers), `A7CD3931` 3152 (42 registers).
+- The listings had no `mad` at all: every `a * b + c` was a `mul` plus an `add`.
+
+**Why.** Xenia declares every shader output `invariant`. Mesa's GLSL compiler marks everything feeding an invariant
+output `precise`, and nothing precise is fused. The 2026-10-09 change that took `precise` out of pixel shaders, meant
+to allow that fusion, never took effect. Invariance matters where two programs must compute the same position, which
+is the vertex shaders' job; they keep it.
+
+**Change (`gl_bridge.cc`):** with `LSWTCS_GLPSINVARIANT=0`, pixel shader outputs lose `invariant`. Mesa then merges
+`a * b + c` into TGSI `MAD`, which nouveau compiles as one FFMA with the 0*x=0 mode. The setting is part of the
+translation cache's identity. Off by default until the console measures it; the result differs from before by
+rounding (one rounding per fused operation instead of two), as any FMA.
+
+**Emulator, quick route, warm:**
+
+| Run | `Gungan_B` pixel code per draw | Hub | Same game |
+| --- | --- | --- | --- |
+| `LSWTCS_GLPSINVARIANT=0` (log119) | -22.7 % | -20.4 % | yes |
+| the same, log120 | -22.5 % | -22.9 % | yes, 0 compile failures |
+| plus nouveau fusing its leftover dnz mul + add (a Mesa patch tried and dropped) | -14.8 % | | yes |
+
+- Draws per guest frame against the baseline, matched frame by frame: 3,049,032 against 3,048,438 over 2436 play
+  frames (+0.02 %). The -3.5 % in `[WORK]`'s draws is window placement, and nothing stopped being drawn.
+- Letting nouveau also fuse its remaining `mul dnz` + `add` pairs made the code larger than the plain change, so that
+  Mesa patch was not kept.
+
+**What it should do on the console:** pixel-shader arithmetic is most of the handheld frame (run 56). 22 % less code
+is not 22 % less time: texture reads do not shrink, and the scene's main shader is mostly a texture read. Something
+between a few % and about 15 % of GPU time, if the ALU share is as run 56 put it. Measure with `[GLGPU]` medians.
+
+**Build:** `0.0.99-log120` (`build-nvpgo`), NRO `f965a1d0…`, ELF kept privately; on the SD folder (setting off).

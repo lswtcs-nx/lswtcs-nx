@@ -459,4 +459,17 @@ edit('src/gallium/drivers/nouveau/nvc0/nvc0_program.c', [
      '   pthread_mutex_unlock(&lsw_dedup_lock);\n   if (added)\n      lsw_disk_write(added);\n   return true;\n}\n\n'
      'uint32_t\nnvc0_program_symbol_offset(', 1),
 ])
+edit('src/gallium/drivers/nouveau/codegen/nv50_ir.cpp', [
+    ('namespace nv50_ir {\n', '/* LSWTCS mesa_nvc0disk_edits.py (log120): set by nvc0_program_translate for the stages LSWTCS_NVC0DUMP names. */\nextern "C" { __thread int lsw_nv50_ir_dump = 0; }\n\nnamespace nv50_ir {\n', 1),
+    ('   prog->optimizePostRA(info->optLevel);\n', '   prog->optimizePostRA(info->optLevel);\n   if (lsw_nv50_ir_dump)   /* LSWTCS mesa_nvc0disk_edits.py (log120): LSWTCS_NVC0DUMP, the final IR of chosen stages */\n      prog->print();\n', 1),
+])
+
+# log120: the dump switch in nvc0_program.c (after the edits above; edit() skips files already tagged, so apply it here)
+_p = os.path.join(root, 'src/gallium/drivers/nouveau/nvc0/nvc0_program.c')
+_s = open(_p, newline='').read()
+if 'lsw_nv50_ir_dump' not in _s:
+    for _o, _n in [('struct lsw_dedup_entry {\n', 'extern __thread int lsw_nv50_ir_dump;   /* nv50_ir.cpp (mesa_nvc0disk_edits.py, log120) */\n\nstruct lsw_dedup_entry {\n'), ('   if (!nvc0_program_translate_uncached(prog, chipset, debug))\n      return false;\n   {   /* log119 diagnostics', '   {   /* log120 diagnostics (LSWTCS_NVC0DUMP=hash,...): nv50_ir\'s final listing of the stages whose TGSI hash starts so */\n      static int read = 0;\n      static const char *want;\n      char hex[9];\n      if (!read) {\n         want = getenv("LSWTCS_NVC0DUMP");\n         read = 1;\n      }\n      snprintf(hex, sizeof(hex), "%02x%02x%02x%02x", sha[0], sha[1], sha[2], sha[3]);\n      lsw_nv50_ir_dump = want && strstr(want, hex) != NULL;\n   }\n   if (!nvc0_program_translate_uncached(prog, chipset, debug)) {\n      lsw_nv50_ir_dump = 0;\n      return false;\n   }\n   lsw_nv50_ir_dump = 0;\n   {   /* log119 diagnostics')]:
+        assert _s.count(_o) == 1, _o[:60]
+        _s = _s.replace(_o, _n)
+    open(_p, 'w', newline='').write(_s)
 print('mesa_nvc0disk_edits.py applied')

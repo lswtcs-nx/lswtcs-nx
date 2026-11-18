@@ -370,7 +370,7 @@ else()
         if(LSW_PGO STREQUAL "generate")
             set(LSW_NACP_VERSION "0.0.99-log97nvg")   # log97: the instrumented NRO of log96's code (wide counts)
         elseif(LSW_PGO STREQUAL "use")
-            set(LSW_NACP_VERSION "0.0.99-log119")   # log107: the image from default.xex, built-in player settings, file checks; log108: log text; log109: shader translations saved on the SD card; log110: scripted input and pad recording; log111: [WORK], [CHAIN], waitloads; log112: save copy to and from the SD card; log113: frame-exact input, fixed frame time; log114: shader translation off the guest thread (LSWTCS_GLXLATEASYNC); log115: programs asked for while translations finish (taken out in log116); log116: nvc0 translations kept on the SD card; log117: written in 256 KB blocks; log118: the exece break before the main loop's end (LSWTCS_GLLOOPEND); log119: nvc0 file flushed every 300 replays
+            set(LSW_NACP_VERSION "0.0.99-log120")   # log107: the image from default.xex, built-in player settings, file checks; log108: log text; log109: shader translations saved on the SD card; log110: scripted input and pad recording; log111: [WORK], [CHAIN], waitloads; log112: save copy to and from the SD card; log113: frame-exact input, fixed frame time; log114: shader translation off the guest thread (LSWTCS_GLXLATEASYNC); log115: programs asked for while translations finish (taken out in log116); log116: nvc0 translations kept on the SD card; log117: written in 256 KB blocks; log118: the exece break before the main loop's end (LSWTCS_GLLOOPEND); log119: nvc0 file flushed every 300 replays; log120: pixel outputs without invariant (LSWTCS_GLPSINVARIANT=0)
         endif()
     else()
         set(LSW_NACP_VERSION "0.0.99-log93")

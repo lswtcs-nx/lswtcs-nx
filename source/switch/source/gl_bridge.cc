@@ -303,6 +303,20 @@ bool xlate_cross(XlateJob& j) {
       glsl.swap(o);
     }
   }
+  // log120: pixel-shader outputs without `invariant` (LSWTCS_GLPSINVARIANT=0; default 1 keeps it). Xenia declares every
+  // output invariant, and Mesa's GLSL compiler then marks everything feeding an invariant output precise
+  // (propagate_invariance), which keeps nouveau from fusing any multiply-add: the run 119 dumps had no MAD at all, so the
+  // `precise` removal above (meant to allow that fusion) never took effect. Invariance only matters where two programs
+  // must compute the same position; vertex shaders keep it. Without it Mesa merges a*b+c into TGSI MAD, which nouveau
+  // compiles as one FFMA with the 0*x=0 mode (emulator: pixel code per draw -22.7 % in Gungan_B). Letting nouveau also
+  // fuse its leftover dnz MUL + ADD pairs (log120 test, LSWTCS_FMZMAD) made the code larger (-14.8 %), so it was dropped.
+  if (j.stage == kLswGlPixel) {
+    static const bool keep_inv = [] { const char* e = getenv("LSWTCS_GLPSINVARIANT"); return !(e && e[0] == '0'); }();
+    if (!keep_inv) {
+      for (size_t at = glsl.find(" invariant out "); at != std::string::npos; at = glsl.find(" invariant out ", at))
+        glsl.erase(at + 1, 10);   // "invariant "
+    }
+  }
   glsl = lsw_glsl_fold_fetch(glsl);
   // This translation's own bindings. The shader's (GetTextureBindingsAfterTranslation) are the first translation's,
   // and kLswTexturesUnsigned changes them: a shader drawn with unsigned and later with signed textures, or the

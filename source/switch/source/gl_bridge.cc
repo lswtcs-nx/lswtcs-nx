@@ -18,6 +18,9 @@
 #include <type_traits>
 #include <unordered_map>
 #include <atomic>
+#include <condition_variable>
+#include <deque>
+#include <mutex>
 #include <vector>
 
 #include "xenia/base/math.h"
@@ -234,6 +237,142 @@ void xlate_log(const LswXlateId& id, const char* how, double ms, double spirv_ms
            (unsigned long long)id.ucode_xxh, (unsigned long long)id.modification, id.dwords, how, ms);
 }
 
+// log114: the second half of a translation, from SPIR-V to the GLSL the render thread builds programs from. The first half
+// (Xenia's SPIR-V translation, about 15 % of the time on the Switch, runs 116-117) stays on the thread that prepares the draw:
+// it sets the shader's bindings, which the rest of the preparation reads. SPIRV-Cross and the GLSL clean-up (the other 85 %)
+// only make the GLSL and the texture units, which nothing reads before the render thread replays the frame. With
+// LSWTCS_GLXLATEASYNC=1 they run on a worker (core 2) and on the render thread while it waits (lsw_xlate_async_wait), so a
+// burst of new shaders (the hub's first frame: 46 at once, 822-886 ms in runs 111-113) no longer runs one after another on
+// the guest's core. The render thread waits for every queued translation before it replays a frame.
+struct XlateJob {
+  LswXlateId id;
+  uint64_t key = 0, modification = 0, ucode_hash = 0;
+  uint32_t ucode_dwords = 0;
+  LswGlStage stage = kLswGlVertex;
+  bool have_saved = false, dump = false, async = false;
+  LswXlateEntry saved;
+  double first_ms = 0, spirv_ms = 0;   // time on the preparing thread, of which the SPIR-V translation
+  std::vector<uint32_t> spirv;
+  struct Tex { uint32_t fetch, dimension; bool is_signed; };
+  struct Smp { uint32_t fetch, mag, min, mip, aniso; };
+  std::vector<Tex> tex;   // the translator's bindings for this translation, taken before the next one changes them
+  std::vector<Smp> smp;
+  LswGlShader* out = nullptr;
+};
+
+bool xlate_async_on() {
+  static const bool on = [] { const char* e = getenv("LSWTCS_GLXLATEASYNC"); return e && e[0] == '1'; }();
+  return on;
+}
+
+// GLSL and units for job `j` into j.out. False if SPIRV-Cross failed (j.out keeps no GLSL).
+bool xlate_cross(XlateJob& j) {
+  const auto c0 = std::chrono::steady_clock::now();
+  std::string glsl, err;
+  std::vector<LswGlslSampler> samplers;
+  // Pixel shader units from 0, vertex shader units from 16 (one program binds both).
+  if (!lsw_spirv_to_glsl(j.spirv.data(), j.spirv.size(), j.stage == kLswGlPixel ? 0 : 16,
+                         j.stage == kLswGlPixel ? "_ps" : "_vs", glsl, samplers, err)) {
+    log_once(j.key, "SPIRV-Cross failed", err.c_str());
+    xlate_log(j.id, "failed", j.first_ms + ms_since(c0), j.spirv_ms);
+    return false;
+  }
+  if (j.dump) {
+    printf("[GLXLATE] %016llX_%016llX %s: %u ucode dw, translate %.1f ms -> %zu B SPIR-V, cross %.1f ms -> %zu B GLSL\n",
+           (unsigned long long)j.ucode_hash, (unsigned long long)j.modification,
+           j.stage == kLswGlPixel ? "ps" : "vs", j.ucode_dwords, j.spirv_ms, j.spirv.size() * 4,
+           ms_since(c0), glsl.size());
+    fflush(stdout);
+  }
+  // Pixel shaders without `precise` (LSWTCS_GLPSPRECISE=1 keeps it): Xenia marks every ALU result NoContraction
+  // to reproduce the 360's rounding exactly, which stops Mesa fusing mul+add into ffma and reordering, roughly
+  // doubling the ALU instruction count of the heavy full-screen passes on the Switch GPU (hardware [GLGPU]: top
+  // pixel shaders 1.5-2.9 ms per frame each). Vertex shaders keep it: position invariance across passes.
+  if (j.stage == kLswGlPixel) {
+    static const bool keep = [] { const char* e = getenv("LSWTCS_GLPSPRECISE"); return e && e[0] == '1'; }();
+    if (!keep) {
+      std::string o;
+      o.reserve(glsl.size());
+      for (size_t i = 0; i < glsl.size();) {
+        if (glsl.compare(i, 8, "precise ") == 0 && (i == 0 || !(isalnum(uint8_t(glsl[i - 1])) || glsl[i - 1] == '_'))) {
+          i += 8;
+          continue;
+        }
+        o += glsl[i++];
+      }
+      glsl.swap(o);
+    }
+  }
+  glsl = lsw_glsl_fold_fetch(glsl);
+  // This translation's own bindings. The shader's (GetTextureBindingsAfterTranslation) are the first translation's,
+  // and kLswTexturesUnsigned changes them: a shader drawn with unsigned and later with signed textures, or the
+  // reverse, lost every texture unit in its second translation, and those draws sampled whatever the units last held.
+  std::vector<LswGlShaderUnit> units;
+  for (const LswGlslSampler& sm : samplers) {
+    const uint32_t si = sm.sampler_binding - uint32_t(j.tex.size());
+    if (sm.image_binding >= j.tex.size() || si >= j.smp.size()) {
+      log_once(j.key, "texture unit with an unknown binding", nullptr);
+      continue;
+    }
+    const XlateJob::Tex& t = j.tex[sm.image_binding];
+    const XlateJob::Smp& m = j.smp[si];
+    LswGlShaderUnit u;
+    u.unit = sm.unit;
+    u.fetch_constant = t.fetch;
+    u.dimension = t.dimension;
+    u.is_signed = t.is_signed ? 1u : 0u;
+    u.sampler = {m.fetch, m.mag, m.min, m.mip, m.aniso};
+    units.push_back(u);
+  }
+  // For the SD card: everything the next session needs instead of translating (packed as in lsw_xlate_cache.h).
+  LswXlateEntry fresh;
+  fresh.glsl = glsl;
+  fresh.units = units;
+  for (const XlateJob::Tex& t : j.tex)
+    fresh.textures.push_back((t.fetch & 31u) | (t.dimension & 3u) << 5 | uint32_t(t.is_signed) << 7);
+  for (const XlateJob::Smp& m : j.smp)
+    fresh.samplers.push_back((m.fetch & 31u) | (m.mag & 3u) << 5 | (m.min & 3u) << 7 | (m.mip & 3u) << 9 | (m.aniso & 7u) << 11);
+  if (j.have_saved) lsw_xlate_cache_checked(j.id, j.saved, fresh);
+  else lsw_xlate_cache_put(j.id, fresh);
+  j.out->glsl = std::move(glsl);
+  j.out->units = std::move(units);
+  xlate_log(j.id, j.have_saved ? "checked" : j.async ? "translated off-thread" : "translated", j.first_ms + ms_since(c0),
+            j.spirv_ms);
+  return true;
+}
+
+// The queue (LSWTCS_GLXLATEASYNC=1). Done counts jobs finished; the render thread waits until it reaches what was queued.
+std::mutex g_xq_mtx;
+std::condition_variable g_xq_cv, g_xq_done_cv;
+std::deque<std::shared_ptr<XlateJob>> g_xq;
+std::atomic<uint64_t> g_xq_queued{0}, g_xq_done{0};
+
+void xlate_async_submit(std::shared_ptr<XlateJob> j) {
+  j->async = true;
+  {
+    std::lock_guard<std::mutex> lk(g_xq_mtx);
+    g_xq.push_back(std::move(j));
+    g_xq_queued.fetch_add(1, std::memory_order_relaxed);
+  }
+  g_xq_cv.notify_one();
+}
+
+// One job from the queue, run on this thread; false if the queue was empty.
+bool xlate_async_run_one() {
+  std::shared_ptr<XlateJob> j;
+  {
+    std::lock_guard<std::mutex> lk(g_xq_mtx);
+    if (g_xq.empty()) return false;
+    j = std::move(g_xq.front());
+    g_xq.pop_front();
+  }
+  xlate_cross(*j);   // on failure the shader keeps no GLSL: its programs fail to build and their draws are not drawn
+  g_xq_done.fetch_add(1, std::memory_order_release);
+  { std::lock_guard<std::mutex> lk(g_xq_mtx); }   // a waiter between its check and its wait sees the notify
+  g_xq_done_cv.notify_all();
+  return true;
+}
+
 // Translation of `shader` with `modification` as GLSL plus its texture units (cached for the session, and on the SD
 // card since log109: gl_xlate_cache.cc).
 const LswGlShader* get_glsl(Bridge& b, SpirvShader& shader, uint64_t modification, LswGlStage stage) {
@@ -279,103 +418,61 @@ const LswGlShader* get_glsl(Bridge& b, SpirvShader& shader, uint64_t modificatio
     xlate_log(id, "saved", ms_since(t_start), -1);
     return raw;
   }
-  std::unique_ptr<LswGlShader> out;
   const bool dump = ucode_dump_on();
   if (dump) ucode_dump(shader, modification, stage);
   auto t0 = std::chrono::steady_clock::now();
-  double xlate_ms = 0;
   auto* t = shader.GetOrCreateTranslation(modification);
   if (!t->is_translated()) b.translator->TranslateAnalyzedShader(*t);
-  xlate_ms = ms_since(t0);
-  t0 = std::chrono::steady_clock::now();
+  const double spirv_ms = ms_since(t0);
   if (!t->is_valid()) {
     log_once(key, stage == kLswGlPixel ? "PS SPIR-V translation failed" : "VS SPIR-V translation failed", nullptr);
-  } else {
-    const auto& bin = t->translated_binary();
-    std::string glsl, err;
-    std::vector<LswGlslSampler> samplers;
-    // Pixel shader units from 0, vertex shader units from 16 (one program binds both).
-    if (!lsw_spirv_to_glsl(reinterpret_cast<const uint32_t*>(bin.data()), bin.size() / 4,
-                           stage == kLswGlPixel ? 0 : 16, stage == kLswGlPixel ? "_ps" : "_vs", glsl,
-                           samplers, err)) {
-      log_once(key, "SPIRV-Cross failed", err.c_str());
-    } else {
-      if (dump) {
-        printf("[GLXLATE] %016llX_%016llX %s: %u ucode dw, translate %.1f ms -> %zu B SPIR-V, cross %.1f ms -> %zu B GLSL\n",
-               (unsigned long long)shader.ucode_data_hash(), (unsigned long long)modification,
-               stage == kLswGlPixel ? "ps" : "vs", unsigned(shader.ucode_dword_count()), xlate_ms, bin.size(),
-               ms_since(t0), glsl.size());
-        fflush(stdout);
-      }
-      // Pixel shaders without `precise` (LSWTCS_GLPSPRECISE=1 keeps it): Xenia marks every ALU result NoContraction
-      // to reproduce the 360's rounding exactly, which stops Mesa fusing mul+add into ffma and reordering, roughly
-      // doubling the ALU instruction count of the heavy full-screen passes on the Switch GPU (hardware [GLGPU]: top
-      // pixel shaders 1.5-2.9 ms per frame each). Vertex shaders keep it: position invariance across passes.
-      if (stage == kLswGlPixel) {
-        static const bool keep = [] { const char* e = getenv("LSWTCS_GLPSPRECISE"); return e && e[0] == '1'; }();
-        if (!keep) {
-          std::string o;
-          o.reserve(glsl.size());
-          for (size_t i = 0; i < glsl.size();) {
-            if (glsl.compare(i, 8, "precise ") == 0 && (i == 0 || !(isalnum(uint8_t(glsl[i - 1])) || glsl[i - 1] == '_'))) {
-              i += 8;
-              continue;
-            }
-            o += glsl[i++];
-          }
-          glsl.swap(o);
-        }
-      }
-      glsl = lsw_glsl_fold_fetch(glsl);
-      out = std::make_unique<LswGlShader>();
-      out->stage = stage;
-      out->key = key;
-      out->glsl = std::move(glsl);
-      // This translation's own bindings. The shader's (GetTextureBindingsAfterTranslation) are the first translation's,
-      // and kLswTexturesUnsigned changes them: a shader drawn with unsigned and later with signed textures, or the
-      // reverse, lost every texture unit in its second translation, and those draws sampled whatever the units last held.
-      const auto counts = b.translator->LswLastBindingCounts();
-      for (const LswGlslSampler& s : samplers) {
-        const uint32_t si = s.sampler_binding - uint32_t(counts.textures);
-        if (s.image_binding >= counts.textures || si >= counts.samplers) {
-          log_once(key, "texture unit with an unknown binding", nullptr);
-          continue;
-        }
-        uint32_t fetch = 0, dimension = 0, sampler_fetch = 0, mag = 0, min = 0, mip = 0, aniso = 0;
-        bool is_signed = false;
-        b.translator->LswLastTextureBinding(s.image_binding, fetch, dimension, is_signed);
-        b.translator->LswLastSamplerBinding(si, sampler_fetch, mag, min, mip, aniso);
-        LswGlShaderUnit u;
-        u.unit = s.unit;
-        u.fetch_constant = fetch;
-        u.dimension = dimension;
-        u.is_signed = is_signed ? 1u : 0u;
-        u.sampler = {sampler_fetch, mag, min, mip, aniso};
-        out->units.push_back(u);
-      }
-      // For the SD card: everything the next session needs instead of translating (packed as in lsw_xlate_cache.h).
-      LswXlateEntry fresh;
-      fresh.glsl = out->glsl;
-      fresh.units = out->units;
-      for (size_t i = 0; i < counts.textures; ++i) {
-        uint32_t fetch = 0, dimension = 0;
-        bool is_signed = false;
-        b.translator->LswLastTextureBinding(i, fetch, dimension, is_signed);
-        fresh.textures.push_back((fetch & 31u) | (dimension & 3u) << 5 | uint32_t(is_signed) << 7);
-      }
-      for (size_t i = 0; i < counts.samplers; ++i) {
-        uint32_t fetch = 0, mag = 0, min = 0, mip = 0, aniso = 0;
-        b.translator->LswLastSamplerBinding(i, fetch, mag, min, mip, aniso);
-        fresh.samplers.push_back((fetch & 31u) | (mag & 3u) << 5 | (min & 3u) << 7 | (mip & 3u) << 9 | (aniso & 7u) << 11);
-      }
-      if (have_saved) lsw_xlate_cache_checked(id, saved, fresh);
-      else lsw_xlate_cache_put(id, fresh);
-    }
+    xlate_log(id, "failed", ms_since(t_start), spirv_ms);
+    b.gl.emplace(key, nullptr);
+    g_gl_count.store(uint32_t(b.gl.size()), std::memory_order_relaxed);
+    return nullptr;
   }
-  xlate_log(id, !out ? "failed" : have_saved ? "checked" : "translated", ms_since(t_start), xlate_ms);
+  auto job = std::make_shared<XlateJob>();
+  job->id = id;
+  job->key = key;
+  job->modification = modification;
+  job->ucode_hash = shader.ucode_data_hash();
+  job->ucode_dwords = uint32_t(shader.ucode_dword_count());
+  job->stage = stage;
+  job->have_saved = have_saved;
+  if (have_saved) job->saved = std::move(saved);
+  job->dump = dump;
+  const auto& bin = t->translated_binary();
+  const uint32_t* words = reinterpret_cast<const uint32_t*>(bin.data());
+  job->spirv.assign(words, words + bin.size() / 4);
+  const auto counts = b.translator->LswLastBindingCounts();
+  for (size_t i = 0; i < counts.textures; ++i) {
+    XlateJob::Tex x{0, 0, false};
+    b.translator->LswLastTextureBinding(i, x.fetch, x.dimension, x.is_signed);
+    job->tex.push_back(x);
+  }
+  for (size_t i = 0; i < counts.samplers; ++i) {
+    XlateJob::Smp x{0, 0, 0, 0, 0};
+    b.translator->LswLastSamplerBinding(i, x.fetch, x.mag, x.min, x.mip, x.aniso);
+    job->smp.push_back(x);
+  }
+  auto out = std::make_unique<LswGlShader>();
+  out->stage = stage;
+  out->key = key;
+  job->out = out.get();
   const LswGlShader* raw = out.get();
   b.gl.emplace(key, std::move(out));
   g_gl_count.store(uint32_t(b.gl.size()), std::memory_order_relaxed);
+  job->spirv_ms = spirv_ms;
+  job->first_ms = ms_since(t_start);
+  // The saved translations checked at boot stay here: a difference must stop the cache before more are used.
+  if (xlate_async_on() && !have_saved) {
+    xlate_async_submit(std::move(job));
+    return raw;
+  }
+  if (!xlate_cross(*job)) {
+    b.gl[key].reset();   // as before log114: the draw is not prepared
+    return nullptr;
+  }
   return raw;
 }
 
@@ -990,4 +1087,39 @@ extern "C" const void* lsw_gpu_geometry_shader(uint32_t gs_type, uint32_t key_bi
   }
   if (it->second && size_out) *size_out = 1;
   return it->second.get();
+}
+
+// log114: the translation worker (gl_backend.cpp starts it on core 2) and the render thread's wait before a replay.
+extern "C" bool lsw_xlate_async_on() { return xlate_async_on(); }
+
+extern "C" void lsw_xlate_async_worker() {
+  for (;;) {
+    {
+      std::unique_lock<std::mutex> lk(g_xq_mtx);
+      g_xq_cv.wait(lk, [] { return !g_xq.empty(); });
+    }
+    while (xlate_async_run_one()) {}
+  }
+}
+
+// Until every translation queued so far is done, running queued ones on this thread meanwhile. *waited_ns: the time it took
+// when there was anything to wait for; *ran_here: jobs this thread ran; *pending: jobs not done when it started.
+extern "C" void lsw_xlate_async_wait(uint64_t* waited_ns, uint32_t* ran_here, uint32_t* pending) {
+  *waited_ns = 0;
+  *ran_here = 0;
+  *pending = 0;
+  const uint64_t target = g_xq_queued.load(std::memory_order_relaxed);
+  if (g_xq_done.load(std::memory_order_acquire) >= target) return;
+  *pending = uint32_t(target - g_xq_done.load(std::memory_order_relaxed));
+  const auto t0 = std::chrono::steady_clock::now();
+  while (g_xq_done.load(std::memory_order_acquire) < target) {
+    if (xlate_async_run_one()) {
+      ++*ran_here;
+      continue;
+    }
+    std::unique_lock<std::mutex> lk(g_xq_mtx);   // the rest are running on the worker
+    g_xq_done_cv.wait_for(lk, std::chrono::milliseconds(1),
+                          [target] { return g_xq_done.load(std::memory_order_acquire) >= target; });
+  }
+  *waited_ns = uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t0).count());
 }

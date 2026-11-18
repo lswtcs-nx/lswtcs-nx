@@ -32,6 +32,7 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+COLD_CACHES = ("glprogs2", "mesacache")   # the port's shader caches on the card (gl_backend.cpp, Mesa)
 GAME_FILES = ["default.xex", "game.DAT", "game1.DAT"]
 # Ryubing 1.3.3 (17 November 2026): headless, handheld, no profile picker or controller screen, unimplemented services
 # answered instead of stopping (pcv), and its OpenGL backend: with Vulkan the NRO stopped at its first shader.
@@ -120,6 +121,9 @@ def main():
     ap.add_argument("--fixed-dt", action="store_true",
                     help="LSWTCS_FIXEDDT=1: the game's frame time fixed at 1/60 s, for frame-exact recording and replay "
                          "(a --record then writes a frame script, padrec_to_script.py --frames)")
+    ap.add_argument("--cold-caches", action="store_true",
+                    help="a player's first session: the port's shader caches on the emulated card (glprogs2: saved "
+                         "programs and translations; mesacache: Mesa's) are set aside for this run and put back after it")
     ap.add_argument("--save-id", default="0000000000000001", help="the emulator's save folder of the port (Ryubing: "
                                                                    "0000000000000001, emulator run 13)")
     args = ap.parse_args()
@@ -159,6 +163,17 @@ def main():
                     shutil.rmtree(child) if child.is_dir() else child.unlink()
         args.env.append(f"LSWTCS_SAVEIMPORT={args.fresh_save}")
         print(f"emulator save emptied ({save_dir}); {args.fresh_save} is imported at boot")
+
+    cold_stash = sd.parent.parent / "cold-stash"   # beside portable/, outside the emulated card
+    if args.cold_caches:
+        if cold_stash.exists():
+            sys.exit(f"{cold_stash} exists: an earlier --cold-caches run did not put the caches back; move its folders "
+                     f"back into {game} first")
+        cold_stash.mkdir()
+        for name in COLD_CACHES:
+            if (game / name).exists():
+                shutil.move(str(game / name), str(cold_stash / name))
+        print(f"shader caches set aside for this run ({', '.join(COLD_CACHES)} -> {cold_stash})")
 
     # Settings and scripts on the emulated card.
     (game / "tests").mkdir(exist_ok=True)
@@ -273,6 +288,14 @@ def main():
                 proc.wait(15)
             except subprocess.TimeoutExpired:
                 proc.kill()
+        if args.cold_caches:   # drop what the cold run wrote, put the warm caches back
+            for name in COLD_CACHES:
+                if (game / name).exists():
+                    shutil.rmtree(game / name)
+                if (cold_stash / name).exists():
+                    shutil.move(str(cold_stash / name), str(game / name))
+            cold_stash.rmdir()
+            print("shader caches put back")
         if had_env and backup.exists():
             shutil.copyfile(backup, env_path)
             backup.unlink()

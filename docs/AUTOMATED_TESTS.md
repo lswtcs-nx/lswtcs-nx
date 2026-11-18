@@ -30,6 +30,8 @@ It prints:
   light or play: a door, a cutscene). With the frame time fixed these do not change between runs (hub 796, `Gungan_B`
   4252 in every run so far). If they differ from the baseline, the build did not play the same game.
 - **work per level:** `[WORK]` per replay against the baseline. Fields beyond 5 % (vertices 12 %) are marked.
+- **Boot failures:** the emulator sometimes exits or hangs before the first level (5 of about 30 runs on 18 November
+  2026, with every build). Such a run is run again, up to `--boot-retries` times (default 2).
 - **VERDICT:** `OK` when the route finished and played the same game; `CHECK` otherwise. Work changes are listed beside
   it and do not fail it, since an optimization is meant to move them.
 
@@ -44,6 +46,19 @@ It prints:
 The full route went from about 340 s to 333 s: the emulator itself runs the game at about 35 frames per second on this
 PC, so there is little to gain. The menus stay at the normal rate, since with the limiter off the title sat until
 its attract movie, which hangs in the emulator. The run is already headless (`--no-gui`).
+
+**A player's first session (`--cold`):** `emu_run.py --cold-caches` sets the port's shader caches on the emulated card
+aside for the run (`glprogs2`: saved programs and translations; `mesacache`: Mesa's) and puts them back after it.
+Cold baselines are kept apart (`quick-cold-<name>.json`). The report adds a stutter line: play frames over 100 ms, time
+frames were held for programs, translations by kind and the render thread's wait for them.
+- Use cold runs for "same game" and for what the first session does (how many translations, where they run).
+- Not for `[WORK]`: two cold runs of one build differed by up to 24 % in pixel-program bytes in the hub and 7.5 % in
+  `Gungan_B` (18 November 2026), since frames held for seconds shift the replay windows. Compare work in warm runs.
+- Not for stutter length on the console: in the emulator, Mesa's compiles (about 50 s of held frames per cold quick
+  route) dwarf everything else; on the Switch the translation was the larger part of the hub's first frame.
+
+On the console, a first session can be had without deleting anything: `LSWTCS_GLXLATE=0`, `LSWTCS_GLPROGLIST=0` and
+`MESA_GLSL_CACHE_DISABLE=true` in `env.txt` make the session read and write none of the caches.
 
 What this does not replace: speed. The emulator cannot tell how many milliseconds a frame costs on the X1, so a change
 that passes here and lowers work still needs a console run to claim a gain.

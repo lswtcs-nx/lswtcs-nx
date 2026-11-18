@@ -91,6 +91,9 @@ s32 g_render_prio_start = 0x3B;                                      // the rend
 extern "C" void lsw_audio_stats(uint64_t* played, uint64_t* empty_ns);   // audio_switch.cpp: frames.log columns
 extern "C" void lsw_log_async_path(char* out, size_t capacity, const char* name);   // log_async.cpp
 extern "C" void lsw_prof_register(const char* name, int sched_id);   // hw_profiler.cpp
+extern "C" bool lsw_xlate_async_on();                                // gl_bridge.cc (log114)
+extern "C" void lsw_xlate_async_worker();
+extern "C" void lsw_xlate_async_wait(uint64_t* waited_ns, uint32_t* ran_here, uint32_t* pending);
 extern "C" int lsw_core3_begin_bursty(const char* name, int prio);   // platform_switch.cpp (log99): fourth core, when there is one
 extern "C" int lsw_core3_active();
 extern "C" void lsw_prof_note_draws(uint32_t draws);
@@ -1124,6 +1127,16 @@ void program_cache_init() {
         g_prog_cv.notify_all();
     };
     for (int i = 0; i < g_num_workers; ++i) std::thread(compile_worker_main, i).detach();
+    // log114 (LSWTCS_GLXLATEASYNC=1): SPIRV-Cross for new shaders on core 2, at worker 0's priority (below Mesa's thread and
+    // the audio output there). Not on core 3: threads there can go unrun for seconds (log102), and the frame waits for these.
+    if (lsw_xlate_async_on())
+        std::thread([] {
+            lsw_prof_register("xlate", -1);
+            pin_to_core(2, "translation worker");
+            const Result rc = svcSetThreadPriority(CUR_THREAD_HANDLE, 0x2D);
+            printf("[NX] translation worker priority 0x2D (rc 0x%X)\n", rc);
+            lsw_xlate_async_worker();
+        }).detach();
     const bool list = g_num_workers > 0 && prog_list_on();
     if (list && env_on("LSWTCS_GLPROGBG", true)) {
         std::thread([read_list] {
@@ -3766,6 +3779,15 @@ PresentSrc replay() {
     g_inputcheck_rendered=false;
     if (!g_replay_same) { RpScope rp(RP_TAKE); gpu_frame_take(); }
     LswGpuFrame& f = g_gpu_frame_render;   // replayed again if no newer frame was published
+    {   // log114: the GLSL of shaders translated off-thread (LSWTCS_GLXLATEASYNC) is read from here on; queued ones run here too
+        RpScope rp(RP_PROGRAM);
+        uint64_t ns = 0;
+        uint32_t here = 0, pending = 0;
+        lsw_xlate_async_wait(&ns, &here, &pending);
+        if (pending)
+            printf("[XLATEWAIT] replay %llu: %.1f ms for %u translations, %u of them run here\n",
+                   (unsigned long long)(g_replays + 1), ns / 1e6, pending, here);
+    }
     g_snap_keep.clear();          // log88: the previous replay's texture copies
     g_replay_serial = f.serial;
     ++g_replays;

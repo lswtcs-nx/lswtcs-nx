@@ -21,6 +21,7 @@ Usage:
   python tools/emu_test.py --save-baseline main            # run the current build and keep it as baseline "main"
   python tools/emu_test.py --baseline main                 # run the current build and compare with "main"
   python tools/emu_test.py --compare <run folder> --baseline main   # report on a finished run, no new run
+  python tools/emu_test.py --cold --baseline main          # a player's first session (no shader caches)
 Options: --nro (default source/switch/build-nvpgo/lswtcs.nro), --elf (default beside it), --route quick|full,
          --noise PCT, --env KEY=VALUE (repeatable, e.g. an A/B switch), --keep-going (no stop on the first failure)
 """
@@ -42,6 +43,8 @@ BASELINES = ROOT / "private/emu-baselines"
 FIELD_NOISE = {"vertices k": 12.0}
 ROUTES = {"quick": "emu_gungan_quick.txt", "full": "emu_gungan.txt"}
 LEVEL = re.compile(r"^\[LEVEL\] (.+?) \(frame (\d+)\)")
+XLATE = re.compile(r"^\[XLATE\] \S+ \S+ \d+ dw: (.+?) ([\d.]+) ms")
+XLATEWAIT = re.compile(r"^\[XLATEWAIT\] replay \d+: ([\d.]+) ms")
 FRAMESET = re.compile(r"^\[SCRIPT\] line \d+ frameset at .*?\(level (\S+), (\w+) frames?, .*frame (\d+)\)")
 
 
@@ -70,7 +73,48 @@ def summarize(run):
             result = "failed: " + line[len("[SCRIPT] failed"):].strip()
     crash = [l for l in log.splitlines() if l.startswith(("[CRASH]", "[FATAL]"))]
     work = {lv: {"replays": n, **dict(zip(work_compare.FIELDS, vals))} for lv, (vals, n) in work_compare.load(run).items()}
-    return {"run": str(run), "result": result, "crash": crash[:5], "levels": levels, "gaps": gaps, "work": work}
+    return {"run": str(run), "result": result, "crash": crash[:5], "levels": levels, "gaps": gaps, "work": work,
+            "stutter": stutter(run, log)}
+
+
+def stutter(run, log):
+    """Long play frames (frames.log: real time between swaps, frames with 150 draws or more) and what new shaders cost.
+    The times are the PC's: compare runs on this PC with each other, never with the console."""
+    long_frames, hold = [], 0.0
+    fl = Path(run) / "frames.log"
+    if fl.exists():
+        for line in fl.read_bytes().decode("utf-8", "replace").splitlines():
+            if line.startswith("#"):
+                continue
+            c = line.split()
+            try:
+                replay, real, hold_ms, draws = int(c[0]), float(c[4]), float(c[7]), int(c[8])
+            except (ValueError, IndexError):
+                continue
+            hold += hold_ms
+            if draws >= 150 and real > 100:
+                long_frames.append((real, replay))
+    kinds, xlate_ms, wait_ms = {}, 0.0, 0.0
+    for line in log.splitlines():
+        m = XLATE.match(line)
+        if m:
+            kinds[m.group(1)] = kinds.get(m.group(1), 0) + 1
+            xlate_ms += float(m.group(2))
+            continue
+        m = XLATEWAIT.match(line)
+        if m:
+            wait_ms += float(m.group(1))
+    long_frames.sort(reverse=True)
+    return {"long_frames": len(long_frames), "long_ms": round(sum(r for r, _ in long_frames), 1),
+            "worst": [[round(r, 1), n] for r, n in long_frames[:5]], "program_hold_ms": round(hold, 1),
+            "translations": kinds, "translation_ms": round(xlate_ms, 1), "translation_wait_ms": round(wait_ms, 1)}
+
+
+def stutter_line(st):
+    return (f"{st['long_frames']} play frames over 100 ms ({st['long_ms']:.0f} ms in all; worst "
+            + ", ".join(f"{r:.0f} ms at replay {n}" for r, n in st["worst"][:3]) + f"); frames held for programs "
+            f"{st['program_hold_ms']:.0f} ms; translations " + (", ".join(f"{v} {k}" for k, v in sorted(st["translations"].items()))
+            or "none") + f" ({st['translation_ms']:.0f} ms), render thread waited for them {st['translation_wait_ms']:.0f} ms")
 
 
 def report(cur, base, noise):
@@ -99,6 +143,10 @@ def report(cur, base, noise):
             else:
                 cells.append(f"{f} {w[f]:.1f}")
         print(f"  {lv} ({w['replays']} replays): " + ", ".join(cells))
+    if cur.get("stutter"):
+        print("stutter (PC times, compare only with runs on this PC): " + stutter_line(cur["stutter"]))
+        if base and base.get("stutter"):
+            print("  baseline: " + stutter_line(base["stutter"]))
     if base:
         print(f"  (differences beyond {noise:.0f} % (vertices 12 %) are marked <-; two runs of one build: Gungan_B within 3 %, hub up to 5 %, hub vertices 11 %)")
     return ok, moved
@@ -113,7 +161,10 @@ def main():
     ap.add_argument("--save-baseline", metavar="NAME", help="keep this run as the baseline NAME")
     ap.add_argument("--compare", metavar="RUN", help="report on a finished run folder instead of running")
     ap.add_argument("--noise", type=float, default=5.0)
+    ap.add_argument("--boot-retries", type=int, default=2, help="runs again when the emulator fails before the first level")
     ap.add_argument("--env", action="append", default=[])
+    ap.add_argument("--cold", action="store_true", help="a player's first session: no saved shader caches (emu_run "
+                    "--cold-caches); baselines of cold runs are kept apart")
     args = ap.parse_args()
 
     if args.compare:
@@ -126,26 +177,40 @@ def main():
                "--timeout", "600" if args.route == "full" else "360", "--gdb-on-stall", "60", "--elf", str(elf)]
         for e in args.env:
             cmd += ["--env", e]
-        r = subprocess.run(cmd, capture_output=True, text=True)
-        m = re.search(r"^logs: (.+)$", r.stdout, re.M)
-        print("\n".join(l for l in r.stdout.splitlines() if l.startswith(("result:", "last step:", "free memory", "guest threads"))))
-        if not m:
-            print(r.stdout[-2000:], r.stderr[-2000:])
-            sys.exit("no log folder: the NRO did not start")
-        run = Path(m.group(1).strip())
-        print(f"run: {run}")
+        if args.cold:
+            cmd.append("--cold-caches")
+        # The emulator dies or hangs at boot now and then (before the first level: GL start-up, the guest scheduler), with
+        # builds before and after log114 alike (18 November 2026: 5 of about 30 runs). Such a run says nothing about the
+        # build, so it is run again, up to --boot-retries times.
+        for attempt in range(args.boot_retries + 1):
+            r = subprocess.run(cmd, capture_output=True, text=True)
+            m = re.search(r"^logs: (.+)$", r.stdout, re.M)
+            print("\n".join(l for l in r.stdout.splitlines() if l.startswith(("result:", "last step:", "free memory", "guest threads"))))
+            if not m:
+                print(r.stdout[-2000:], r.stderr[-2000:])
+                sys.exit("no log folder: the NRO did not start")
+            run = Path(m.group(1).strip())
+            print(f"run: {run}")
+            log = (run / "stdout.log").read_bytes().decode("utf-8", "replace")
+            if re.search(r"^\[LEVEL\] ", log, re.M):   # reached a level: a real result, good or bad
+                break
+            if attempt < args.boot_retries:
+                print(f"the run ended before the first level (emulator boot failure): running again ({attempt + 1} of "
+                      f"{args.boot_retries})")
 
     cur = summarize(run)
     base = None
     if args.baseline:
-        bp = BASELINES / f"{args.route}-{args.baseline}.json"
+        bp = BASELINES / f"{args.route}{'-cold' if args.cold else ''}-{args.baseline}.json"
         if not bp.exists():
             sys.exit(f"no baseline {bp} (make one with --save-baseline {args.baseline})")
         base = json.loads(bp.read_text())
     ok, moved = report(cur, base, args.noise)
-    if args.save_baseline:
+    if args.save_baseline and cur["result"] != "done":
+        print("not saved as a baseline: the run did not finish")
+    elif args.save_baseline:
         BASELINES.mkdir(parents=True, exist_ok=True)
-        bp = BASELINES / f"{args.route}-{args.save_baseline}.json"
+        bp = BASELINES / f"{args.route}{'-cold' if args.cold else ''}-{args.save_baseline}.json"
         bp.write_text(json.dumps(cur, indent=1))
         print(f"baseline saved: {bp}")
     # OK: the build played the route the same way. Work changes are reported, not failed: an optimization should move them.

@@ -50,6 +50,8 @@ About 1-2 % of a session, in the heaviest combat. Run 107 measured 2.6 s of sile
 A buffer object reaches its final deletion with a null `device`, during a command flush. It has not been seen in the
 recent sessions, including a 93-minute one, but its cause is not fixed. A freed buffer would look the same, because
 rpmalloc stores its free-list link at offset 0. See [reviews/BO_OWNERSHIP_REVIEW.md](reviews/BO_OWNERSHIP_REVIEW.md).
+On 18 November 2026 it happened once in the emulator (Ryubing), in the hub, with log114: render thread,
+`arena_fence` -> `nvc0_flush` -> `nouveau_bo_del` -> `nvAddressSpaceUnmap` at address 0. So it can be chased there.
 
 ## A block of binary bytes in `stdout.log`
 

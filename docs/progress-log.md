@@ -4546,3 +4546,52 @@ menus keep the normal rate.
 
 **Next:** test changes in the emulator first (same game, work), then measure speed on the console. Still open: the
 dock `[CHAIN]` run; the VdSwap walk (about 9 ms per frame in handheld) is a lead.
+
+## Log 114: shader translation off the guest thread (`LSWTCS_GLXLATEASYNC`), tested in the emulator
+
+**Why:** a player's first session translates every new shader on the thread that prepares draws. In runs 111-113 the
+hub's first frame met 46 new shaders and took 822-886 ms in `prepare`; in run 116's first session the translations
+took 3.8 s in all. SPIR-V generation is about 15 % of a translation; SPIRV-Cross and the GLSL clean-up are the rest.
+Skipping draws while a shader is not ready is not an option: since run 16 a frame waits for its programs, because a
+partly drawn frame showed garbage.
+
+**Change (`gl_bridge.cc`, `gl_backend.cpp`):**
+- Xenia's SPIR-V translation stays where it was: it sets the shader's bindings, which the rest of the draw's
+  preparation reads.
+- With `LSWTCS_GLXLATEASYNC=1`, SPIRV-Cross, the GLSL clean-up, the texture units and the cache record go to a queue.
+  Nothing reads them before the render thread replays the frame.
+- A worker runs the queue on core 2 at 0x2D, beside the program compiler. Core 3 is not used: threads there can go
+  unrun for seconds (log102), and the frame waits for these.
+- Before each replay the render thread waits until every queued translation is done, and runs queued ones itself
+  meanwhile. `[XLATEWAIT]` logs each wait.
+- The 8 saved translations checked at boot stay on the preparing thread. Off by default until the console measures it.
+- The synchronous path is the same code (`xlate_cross`) run in place.
+
+**Emulator, a first session (`emu_test.py --cold`, quick route, empty `glprogs2` and `mesacache`):**
+
+| | Async off (2 runs) | Async on (2 runs) |
+| --- | --- | --- |
+| Same game (hub 796 frames) | yes | yes |
+| Translations | 148, 152 on the preparing thread | 151, 146 off it; the render thread waited 5.0 s, 4.7 s for them |
+| Play frames over 100 ms (PC) | 50, 44 (54, 55 s) | 47, 39 (58, 52 s) |
+| Frames held for programs (PC) | 52, 55 s | 54, 50 s |
+
+In the emulator the emulated Mesa compiles dominate the held time, so the gain does not show there. On the console the
+translation was the larger part of the hub's burst frame. With caches warm and async off, log114 replayed the quick
+route as log113 did: same game, work within 3 %.
+
+**Also learned:**
+- `[WORK]` is not comparable between cold runs. Two cold runs of one build differed by up to 24 % in hub pixel-program
+  bytes, because frames held for seconds shift the replay windows. Work is compared in warm runs only.
+- The emulator sometimes fails at boot, before the first level: an exit at the GL start-up, or every guest thread
+  waiting for its turn. This happened with log112-113 too, 5 of about 30 runs today. `emu_test.py` now runs again in
+  that case (`--boot-retries`, default 2).
+- One emulator run ended in the known GPU-driver crash (`known-issues.md`, a buffer with no device): render thread,
+  `arena_fence` -> `nvc0_flush` -> `nouveau_bo_del` -> `nvAddressSpaceUnmap` at address 0, in the hub. So the
+  emulator can reproduce it.
+
+**Build:** `0.0.99-log114` (`build-nvpgo`), NRO `5a9f9ec9…`, ELF kept privately. Not on the console yet.
+
+**Console test, with the other changes:** a first session simulated without deleting anything:
+`LSWTCS_GLXLATE=0`, `LSWTCS_GLPROGLIST=0` and `MESA_GLSL_CACHE_DISABLE=true` (no cache read or written). Compare the
+hub's first-frame burst with `LSWTCS_GLXLATEASYNC` off and on.

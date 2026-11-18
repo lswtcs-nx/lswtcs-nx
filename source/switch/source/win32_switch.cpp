@@ -773,6 +773,7 @@ extern "C" void lsw_log_async_drain();   // log_async.cpp
 // step and the result ("done" or "failed"); after either, the pad is the player's again.
 extern "C" void lsw_level_name(char* out, size_t capacity);   // native_crt.cpp
 extern "C" uint64_t lsw_load_episodes_done();                 // kernel_stubs.cpp ([LOADEP])
+extern "C" uint64_t lsw_guest_frames();                       // kernel_stubs.cpp: VdSwap calls (log113)
 LswInputScript g_script;
 bool g_script_on = false;
 void script_init() {
@@ -820,9 +821,10 @@ void record_poll(const XiState& st) {
     last = st;
     last_light = light;
     snprintf(last_level, sizeof last_level, "%s", level);
-    printf("[PADREC] %llu ms buttons 0x%04X lt %d rt %d l %d %d r %d %d %s level %s\n",
+    printf("[PADREC] %llu ms buttons 0x%04X lt %d rt %d l %d %d r %d %d %s level %s frame %llu\n",
            (unsigned long long)(armTicksToNs(armGetSystemTick()) / 1000000ull), st.buttons, st.lt > 127, st.rt > 127,
-           q(st.lx), q(st.ly), q(st.rx), q(st.ry), light ? "light" : "play", level[0] ? level : "?");
+           q(st.lx), q(st.ly), q(st.rx), q(st.ry), light ? "light" : "play", level[0] ? level : "?",
+           (unsigned long long)lsw_guest_frames());
 }
 
 void script_poll(XiState& st) {
@@ -836,6 +838,7 @@ void script_poll(XiState& st) {
     lsw_level_name(level, sizeof level);
     w.level = level;
     w.loads = lsw_load_episodes_done();
+    w.frame = lsw_guest_frames();
     LswPadOut pad{};
     pad.buttons = st.buttons; pad.lt = st.lt; pad.rt = st.rt; pad.lx = st.lx; pad.ly = st.ly; pad.rx = st.rx; pad.ry = st.ry;
     LswScriptActions act;

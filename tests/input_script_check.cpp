@@ -175,6 +175,25 @@ int main(int argc, char** argv) {
         }
         CHECK(s2.failed(), "waitloads did not time out");
     }
+    {   // Frame-exact steps: pad changes land on guest frames counted from frameset, whatever the poll timing.
+        LswInputScript s;
+        CHECK(s.load("frameset\npad -\nwaitframe 5\npad A+LT\nwaitframe 8\npad -\nstick L 0.5 0\nwaitframe 12\ndone\n"),
+              "load: %s", s.error().c_str());
+        std::vector<std::string> log;
+        int first_a = -1, last_a = -1;
+        uint64_t frame = 100;
+        for (int i = 0; i < 200 && !s.finished(); ++i) {
+            if (i % 3 != 2) ++frame;   // polls and frames do not line up: 2 frames per 3 polls
+            LswScriptWorld w; w.now_ms = 1000 + uint64_t(i) * 11; w.frame = frame;
+            LswPadOut pad; LswScriptActions act;
+            s.poll(w, &pad, &act, &log);
+            if ((pad.buttons & 0x1000) && pad.lt == 255) { if (first_a < 0) first_a = int(frame); last_a = int(frame); }
+        }
+        CHECK(s.finished() && !s.failed(), "frame script did not finish");
+        CHECK(first_a == 101 + 5 && last_a == 101 + 7, "A held on frames %d..%d, want 106..108", first_a, last_a);
+        LswInputScript s2;
+        CHECK(!s2.load("pad Q\n") && !s2.load("waitframe\n") && !s2.load("frameset 3\n"), "bad frame steps accepted");
+    }
     {   // repeat 0 skips its body; combined buttons and triggers.
         Run r;
         CHECK(r.go("press A+B+LT 50\nrepeat 0\npress X\nend\ndone\n"), "load");

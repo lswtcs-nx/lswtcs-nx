@@ -4456,3 +4456,30 @@ So the emulator now reaches the hub from the tester's save without anyone playin
     comes next), a different start position or camera, or randomness in the game.
 - **Next:** a deterministic replay. Record and replay by game frame number with a fixed 1/60 s frame time, so the same
   inputs reach the same frames. Randomness would remain if the game seeds it from the clock.
+
+## Log 113: frame-exact recording and replay, with a fixed frame time
+
+**Why:** the tester's emulator route, replayed by the clock, drifted in the hub and never entered `Gungan_A` (runs
+14-16). Each of hundreds of time-based stick changes landed on whichever frame came next.
+
+**Change (all off unless set):**
+- `LSWTCS_FIXEDDT=1` (`main.cpp`, the frame-timer wrapper of `sub_82506A38`): the game's frame time is exactly
+  1/60 s every frame, so its simulation advances the same per frame however long the frame really took. It changes
+  game speed when frames run long, so it is for tests only. `[FIXEDDT]` says when it is on.
+- `[PADREC]` lines carry the guest frame (VdSwap count, `lsw_guest_frames`).
+- New script steps: `frameset` (frame 0 is now), `waitframe K`, `pad BUTTONS|-` (buttons held until the next
+  `pad`). `[SCRIPT]` step lines also give the frame.
+- `tools/padrec_to_script.py --frames [--from-level TEXT]` writes a frame script, resetting frame 0 at every switch
+  between light and play frames, so a load of another length shifts nothing after it.
+- `tools/emu_run.py --fixed-dt` sets `LSWTCS_FIXEDDT=1`; with `--record` the result is a frame script.
+- `tests/input_script_check.py` checks frame steps with polls and frames out of step: PASS.
+
+**Emulator check:** `emu_to_hub.txt` with `--fixed-dt` reached the hub in 87 s. Game frame time 16.7 ms in all 221
+hub play frames (real time p50 20.2 ms); `[PADREC] ... frame 3003`.
+- One attempt before that ended with the emulator process dying on an illegal instruction (0xC000001D) at its second
+  frame. Two boots with and without `--fixed-dt` and the rerun were fine, so it is counted as emulator flakiness,
+  not shown.
+
+**Build:** `0.0.99-log113` (`build-nvpgo`), NRO `690a2a7e…`, ELF kept privately; `validate_tcs360_switch.py` passed.
+
+**Next:** the tester records the route again with `--fixed-dt`; it replays from the hub on by frame.

@@ -630,6 +630,7 @@ static std::atomic<uint32_t> g_load_mode{0};
 static std::atomic<uint32_t> g_load_swap{0};   // VdSwap count, for the reports
 static std::atomic<uint64_t> g_load_eps_done{0};   // log111: load episodes reported, for the input script's waitloads
 extern "C" uint64_t lsw_load_episodes_done() { return g_load_eps_done.load(std::memory_order_relaxed); }
+extern "C" uint64_t lsw_guest_frames() { return g_load_swap.load(std::memory_order_relaxed); }   // log113: VdSwap count, for frame-exact input
 extern "C" void lsw_boot_mark(const char* what);   // main.cpp: [BOOT] (log67)
 extern "C" void lsw_level_name(char* out, size_t capacity);   // native_crt.cpp
 extern std::atomic<uint64_t> g_file_bytes_read;   // below: bytes the game read, per call

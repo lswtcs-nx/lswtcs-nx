@@ -412,11 +412,25 @@ static void fnlog_call(uint32_t addr, uint64_t& calls, int& on, PPCFunc* imp, PP
     if (log) dbg_ram("[FNLOG]   t=%llums sub_%08X #%llu returned r3=%08X\n", (unsigned long long)GetTickCount64(), addr,
                      (unsigned long long)n, ctx.r3.u32);
 }
+// log113 (LSWTCS_FIXEDDT=1, tests only): the frame timer sub_82506A38 returns exactly 1/60 s every frame, so the game's
+// simulation advances the same per frame however long the frame really took, and input replayed by frame number
+// (tools/padrec_to_script.py --frames) meets the same game state. It changes game speed when frames run long: record
+// and replay with it on, never in play.
+static bool lsw_fixed_dt_on() {
+    static const bool on = [] {
+        const char* e = getenv("LSWTCS_FIXEDDT");
+        const bool v = e && e[0] == '1';
+        if (v) { printf("[FIXEDDT] the game's frame time is fixed at 1/60 s (tests only)\n"); fflush(stdout); }
+        return v;
+    }();
+    return on;
+}
 #define FNLOG_DEF(A)                                                                \
     PPC_FUNC(sub_##A) {                                                             \
         static uint64_t calls = 0;                                                  \
         static int on = -1;                                                         \
         fnlog_call(0x##A##u, calls, on, __imp__sub_##A, ctx, base);                  \
+        if (0x##A##u == 0x82506A38u && lsw_fixed_dt_on()) ctx.f1.f64 = 1.0 / 60.0;   \
     }
 FNLOG_LIST(FNLOG_DEF)
 

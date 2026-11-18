@@ -13,6 +13,10 @@
 //   hold BUTTONS MS                  hold for MS, then let go (no pause after)
 //   stick L|R X Y                    set a stick, X and Y in -1..1; it stays until set again ("stick L 0 0" centres it)
 //   repeat N ... end                 run the steps between N times (nests)
+// Frame-exact steps (log113; tools/padrec_to_script.py --frames writes them), counted in guest frames (VdSwap calls):
+//   frameset                         the current guest frame becomes frame 0 for waitframe
+//   waitframe K [TIMEOUT_S]          until guest frame 0 + K
+//   pad BUTTONS | -                  hold these buttons from now on (until the next pad step); "-" lets all go
 //   mark | capture | capturefull     the tester's mark ([MARK]), a light or full capture, as the pad combos do
 //   log TEXT                         a [SCRIPT] line in stdout.log
 //   done                             end: "[SCRIPT] done", the pad goes back to the player
@@ -37,6 +41,7 @@ struct LswScriptWorld {
     bool light = false;        // the frames are light (gl_backend.cpp's g_frame_light)
     const char* level = "";    // native_crt.cpp's level path, "" before the first level
     uint64_t loads = 0;        // load episodes ended since boot (kernel_stubs.cpp's [LOADEP])
+    uint64_t frame = 0;        // guest frames (VdSwap calls) since boot
 };
 
 // What a poll asks of the runtime besides the pad.
@@ -58,7 +63,8 @@ public:
     void poll(const LswScriptWorld& w, LswPadOut* pad, LswScriptActions* act, std::vector<std::string>* log);
     size_t steps() const { return steps_.size(); }
 
-    enum class Op { Wait, WaitLevel, WaitPlay, WaitLight, WaitLoads, Press, Hold, Stick, Repeat, End, Mark, Capture, CaptureFull, Log, Done };
+    enum class Op { Wait, WaitLevel, WaitPlay, WaitLight, WaitLoads, Press, Hold, Stick, Repeat, End, Mark, Capture, CaptureFull, Log, Done,
+                    FrameSet, WaitFrame, Pad };
     struct Step {
         Op op;
         int line = 0;
@@ -86,5 +92,6 @@ private:
     bool cond_seen_ = false;
     int polls_in_phase_ = 0;
     std::vector<int> repeat_left_;   // per open repeat, innermost last
+    uint64_t frame_base_ = 0;        // frameset
     LswPadOut held_;                 // sticks persist; buttons only during press/hold
 };

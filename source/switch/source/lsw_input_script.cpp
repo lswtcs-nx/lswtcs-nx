@@ -67,6 +67,7 @@ const char* op_name(LswInputScript::Op op) {
     case O::WaitLight: return "waitlight"; case O::WaitLoads: return "waitloads"; case O::Press: return "press"; case O::Hold: return "hold"; case O::Stick: return "stick";
     case O::Repeat: return "repeat"; case O::End: return "end"; case O::Mark: return "mark"; case O::Capture: return "capture";
     case O::CaptureFull: return "capturefull"; case O::Log: return "log"; case O::Done: return "done";
+    case O::FrameSet: return "frameset"; case O::WaitFrame: return "waitframe"; case O::Pad: return "pad";
     }
     return "?";
 }
@@ -116,6 +117,15 @@ bool LswInputScript::load(const std::string& text) {
         } else if (cmd == "WAITLOADS") {
             st.op = Op::WaitLoads;
             if (w.size() < 2 || !parse_u64(w[1], &st.ms) || !arg_timeout(2)) return err("waitloads N [TIMEOUT_S]");
+        } else if (cmd == "FRAMESET") {
+            st.op = Op::FrameSet;
+            if (w.size() != 1) return err("frameset takes nothing");
+        } else if (cmd == "WAITFRAME") {
+            st.op = Op::WaitFrame;
+            if (w.size() < 2 || !parse_u64(w[1], &st.ms) || !arg_timeout(2)) return err("waitframe K [TIMEOUT_S]");
+        } else if (cmd == "PAD") {
+            st.op = Op::Pad;
+            if (w.size() != 2 || (w[1] != "-" && !parse_buttons(w[1], &st))) return err("pad BUTTONS | -");
         } else if (cmd == "PRESS") {
             st.op = Op::Press;
             st.ms = kDefaultPressMs;
@@ -181,10 +191,11 @@ void LswInputScript::begin_step(const LswScriptWorld& w, std::vector<std::string
     cond_seen_ = false;
     polls_in_phase_ = 0;
     if (st.op == Op::Repeat || st.op == Op::End) return;   // silent: the steps inside are logged
+    if (st.op == Op::Pad || st.op == Op::Stick || st.op == Op::WaitFrame) return;   // frame scripts have thousands
     char b[512];
-    snprintf(b, sizeof b, "[SCRIPT] line %d %s%s%s at %.1f s (level %s, %s frames, %llu loads)", st.line, op_name(st.op),
+    snprintf(b, sizeof b, "[SCRIPT] line %d %s%s%s at %.1f s (level %s, %s frames, %llu loads, frame %llu)", st.line, op_name(st.op),
              st.text.empty() ? "" : " ", st.text.c_str(), (w.now_ms - t_begin_) / 1000.0, w.level && *w.level ? w.level : "?",
-             w.light ? "light" : "play", (unsigned long long)w.loads);
+             w.light ? "light" : "play", (unsigned long long)w.loads, (unsigned long long)w.frame);
     log->push_back(b);
 }
 
@@ -261,6 +272,23 @@ void LswInputScript::poll(const LswScriptWorld& w, LswPadOut* pad, LswScriptActi
                 phase_ = Phase::Up; t_phase_ = w.now_ms; polls_in_phase_ = 0;
             }
             if (++polls_in_phase_ <= kMinPolls || w.now_ms - t_phase_ < st.ms) wait = true;
+            break;
+        case Op::FrameSet:
+            frame_base_ = w.frame;
+            break;
+        case Op::WaitFrame:   // st.ms holds K
+            if (w.frame >= frame_base_ + st.ms) break;
+            if (w.now_ms - t_step_ >= st.timeout_ms) {
+                fail(w, "line " + std::to_string(st.line) + ": frame " + std::to_string(w.frame - frame_base_) + " of " +
+                            std::to_string(st.ms), log);
+                return;
+            }
+            wait = true;
+            break;
+        case Op::Pad:
+            held_.buttons = st.buttons;
+            held_.lt = st.lt ? 255 : 0;
+            held_.rt = st.rt ? 255 : 0;
             break;
         case Op::Stick:
             if (st.right_stick) { held_.rx = st.x; held_.ry = st.y; } else { held_.lx = st.x; held_.ly = st.y; }

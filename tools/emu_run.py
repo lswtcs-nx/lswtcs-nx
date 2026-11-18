@@ -117,6 +117,9 @@ def main():
                     help="start from this save every run: empty the EMULATOR's save of the port (portable/bis/user/save/"
                          "<id>/0 and 1, beside the SD folder) and import FOLDER (under sdmc:/lswtcs/save_export/) at boot. "
                          "Only the emulator's own files are touched")
+    ap.add_argument("--fixed-dt", action="store_true",
+                    help="LSWTCS_FIXEDDT=1: the game's frame time fixed at 1/60 s, for frame-exact recording and replay "
+                         "(a --record then writes a frame script, padrec_to_script.py --frames)")
     ap.add_argument("--save-id", default="0000000000000001", help="the emulator's save folder of the port (Ryubing: "
                                                                    "0000000000000001, emulator run 13)")
     args = ap.parse_args()
@@ -141,6 +144,8 @@ def main():
     if not nro.exists():
         sys.exit(f"no NRO {nro}")
 
+    if args.fixed_dt:
+        args.env.append("LSWTCS_FIXEDDT=1")
     if args.fresh_save:
         if not (game / "save_export" / args.fresh_save).is_dir():
             sys.exit(f"no save folder {game / 'save_export' / args.fresh_save}")
@@ -293,7 +298,8 @@ def main():
         print("no log folder appeared: the NRO did not start (check the emulator's own log)")
     if args.record and log_dir is not None:
         out_script = ROOT / "tests/scripts" / f"{args.record}.txt"
-        r = subprocess.run([sys.executable, str(ROOT / "tools/padrec_to_script.py"), str(dest / "stdout.log"), "-o", str(out_script)])
+        conv = [sys.executable, str(ROOT / "tools/padrec_to_script.py"), str(dest / "stdout.log"), "-o", str(out_script)]
+        r = subprocess.run(conv + (["--frames"] if args.fixed_dt else []))
         if r.returncode == 0:
             print(f"script: {out_script} (read it, trim the start, then replay it with --script {out_script.name})")
         return r.returncode

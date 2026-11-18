@@ -84,6 +84,32 @@ static void remove_single_pass_main_loop(std::string& glsl) {
   if (close == std::string::npos) return;
   const std::string last_break = "        break;\n";
   if (close + 1 < last_break.size() || glsl.compare(close + 1 - last_break.size(), last_break.size(), last_break) != 0) return;
+  // log118 (LSWTCS_GLLOOPEND=1): Xenia ends the shader's last exec block with its own break ("exece"), so with forward jumps
+  // (xe_var_skip) the body ends `if (xe_var_skip == 0) { ...; break; } break;` and the loop has two breaks: it stayed a loop
+  // (run 119: the heaviest full-screen pass, 2.1 ms a frame, and one other pixel shader). A break that is the last statement
+  // of an if / else block placed right before the loop's final break leaves the loop exactly as that final break would, so it
+  // is dropped. Not when the block is a loop or a switch, where the break would mean something else.
+  static const bool loop_end = [] { const char* e = getenv("LSWTCS_GLLOOPEND"); return e && e[0] == '1'; }();
+  if (loop_end) {
+    const std::string tail = "\n            break;\n        }\n        break;\n    }\n";
+    const size_t tail_end = close + 1 + 6;   // after "    }\n"
+    if (tail_end >= tail.size() && glsl.compare(tail_end - tail.size(), tail.size(), tail) == 0) {
+      const size_t tail_start = tail_end - tail.size();
+      const size_t opener = glsl.rfind("\n        {\n", tail_start);
+      const size_t stmt = opener == std::string::npos || opener == 0 ? std::string::npos : glsl.rfind('\n', opener - 1);
+      if (stmt != std::string::npos && stmt >= body - 1) {
+        const std::string line = glsl.substr(stmt + 1, opener - stmt - 1);
+        if (line.compare(0, 12, "        if (") == 0 || line == "        else") {
+          // Kept only if the loop then goes: another break of the loop would leave the GLSL changed for nothing.
+          std::string trial = glsl;
+          trial.erase(tail_start + 1, 19);   // "            break;\n"
+          remove_single_pass_main_loop(trial);
+          if (trial.find(head, main_pos) == std::string::npos) glsl.swap(trial);
+          return;
+        }
+      }
+    }
+  }
   // Every break / continue that belongs to this loop (not to a nested loop or switch) must be the last one.
   std::vector<char> scopes;   // per open brace: 'l' loop, 's' switch, 'b' other block
   char pending = 'b';

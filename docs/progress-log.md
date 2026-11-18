@@ -4717,3 +4717,30 @@ not raise the frame rate there; docked, it would.
 
 - The full-screen post pass keeps the translator's `for (;;)` with a skip flag around its body. Making such passes
   cheaper means changing how the translator emits them, and only the console can measure it.
+
+## Log 118: the last exec block's break no longer keeps the main loop (`LSWTCS_GLLOOPEND`, off by default)
+
+**Why:** run 119's costliest full-screen pass (`EB7221B1AAA62B09`, 2.1 ms per heavy frame) is still wrapped in the
+translator's `for (;;)`. With forward jumps, Xenia ends the last exec block with its own break, so the body ends
+`if (xe_var_skip == 0) { ...; break; } break;`. The loop then has two breaks and `remove_single_pass_main_loop` left
+it alone. Of the 341 program sources the quick route saves, 10 keep a main loop: 2 pixel and 1 vertex shader for
+this reason.
+
+**Change (`lsw_spirv_glsl.cc`):** with `LSWTCS_GLLOOPEND=1`, a break that is the last statement of an `if` / `else`
+block placed right before the loop's final break is dropped, and the loop goes as in the plain case. Leaving that
+block through its break and leaving it at its end both reach the final break, so the shader does the same. Not when
+the block is a loop or a switch, where the break means something else. The change is kept only if the loop then
+goes. The setting is part of the translation cache's identity.
+
+**Checks:**
+- `python tests/glsl_loop_check.py [--glprogs DIR]`: synthetic cases (plain, exece, exece in `else`, an inner loop and
+  an inner switch keep their own break, another break keeps the loop) and, with `--glprogs`, the 341 real sources.
+  With the setting, 3 lose the loop and only the removed lines differ; without it, nothing changes. PASS.
+- Emulator, quick route, warm, `LSWTCS_GLLOOPEND=1`: same game, work within 1 % in `Gungan_B` (vertices -5.9 %, within
+  noise), no compile or link failure. The heavy pass was compiled and drawn without its loop.
+
+**Not measured:** the GPU time. The emulator cannot time the X1's GPU. Without the loop, Mesa can treat the forward-jump
+blocks as plain code, but by how much is open. Off by default until a console run compares it (`[GLGPU]` medians of
+`EB7221B1AAA62B09`).
+
+**Build:** `0.0.99-log118` (`build-nvpgo`), NRO `eb8dd6d8…`, ELF kept privately; on the SD folder (the setting is off).

@@ -44,7 +44,8 @@ constexpr size_t kMaxFile = 64u << 20;           // beyond this the file is star
 // Settings read by the translator, SPIRV-Cross's clean-up and the fetch folding (gl_bridge.cc bridge() and get_glsl,
 // spirv_shader_translator_fetch.cc, lsw_glsl_fold.h). A new setting that changes the GLSL belongs here.
 const char* const kSettings[] = {"LSWTCS_GLVIEWSWZ", "LSWTCS_GLFMZ", "LSWTCS_GLTEXBIAS", "LSWTCS_GLFWDCF",
-                                 "LSWTCS_GLFWDLOOPS", "LSWTCS_GLPSPRECISE", "LSWTCS_GLFETCHFOLD", "LSWTCS_VFETCHCLAMP"};
+                                 "LSWTCS_GLFWDLOOPS", "LSWTCS_GLPSPRECISE", "LSWTCS_GLFETCHFOLD", "LSWTCS_VFETCHCLAMP",
+                                 "LSWTCS_GLLOOPEND"};
 
 struct FileHead { char magic[8]; uint64_t version; };
 struct RecordHead { uint32_t magic, size; uint64_t check; };   // check: XXH3 of the payload

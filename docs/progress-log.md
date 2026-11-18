@@ -4876,3 +4876,21 @@ compiled every changed pixel shader again (43 s of long frames), as expected.
   `kernel_stubs.cpp` (different NRO, identity step not rerun) then loaded 152 translations, 8 checked the same, 5
   translated, same game. Not run on the console.
 - **Build:** `0.0.99-log122` (build-nvpgo), NRO `367c7eb4…`.
+
+## log123: resolve hand-over (LSWTCS_GLHANDOVER=1, off by default)
+
+- **Why:** run 120's heavy handheld frames spent 4.7 ms of 29.3 ms of GPU time in resolve copies.
+- **Change:** a colour resolve that copies a whole render target, from the origin into the origin of a destination as wide
+  as the target, and then clears it, hands the target's storage to the destination instead of copying
+  (`resolve_hand_over`, `source/switch/source/gl_rt.inc`). The target takes the destination's previous storage, so the
+  two storages alternate. Targets are 2048 rows tall, so the destination samples through a texture view that sees only
+  its rows: `source/switch/mesa/mesa_handover_edits.py` adds a sampling height per texture object, used as the TIC
+  height. No shader changes.
+- **Emulator:** about 14 hand-overs per 1000 replays logged as expected (the two 1280x704 world copies and a 640x352
+  one); copies per replay 12 -> 8, copied pixels 7.2 -> 4.3 Mpx; same game. Pictures cannot be judged there: Ryubing
+  returns noise for resolved-texture dumps even for textures it presents correctly, and its images do not match the
+  console's. The world looked dark in the emulator with the hand-over on, so the visual result is open.
+- **Console test needed:** A/B with `LSWTCS_GLHANDOVER` 0 and 1; check the world, menus and post effects, and compare
+  `[GLGPU]` resolves and GPU per heavy frame. DIAG switches: `LSWTCS_GLHANDOVERFULL=1` (view sees every row),
+  `LSWTCS_GLHANDOVERNOVIEW=1` (the storage itself).
+- **Build:** `0.0.99-log123` (build-nvpgo, Mesa rebuilt with the new edit).

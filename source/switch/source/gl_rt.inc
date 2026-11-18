@@ -309,8 +309,95 @@ struct Resolved {
     bool direct = false;   // stitched region: the last resolve went straight into the composite
     bool stale = false;    // and t does not hold it yet (stitch_copy_back)
     uint32_t compose_count = 0;   // composite only: how often it has been built, see stitch_learn
+    bool handed = false;   // log123: t is a view of `storage`, a render target's storage handed over (resolve_hand_over)
+    HostTex storage;
 };
 std::unordered_map<uint32_t, Resolved> g_resolved;
+
+// ---- resolve hand-over (log123, LSWTCS_GLHANDOVER=1, default off until the console measures it) -------------------------------
+// A colour resolve that copies a whole render target from the origin into the origin of a destination exactly as wide, and then
+// clears the target, leaves nothing in the target worth keeping. Instead of the copy (run 120: resolves 4.7 ms of a 29.3 ms heavy
+// handheld GPU frame; run 56's bench: 1.9 ms for these copies), the destination takes the target's storage and the target takes a
+// spare one, which its clear then fills as before. Targets are kRtH (2048) rows and destinations 704, so the destination samples the
+// storage through a texture view that sees only its rows (lsw_gl_texture_sample_height, mesa_handover_edits.py): no shader changes.
+// The next hand-over into the same destination gives the target its previous storage back, so each pair ping-pongs two storages.
+extern "C" void lsw_gl_texture_sample_height(GLuint id, GLuint rows);
+bool handover_on() { static const bool on = env_on("LSWTCS_GLHANDOVER", false); return on; }
+std::vector<HostTex> g_spare_storage;   // storages no target or destination holds
+std::map<std::pair<GLuint, uint32_t>, GLuint> g_storage_views;   // (storage, rows) -> view
+uint64_t g_handovers = 0;
+extern uint64_t g_src_epoch;   // below
+struct SampleHeightJob { GLuint tex, rows; };
+void sample_height_job(void* p) {
+    auto* j = static_cast<SampleHeightJob*>(p);
+    lsw_gl_texture_sample_height(j->tex, j->rows);
+    delete j;
+}
+GLuint storage_view(const HostTex& s, uint32_t rows) {
+    GLuint& v = g_storage_views[{s.tex, rows}];
+    if (!v) {
+        ++g_gl_epoch;
+        glGenTextures(1, &v);
+        glTextureView(v, GL_TEXTURE_2D_ARRAY, s.tex, rt_internal(s.fmt), 0, 1, 0, 1);
+        glBindTexture(GL_TEXTURE_2D_ARRAY, v);
+        glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        static const bool full = env_on("LSWTCS_GLHANDOVERFULL", false);   // DIAG: the view sees every row (wrong scale, for tests)
+        if (!full) lsw_glthread_call(sample_height_job, new SampleHeightJob{v, rows});   // in order after the view, on Mesa's thread
+        printf("[HANDOVER] view %u of storage %u: %ux%u of %u rows, fmt %u\n", v, s.tex, s.w, rows, s.h, s.fmt);
+        fflush(stdout);
+    }
+    return v;
+}
+// Frees a destination's texture, or gives its handed-over storage back to the spares.
+void resolved_free_tex(Resolved& r) {
+    forget_fbos_of(r.t.tex);
+    if (r.handed) {
+        g_spare_storage.push_back(r.storage);
+        r.storage = HostTex{};
+        r.handed = false;
+        r.t = HostTex{};
+        return;
+    }
+    host_tex_free(r.t);
+}
+HostTex spare_storage(uint32_t w, uint32_t fmt) {
+    for (size_t i = 0; i < g_spare_storage.size(); ++i)
+        if (g_spare_storage[i].w == w && g_spare_storage[i].h == kRtH && g_spare_storage[i].fmt == fmt) {
+            HostTex t = g_spare_storage[i];
+            g_spare_storage.erase(g_spare_storage.begin() + ptrdiff_t(i));
+            return t;
+        }
+    if (g_rt_pool) rt_compress_set(g_rt_pool);
+    HostTex t = host_tex_create(w, kRtH, fmt);
+    if (g_rt_pool) rt_compress_set(0);
+    printf("[HANDOVER] new storage %u: %ux%u fmt %u (%llu MB of targets)\n", t.tex, w, kRtH, fmt, (unsigned long long)(g_rt_bytes >> 20));
+    fflush(stdout);
+    return t;
+}
+// Called by do_resolve for a copy that qualifies (see there); the clear that follows goes to the target's new storage.
+void resolve_hand_over(Rt& src, Resolved& dst, uint32_t dest, uint32_t rows) {
+    HostTex spare;
+    if (dst.handed) {
+        spare = dst.storage;   // its previous contents are replaced by this resolve
+        forget_fbos_of(dst.t.tex);
+    } else {
+        resolved_free_tex(dst);
+        spare = spare_storage(src.t.w, src.t.fmt);
+    }
+    const HostTex old = src.t;
+    src.t = spare;
+    dst.storage = old;
+    dst.handed = true;
+    static const bool noview = env_on("LSWTCS_GLHANDOVERNOVIEW", false);   // DIAG: the storage itself (wrong scale, for tests)
+    dst.t = HostTex{noview ? old.tex : storage_view(old, rows), old.w, rows, old.fmt};
+    ++g_src_epoch;
+    if (++g_handovers <= 12 || g_handovers % 3000 == 0) {
+        printf("[HANDOVER] %llu: 0x%08X takes storage %u (%ux%u), its target now %u\n", (unsigned long long)g_handovers, dest, old.tex, old.w,
+               rows, src.t.tex);
+        fflush(stdout);
+    }
+}
 
 // ---- stitched regions (state S of LSWTCS_ABSTATES) -----------------------------------------------------------------
 // Predicated tiling resolves each tile into its own part of one piece of guest memory, and texture_source then copies those parts
@@ -379,8 +466,7 @@ Resolved* resolved_get(uint32_t dest, uint32_t w, uint32_t h, uint32_t fmt, uint
     if (it != g_resolved.end()) {
         Resolved& r = it->second;
         if (r.t.tex && r.t.w >= w && r.t.h >= h && r.t.fmt == fmt) { r.tfmt = tfmt; return &r; }
-        forget_fbos_of(r.t.tex);
-        host_tex_free(r.t);
+        resolved_free_tex(r);
         g_resolved.erase(it);
         ++g_src_epoch;
     }
@@ -463,7 +549,23 @@ void do_resolve(const LswGpuDrawRec& r, bool copy = true, bool clears = true) {
                 // Swapping here turned the HUD (presented straight from the resolved front buffer) blue (2026-10-11).
                 const HostTex* composite = nullptr;
                 const uint32_t row = stitch_row(r.rs_dest, dfmt, r.rs_dest_x, r.rs_dest_y, w, h, composite);
+                // log123: hand the storage over instead of copying when the copy is the whole target, 1:1, from the origin into the
+                // origin of a destination exactly that size and format, and the target is cleared right after (in this call).
+                const bool hand = handover_on() && !composite && clears && r.rs_clear_color && !depth_src && mode == 0 && x0 == 0 &&
+                                  y0 == 0 && r.rs_dest_x == 0 && r.rs_dest_y == 0 && uint32_t(w) == dw && uint32_t(h) == dh &&
+                                  dw == src->t.w && dh < kRtH && dfmt == src->t.fmt && !dst->composite &&
+                                  !g_bench_copy_quarter;
+                if (handover_on() && !hand && r.rs_clear_color && !depth_src) {   // DIAG: why a cleared colour copy was not handed over
+                    static int n = 0;
+                    if (++n <= 40) {
+                        printf("[HANDOVER] no: 0x%08X rect %d,%d..%d,%d -> at %d,%d dst %ux%u (pitch %u h %u) src %ux%u fmt %u/%u mode %d "
+                               "clears %d composite %d swap %u\n", r.rs_dest, x0, y0, x1, y1, r.rs_dest_x, r.rs_dest_y, dw, dh, r.rs_dest_pitch,
+                               r.rs_dest_height, src->t.w, src->t.h, dfmt, src->t.fmt, mode, int(clears), int(composite != nullptr), r.rs_dest_swap);
+                        fflush(stdout);
+                    }
+                }
                 if (composite) blit(src->t, *composite, r.rs_dest_x, r.rs_dest_y + int(row), w, h, x0 - r.rs_dest_x, y0 - (r.rs_dest_y + int(row)), mode, int32_t(sx), int32_t(sy));
+                else if (hand) resolve_hand_over(*src, *dst, r.rs_dest, dh);
                 else blit(src->t, dst->t, r.rs_dest_x, r.rs_dest_y, w, h, x0 - r.rs_dest_x, y0 - r.rs_dest_y, mode, int32_t(sx), int32_t(sy));
                 dst->direct = dst->stale = composite != nullptr;
                 dst->swap = r.rs_dest_swap != 0;
@@ -542,8 +644,7 @@ bool texture_source(uint32_t base, uint32_t tfmt, uint32_t w, uint32_t h, const 
     const bool in_region = region != g_stitch_regions.end() && !g_stitch_suspended;
     if (ex != g_resolved.end() && !in_region) stitch_copy_back(base, ex->second);   // read through its own address
     if (ex != g_resolved.end() && ex->second.probe_bytes && guest_probe(base, ex->second.probe_bytes) != ex->second.probe) {
-        forget_fbos_of(ex->second.t.tex);   // stale: the CPU reused the memory
-        host_tex_free(ex->second.t);
+        resolved_free_tex(ex->second);   // stale: the CPU reused the memory
         g_resolved.erase(ex);
         ex = g_resolved.end();
         ++g_src_epoch;

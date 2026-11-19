@@ -19,8 +19,13 @@ correctly.
   - Speed (log129): the video now goes through FFmpeg's WMV3 decoder instead of the recompiled one, which ran at about
     a third of real time on the console (run 122: sound and picture drifted apart, and the end looked hung). In the
     emulator the trailer decodes in real time with no errors and the game returns to the title. Not yet seen on the
-    console. `LSWTCS_MOVIEFF=0` restores the game's decoder.
+    console. `LSWTCS_MOVIEFF=0` restores the game's decoder. On the console (run 123): 16 ms a frame, good picture.
+  - The black screen at the end (run 123): the scheduler gave the turn to the player's exited demux thread, which a
+    resume had put back in the rotation. Fixed in log130 (exited threads stay out; a stall watchdog). Not yet seen on
+    the console.
 - **Still open:**
+  - Tearing on the console (run 123). `LSWTCS_TEXSNAP=m` (log130, off by default) copies the textures at each
+    interrupt while a movie plays; on test.
   - In the emulator, when the title stays idle and the movie plays a second time, the game crashes: in the player's list
     of file blocks (`828454B0`, a bad node pointer; the same address run after run), or on the main thread in a texture
     unlock (`822A6FE0`, r13 + 256 reading picture bytes). The first also happened with the game's own decoder, late in
@@ -29,7 +34,7 @@ correctly.
     now shows about 19 of the trailer's 30 frames a second.
   - The skip cannot work while the main thread waits inside the player, because nothing polls the pad.
 
-Evidence: [progress-log.md](progress-log.md), "Run 85" to "Log 88", "log127", "Run 122" and "log129", and
+Evidence: [progress-log.md](progress-log.md), "Run 85" to "Log 88", "log127", "Run 122", "log129", "Run 123" and "log130", and
 [history/2026-11-01-handoff/ISSUES.md](history/2026-11-01-handoff/ISSUES.md), issue 3.
 
 ## Heavy scenes on handheld run at about 30 FPS

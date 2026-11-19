@@ -1094,9 +1094,13 @@ static bool sched_wake1() {
     static const bool on = [] { const char* e = getenv("LSWTCS_SCHEDWAKE1"); return e && e[0] == '1'; }();
     return on;
 }
+static std::atomic<uint64_t> g_sched_moves{0};   // log130: turn changes, for the stall watchdog
+static bool g_sched_waiting_flag[64] = {};   // log130: guarded by g_sched_mtx; set while a thread waits here for its turn
 static void sched_wait_turn(std::unique_lock<std::mutex>& lk, int id) {   // caller holds g_sched_mtx via lk
+    if (id >= 0 && id < 64) g_sched_waiting_flag[id] = true;
     if (sched_wake1()) g_sched_cv_id[id].wait(lk, [id] { return g_sched_turn == id; });
     else g_sched_cv.wait(lk, [id] { return g_sched_turn == id; });
+    if (id >= 0 && id < 64) g_sched_waiting_flag[id] = false;
 }
 static void sched_notify_all() { if (!sched_wake1()) g_sched_cv.notify_all(); }   // wake1: sched_turn_set notified
 // ── SCHEDPROF (LSWTCS_SCHEDPROF=1, diagnostic): wall time each scheduler id holds the turn, and
@@ -1149,6 +1153,7 @@ static void sched_turn_set(int n) {   // caller holds g_sched_mtx
             g_sp_lastdump = now; g_sp_switches = 0;
         }
     }
+    if (n != g_sched_turn) g_sched_moves.fetch_add(1, std::memory_order_relaxed);   // log130: the stall watchdog's clock
     g_sched_turn = n;
     if (sched_wake1() && n >= 0 && n < LSW_SCHED_MAX) g_sched_cv_id[n].notify_one();
 }
@@ -1288,8 +1293,68 @@ extern "C" uint64_t lsw_sched_waiting_mask() {
     for (int i = 0; i < n; ++i) if (g_sched_alive[i] && g_sched_runnable[i] && i != turn) m |= 1ull << i;
     return m;
 }
+// log130: scheduler stall watchdog (LSWTCS_SCHEDWATCH, default 1; 0 off). Run 123 (console, log129): when the title movie
+// ended, its three player threads exited and a fourth started, and every guest thread then waited for the turn for good
+// (no turn switch for 70 s; hwprof: all in sched_wait_turn or host waits). The watchdog notes when the turn has not
+// moved for 2 s and prints the scheduler's state once per stall. If the turn sits with nobody while a thread is ready,
+// or with a thread that is gone or off the rotation, it hands the turn on ([SCHEDWATCH] ... handed to N).
+static void sched_watch_start() {
+    static std::atomic<bool> started{false};
+    if (started.exchange(true)) return;
+    const char* e = getenv("LSWTCS_SCHEDWATCH");
+    if (e && e[0] == '0') return;
+    std::thread([] {
+        uint64_t last = g_sched_moves.load();
+        auto since = std::chrono::steady_clock::now();
+        bool told = false;
+        for (;;) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(250));
+            const uint64_t now_moves = g_sched_moves.load();
+            if (now_moves != last) { last = now_moves; since = std::chrono::steady_clock::now(); told = false; continue; }
+            if (std::chrono::steady_clock::now() - since < std::chrono::seconds(2)) continue;
+            std::unique_lock<std::mutex> lk(g_sched_mtx);
+            const int turn = g_sched_turn;
+            int ready = 0, waiting = 0;
+            for (int i = 0; i < g_sched_count && i < LSW_SCHED_MAX; ++i) {
+                if (g_sched_alive[i] && g_sched_runnable[i]) ++ready;
+                if (g_sched_waiting_flag[i]) ++waiting;
+            }
+            const bool holder_ok = turn >= 0 && turn < LSW_SCHED_MAX && g_sched_alive[turn] && g_sched_runnable[turn];
+            const bool stuck = (turn < 0 && ready > 0) || (turn >= 0 && !holder_ok) ||
+                               (holder_ok && g_sched_waiting_flag[turn]);   // the holder itself waits for the turn: a lost wake-up
+            if (!told) {
+                char b[1400];
+                int k = snprintf(b, sizeof b, "[SCHEDWATCH] no turn change for 2 s: turn %d (entry %08X)%s, urgent %d, %d ready, %d waiting |",
+                                 turn, turn >= 0 && turn < LSW_SCHED_MAX ? g_sp_entry[turn] : 0u, holder_ok ? "" : " not ready",
+                                 g_sched_urgent, ready, waiting);
+                for (int i = 0; i < g_sched_count && i < LSW_SCHED_MAX && k < 1300; ++i)
+                    if (g_sched_alive[i] || g_sched_waiting_flag[i])
+                        k += snprintf(b + k, sizeof b - k, " %d:%s%s%s", i, g_sched_alive[i] ? "a" : "-", g_sched_runnable[i] ? "r" : "-",
+                                      g_sched_waiting_flag[i] ? "w" : "-");
+                puts(b);
+                fflush(stdout);
+                told = true;
+            }
+            if (stuck) {
+                const int n = sched_next_locked(turn >= 0 ? turn : 0);
+                if (n >= 0 && n != turn) {
+                    sched_turn_set(n);
+                    g_sched_moves.fetch_add(1);
+                    g_sched_cv.notify_all();
+                    if (n < LSW_SCHED_MAX) g_sched_cv_id[n].notify_all();
+                    printf("[SCHEDWATCH] turn handed to %d (entry %08X)\n", n, n < LSW_SCHED_MAX ? g_sp_entry[n] : 0u);
+                    fflush(stdout);
+                } else if (holder_ok && g_sched_waiting_flag[turn]) {
+                    g_sched_cv.notify_all();
+                    g_sched_cv_id[turn].notify_all();
+                }
+            }
+        }
+    }).detach();
+}
 static void sched_register(int id) {
     if (!gil_on() || id < 0) return;
+    sched_watch_start();
     { static int sp = -1; if (sp < 0) { const char* e = getenv("LSWTCS_SAMPLEPROF"); sp = (e && (e[0] == '1' || e[0] == '2')) ? e[0] - '0' : 0;
                                          if (sp) std::thread(sampleprof_loop, sp).detach(); }
       if (sp && id < LSW_SCHED_MAX && !g_sp_thread[id])
@@ -1311,9 +1376,18 @@ static void sched_register(int id) {
 // hands the turn to a slot whose host thread hasn't reached the turn-wait yet, the system cooperatively
 // waits for it (deterministic outcome, only a brief real-time delay). (Switch: a create-barrier; real
 // cores still join in guest create order.) See [[switch-multithreading-constraint]].
+// log130: ids whose thread has returned. KeResumeThread / ResumeThread add the slot again, and the title movie's player
+// resumes its three threads after they have exited (run 123 and the emulator: the turn then went to the exited demux
+// thread 13 and every guest thread waited for good). Scheduler ids are never reused, so a gone id stays out.
+static bool g_sched_gone[LSW_SCHED_MAX] = {};   // guarded by g_sched_mtx
 static void sched_add_slot(int id) {
     if (!gil_on() || id < 0 || id >= LSW_SCHED_MAX) return;
     std::unique_lock<std::mutex> lk(g_sched_mtx);
+    if (g_sched_gone[id]) {
+        static int told = 0;
+        if (told++ < 8) { printf("[SCHED] slot %d (entry %08X) not added again: its thread has returned\n", id, g_sp_entry[id]); fflush(stdout); }
+        return;
+    }
     if (id >= g_sched_count) g_sched_count = id + 1;
     g_sched_alive[id] = true; g_sched_runnable[id] = true;
     if (g_sched_turn == -1) sched_turn_set(id);
@@ -1323,6 +1397,7 @@ static void sched_leave(int id) {
     if (!gil_on() || id < 0) return;
     std::unique_lock<std::mutex> lk(g_sched_mtx);
     g_sched_alive[id] = false; g_sched_runnable[id] = false;
+    if (id < LSW_SCHED_MAX) g_sched_gone[id] = true;
     if (g_sched_turn == id) { int n = sched_next_locked(id); sched_turn_set(n); sched_notify_all(); }
 }
 // Pass the turn to the next runnable thread, then wait until it's ours again (stay runnable).
@@ -3295,6 +3370,7 @@ struct MovieFF {
     ~MovieFF() { if (dec && lsw_vc1_close) lsw_vc1_close(dec); }
 };
 using MovieFFRef = std::shared_ptr<MovieFF>;
+static std::atomic<int64_t> g_movieff_frame_ms{0};   // log130: when FFmpeg last decoded a movie frame (lswtcs_now_ms)
 static std::mutex g_movieff_mtx;
 static std::vector<MovieFFRef> g_movieff;
 static thread_local bool t_movieff_pull = false;
@@ -3397,6 +3473,7 @@ PPC_FUNC(sub_82873440) {
         if (got < 0) ++m->errors;
     }
     ++m->frames;
+    g_movieff_frame_ms.store(int64_t(lswtcs_now_ms()), std::memory_order_relaxed);
     m->bytes += m->frame.size();
     if (got > 0) ++m->pictures;
     m->decode_us += std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - t0).count();
@@ -6977,7 +7054,17 @@ bool lsw_tex_snapshot_find(const uint32_t* f6, uint64_t serial, std::shared_ptr<
     ++g_snap_found;
     return true;
 }
-static bool texsnap_on() { static const bool on = [] { const char* e = getenv("LSWTCS_TEXSNAP"); return e && e[0] == '1'; }(); return on; }
+// log130: =1 always, =m only while a movie plays through FFmpeg (a frame decoded in the last second), else off.
+// Run 123 (console, log129): the trailer tore. The game copies each picture into its textures after a fence wait that
+// our walker satisfies before the render thread has replayed the frame that samples them; copies taken at the interrupt
+// give the render thread the texture as it was for that frame. Its cost was in the emulator (log127), not measured on
+// the console. In the emulator =m cut the presented movie frames from about 570 to 140 per 30 s, so it is not the default.
+static bool texsnap_on() {
+    static const int mode = [] { const char* e = getenv("LSWTCS_TEXSNAP"); return !e ? 0 : e[0] == '1' ? 1 : e[0] == 'm' ? 2 : 0; }();
+    if (mode != 2) return mode == 1;
+    const int64_t last = g_movieff_frame_ms.load(std::memory_order_relaxed);
+    return last && lswtcs_now_ms() - uint64_t(last) < 1000;
+}
 static void tex_snapshot_at_interrupt() {
     if (!texsnap_on()) return;
     const uint64_t smax = g_pub_serial.load() + 1, done = g_tex_done_serial.load();

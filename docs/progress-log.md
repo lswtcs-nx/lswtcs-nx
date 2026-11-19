@@ -5129,3 +5129,42 @@ DIAG, off by default):
 - New script: `tests/scripts/idle_title_movie_twice.txt` (11 minutes: the movie, the title, the movie again).
 
 **Build `0.0.99-log129`:** log128 with FFmpeg's decoder for the movies; NRO `b34ca1aa…`, ELF kept privately, on the SD folder.
+
+## Run 123: log129 on the console (handheld, 19 November 2026)
+
+One session (`run123-log129`): the title left idle and the trailer played through FFmpeg.
+
+- The tester: the picture is good apart from some screen tearing; at the end the game does not return to the menu and
+  the screen stays black.
+- FFmpeg on the console: 16 ms a frame on average (5-16 ms; the trailer is 30 frames a second, 33 ms each), 1,830
+  frames, 0 errors. The picture copy into the game's buffer 0.6 ms.
+- The end: the player's three threads (`82826FC8`, `82826FF8`, `82827028`) exited and a fourth (`82827058`) started.
+  Then no guest thread got the turn again: `[SCHEDPROF]` (printed at turn changes) stopped, and hwprof's last window
+  has every guest thread in `sched_wait_turn` or a host wait, the render thread idle, for the 70 s until the session
+  was closed.
+
+## log130: exited threads stay out of the scheduler; a stall watchdog; texture copies during movies (test)
+
+**The black screen at the movie's end.** A new watchdog (`LSWTCS_SCHEDWATCH`, default on; `[SCHEDWATCH]` when the turn
+has not moved for 2 s) caught it in the emulator in one of five runs to the movie's end: the turn sat with scheduler id
+13, the exited demux thread, which the scheduler still listed as alive and ready.
+- `KeResumeThread` / `ResumeThread` add a thread's slot to the rotation (`sched_add_slot`). The player resumes its
+  threads after they have returned, which put the exited id back; when the turn reached it, nobody took it.
+- Fix (`kernel_stubs.cpp`): `sched_leave` marks the id gone and `sched_add_slot` does not add a gone id again (`[SCHED]
+  slot N ... not added again`; ids are never reused).
+- The watchdog also hands the turn on if it is held by nobody while a thread is ready, by a thread that is gone or off
+  the rotation, or by a thread that itself waits for the turn.
+- Emulator after the fix: three runs to the end, all back to the title, the movie starting again 30 s later. None of them
+  went through the failing order (exits, then the resume), and the fix's line did not print, so the fix is reasoned
+  from the watchdog's state rather than shown.
+
+**Tearing (test, off by default).** The game copies each movie picture into its textures after a fence wait that our
+walker satisfies before the render thread has replayed the frame sampling them. `LSWTCS_TEXSNAP=m` (new) takes the
+log88 texture copies at each GPU interrupt only while a movie plays. In the emulator it cut the presented movie frames
+from about 570 to 140 per 30 s, so it stays off in the code; `hardware-ab.env` turns it on for the next console session,
+which shows whether it removes the tearing and what it costs there.
+
+**Still open:** the movie's second play crashes in the emulator about 30 s after the title returns (log129).
+
+**Build `0.0.99-log130`:** NRO `f920bbc2…`, ELF kept privately, on the SD folder with `LSWTCS_TEXSNAP=m` in
+`env.txt`. Quick route: same game.

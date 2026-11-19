@@ -1,0 +1,28 @@
+# The title-idle movie to its end and back to the title (about 6 minutes in the emulator): a capture every 30 s.
+log idle_title_movie_end
+waitlight 3000 120
+wait 30000
+capture
+wait 30000
+capture
+wait 30000
+capture
+wait 30000
+capture
+wait 30000
+capture
+wait 30000
+capture
+wait 30000
+capture
+wait 30000
+capture
+wait 30000
+capture
+wait 30000
+capture
+wait 30000
+capture
+wait 30000
+capture
+done

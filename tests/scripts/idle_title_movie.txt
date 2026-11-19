@@ -1,0 +1,23 @@
+# The title screen left idle: the attract movie (DEMOINTRO.WMV) starts by itself. A capture every 20 s for 3 minutes,
+# then stops. For the open movie issue (docs/known-issues.md).
+log idle_title_movie
+waitlight 3000 120
+wait 20000
+capture
+wait 20000
+capture
+wait 20000
+capture
+wait 20000
+capture
+wait 20000
+capture
+wait 20000
+capture
+wait 20000
+capture
+wait 20000
+capture
+wait 20000
+capture
+done

@@ -2049,7 +2049,35 @@ void note_sync_wait(const char* func, uint64_t ns) {
 }
 uint64_t g_tex_pre_made = 0, g_tex_pre_skipped = 0;   // log75 texture_prepass
 uint64_t g_dec_batches = 0, g_dec_wall_ns = 0, g_dec_work_ns = 0;   // log78 parallel decode: batches, wall time, summed work
+void save_png(const char* path, std::vector<uint8_t>&& rgba, int w, int h);
+// DIAG LSWTCS_TEXPNG=WxH[,WxH...] (log127): every LSWTCS_TEXPNGEVERY-th (default 8) new 8-bit texture (DXGI R8) of one of those
+// sizes is saved as a grey PNG, texpng_<replay>_<w>x<h>.png, as decoded from guest memory and untiled, before any GL call. Up to
+// 60 files. For the title-idle movie (Y 1280x720, U and V 640x360): it tells decoder output from what the GPU then shows, which
+// the emulator's own GPU cannot (its resolved-texture reads are noise).
+void texpng_maybe(const LswGpuTexDesc& d) {
+    static const std::string sizes = [] { const char* e = getenv("LSWTCS_TEXPNG"); return std::string(e ? e : ""); }();
+    if (sizes.empty() || d.dxgi != 61 || !d.data || d.layers != 1) return;
+    char wh[32]; snprintf(wh, sizeof wh, "%ux%u", d.width, d.height);
+    if (("," + sizes + ",").find("," + std::string(wh) + ",") == std::string::npos) return;
+    static const uint32_t every = [] { const char* e = getenv("LSWTCS_TEXPNGEVERY"); return e && atoi(e) > 0 ? uint32_t(atoi(e)) : 8u; }();
+    static const uint32_t skip = [] { const char* e = getenv("LSWTCS_TEXPNGSKIP"); return e ? uint32_t(atoi(e)) : 0u; }();   // matches to pass over first
+    static uint32_t seen = 0, saved = 0;
+    if (saved >= 60 || seen < skip || ((seen++ - skip) % every) != 0) { if (seen < skip) ++seen; return; }
+    if (size_t(d.row_bytes) * d.rows > d.data_size || d.row_bytes < d.width) return;
+    std::vector<uint8_t> rgba(size_t(d.width) * d.height * 4);
+    for (uint32_t y = 0; y < d.height; ++y)
+        for (uint32_t x = 0; x < d.width; ++x) {
+            const uint8_t v = d.data[size_t(y) * d.row_bytes + x];
+            uint8_t* o = &rgba[(size_t(y) * d.width + x) * 4];
+            o[0] = o[1] = o[2] = v; o[3] = 255;
+        }
+    char name[96]; snprintf(name, sizeof name, "texpng_%llu_%s_%02u.png", (unsigned long long)g_replays, wh, saved);
+    char path[160]; lsw_log_path(path, sizeof path, name);   // the session's log folder, beside stdout.log
+    ++saved;
+    save_png(path, std::move(rgba), int(d.width), int(d.height));
+}
 void note_texture_cost(const LswGpuTexDesc& d, uint64_t dec_ns, uint64_t up_ns, uint64_t sync_ns) {
+    texpng_maybe(d);
     TexCost& c = g_tex_cost[d.dxgi];
     ++c.n; c.bytes += uint64_t(d.layer_bytes) * d.layers; c.dec_ns += dec_ns; c.up_ns += up_ns; c.sync_ns += sync_ns;
     static uint32_t logged = 0;

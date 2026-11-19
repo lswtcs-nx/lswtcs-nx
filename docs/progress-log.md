@@ -4984,3 +4984,66 @@ From run 121's `hwprof.txt` (heavy band), `[CHAIN]`, `[THREADCPU]` and `[GPUPAGE
   `profiles/hardware-ab.env`, now four states (`q`, `qt`, `qn`, `qtn`, 6 s each).
 - **Console test:** one session, 4-core forwarder, Gungan route with longer play in `Gungan_B` and `C` (5-6 minutes of
   heavy play so each state gets enough visits). It decides whether `t` and `n` join the default.
+
+## log127: the title-idle movie decodes correctly (emulator)
+
+The attract movie (`DEMOINTRO.WMV`, title screen left idle) is reproduced in the emulator with no input:
+`tests/scripts/idle_title_movie.txt` (3 minutes) and `idle_title_movie_end.txt` (to its end). Reference frames for
+comparison came from the disc file through the PC's VLC (`--video-filter=scene`), kept locally.
+
+**A new diagnostic, `LSWTCS_TEXPNG=WxH[,WxH]`** (`gl_backend.cpp`, `texpng_maybe`): saves 8-bit textures of those sizes
+as grey PNGs, as decoded from guest memory and untiled, before any GL call (`LSWTCS_TEXPNGEVERY`, `LSWTCS_TEXPNGSKIP`;
+up to 60 files, in the session's log folder). For the movie: Y 1280x720, U and V 640x360. It shows the decoder's
+output without the emulator's GPU, whose resolved-texture reads are noise.
+
+**What was wrong, in order found:**
+
+1. **The Y plane was wrong before the GPU saw it:** mostly black, with blocks whose rows were each one value.
+2. **24 + 8 empty `eqv`** in four functions reached only through the decoder's function table (`82D7E1A8`, `82E03038`,
+   `82E05D90`, `82E09D58`): a branchless median of three, likely the motion-vector predictor.
+   `workspace-tools/fill_tcs360_movie_ops.py` lists them in `EXTRA` now; applied to `output` and `output_nv`.
+   `tests/fill_ops_check.py` passes (60 cases x 485 inputs).
+3. **The generator's own VMX code is right:** new `tests/vmx_gen_ops_check.py` takes one emitted site of each of 40
+   operations the movie code uses (merges, packs, unpacks, `vperm`, `vsel`, saturating arithmetic, shifts, `vcfsx`,
+   `vctsxs`...) and checks it against PowerPC semantics on 400 inputs: 0 mismatches.
+4. **The cause: VMX128 registers read but never set.** The inverse transform (`8291A558`, `8291AB90`, and variants
+   `82D9C258`, `82D9C600`, `82D9C8C0`, `82D9CB28`, `82A97D10`) reads `v69` and `v72` as `vperm` masks for its transpose,
+   and the motion-compensation fetch (`82D9E410`) reads `v64` and `v65` to widen bytes to halfwords. No instruction of
+   the recompiled game writes them; in locals mode they come from the `g_lsw_live` mirror, which stays zero. The raw
+   instruction words confirm the register numbers (VX128 `VB128h` = 2).
+   - A probe (`LSWTCS_MOVIEDCT=1`, `tools/movie_dct_report.py`) runs the transform on single-coefficient blocks: with
+     zero masks a DC-only block was not flat and coefficient 1 vanished. Of the four candidate masks, one makes it an
+     exact separable transform: DC flat, each coefficient one VC-1 basis function (16 15 9 4 / 16 6 -6 -16, scaled).
+   - The masks for `v64`/`v65` follow from their use: `{16, k, 16, k+1, ...}` with a zero vector as the second source.
+5. **Fix (`kernel_stubs.cpp`, default on):** the eight functions set `g_lsw_live.v64/v65/v69/v72` before running.
+   `LSWTCS_MOVIEPERM=-1` turns it off. Where the 360 sets these registers is not found (only the CRT
+   `setjmp`/`longjmp` and register save/restore routines load them).
+
+**Result in the emulator:** Y, U and V planes match the trailer (a colour composite of one frame against VLC's).
+The decoder's guest thread fell from about 205 to 83 ms per presented frame.
+
+**`LSWTCS_TEXSNAP` off by default** (log88, texture copies at each GPU interrupt; `=1` turns it on). It was written for
+run 87's "mostly dark green" frames, which this decoder fault explains. With it the walker spent about 200 ms per movie
+frame copying 75-82 MB per 5 s; without it the dumped planes show no tearing.
+
+**The movie's end (emulator; not solved).** After the movie, the game sometimes went 130 s without a frame and came back,
+sometimes stayed stuck (430 s and more), and sometimes went straight back to the title (once the movie even started again).
+- GDB stacks at a stall: the main thread was freeing the player's memory (`828492D8` -> `828617E0` -> heap free
+  `825374B0`), not waiting; the demux thread (`82826FC8`) sat in `svcArbitrateLock` on the runtime's event mutex
+  (`g_kw_mtx`) inside `KeSetEvent` -> `kw_notify`, holding the guest turn (`[SCHEDPROF]`: about 90 % of the turn at 18 %
+  CPU), so the main thread barely ran.
+- **`kw_notify` no longer takes `g_kw_mtx`** (atomic generation; a waiter that misses the wake-up looks again within its
+  1 ms step; `LSWTCS_KWNOTIFYLOCK=1` restores it). The movie went from about 110 to 250 presented frames per 30 s in
+  the emulator (about 8 a second). Quick route: same game, work within noise.
+- Both runs after it ended with Ryubing itself exiting (no exception in its log, JIT cache growing) near the movie's end,
+  as some runs before it did, so whether the end now returns to the title is not shown in the emulator.
+- Also tried: critical sections that block after N ms of yields (`LSWTCS_CSYIELDMS`, off by default: not the cause).
+  `[CSBLOCK]` and `[CSLONG]` stay as diagnostics.
+- Tools: `tests/scripts/idle_title_movie_end.txt`, `emu_run.py --gdb-at S` (stacks at a fixed time) and stall detection
+  that also watches `frames.log` (timer lines keep `stdout.log` growing while the game is stuck).
+
+**Other findings for later:** empty `lhbrx` (17, `82359C60`-`8235A160`) and `stfsu` (8, `822CC088`-`822D0F38`) in game
+code outside the movie; not filled, as nothing shows them wrong yet.
+
+**Build:** `0.0.99-log127` (`build-nvpgo`), NRO `8a32e2cf…`, ELF kept privately, staged with log125/126's A/B states. Console test, the same session as log126's:
+the four states as before, then leave the title screen idle once (about 30 s) and watch the movie to its end.

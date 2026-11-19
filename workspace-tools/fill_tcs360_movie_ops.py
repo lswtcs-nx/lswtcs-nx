@@ -30,7 +30,10 @@ import re
 import sys
 
 RANGES = [(0x82814000, 0x829A0000), (0x82D90000, 0x82E00000)]
-EXTRA = {"82E043C0", "82E0B540"}
+# log127: four more reached through function pointers (no direct caller), each with 8 empty eqv in a branchless median of
+# three (sign masks), likely the motion-vector predictor: found by scanning for empty operations after run 121's movie dumps
+# showed the decoded Y plane as residue only.
+EXTRA = {"82E043C0", "82E0B540", "82D7E1A8", "82E03038", "82E05D90", "82E09D58"}
 TAG = " // fill"
 TRAPS = {"twllei", "twlgei", "tdllei", "tdlgei", "twi", "tdi", "tw", "td"}
 KNOWN = {"vslh", "vsrh", "vsrah", "vrlh", "vsrab", "vsubshs", "vaddshs", "vsubsbs", "vaddsbs", "vsububm", "vsubuhs",

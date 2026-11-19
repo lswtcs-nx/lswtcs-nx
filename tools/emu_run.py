@@ -109,7 +109,10 @@ def main():
     ap.add_argument("--gdb-on-stall", type=int, default=0, metavar="S",
                     help="when stdout.log gets nothing new for S seconds, dump the guest threads' stacks through the emulator's "
                          "GDB stub (needs --elf; adds --enable-gdb-stub to the emulator's arguments) and stop")
-    ap.add_argument("--elf", help="the ELF the NRO was made from, for --gdb-on-stall")
+    ap.add_argument("--gdb-at", type=int, action="append", default=[], metavar="S",
+                    help="also dump the guest threads through GDB S seconds after the emulator starts, and go on (repeatable; "
+                         "for a stuck game whose timer lines keep the log growing, e.g. the title movie's end)")
+    ap.add_argument("--elf", help="the ELF the NRO was made from, for --gdb-on-stall and --gdb-at")
     ap.add_argument("--gdb", default=str(GDB))
     ap.add_argument("--gdb-port", type=int, default=55555)
     ap.add_argument("--nro-base", default="0x8500000", help="where the emulator loads the NRO (Ryubing 1.3.3: 0x8500000)")
@@ -132,8 +135,8 @@ def main():
         sys.exit("give --script (replay) or --record NAME (record), one of them")
     if args.record and args.timeout == 900:
         args.timeout = 3600   # recording ends when the window is closed
-    if args.gdb_on_stall and not args.elf:
-        sys.exit("--gdb-on-stall needs --elf")
+    if (args.gdb_on_stall or args.gdb_at) and not args.elf:
+        sys.exit("--gdb-on-stall and --gdb-at need --elf")
 
     sd = Path(os.path.expandvars(args.sd))
     game = sd / "lswtcs"
@@ -192,7 +195,7 @@ def main():
         print(f"free memory before start: {free} MB" + ("  (WARNING: under 6000 MB, the emulator may page and stall)" if free < 6000 else ""))
     emu = Path(args.emu).resolve()
     emu_args = args.emu_args
-    if args.gdb_on_stall and "--enable-gdb-stub" not in emu_args:
+    if (args.gdb_on_stall or args.gdb_at) and "--enable-gdb-stub" not in emu_args:
         # Ryubing takes headless mode only when --no-gui is the first argument (with it later, the window opens).
         stub = f"--enable-gdb-stub --gdb-stub-port {args.gdb_port}"
         emu_args = (emu_args.replace("--no-gui", "--no-gui " + stub, 1) if emu_args.startswith("--no-gui")
@@ -243,6 +246,8 @@ def main():
     thread_dump = None
     try:
         proc = subprocess.Popen(cmd, cwd=str(emu.parent), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        started_at = time.time()
+        frames_size, frames_growth = 0, time.time()
         while time.time() - t0 < args.timeout:
             time.sleep(2)
             if log_dir is None:
@@ -274,6 +279,21 @@ def main():
             if proc.poll() is not None:
                 result, reason = "exited", f"the emulator exited with {proc.returncode}"
                 break
+            gdb_due = [t for t in args.gdb_at if time.time() - started_at >= t]
+            if gdb_due and log_dir is not None:
+                for t in gdb_due:
+                    args.gdb_at.remove(t)
+                Path(args.out).mkdir(parents=True, exist_ok=True)
+                out = Path(args.out) / f"threads-at-{gdb_due[-1]}s.txt"
+                print(f"{gdb_due[-1]} s after start: dumping the guest threads through GDB to {out.name}")
+                gdb_dump(args.gdb, Path(args.elf).resolve().as_posix(), args.gdb_port, args.nro_base, out)
+            # Frames also count: a game stuck with timer lines still coming (the title movie's end, run 13-48) stops frames.log.
+            if log_dir is not None and (log_dir / "frames.log").exists():
+                fsize = (log_dir / "frames.log").stat().st_size
+                if fsize != frames_size:
+                    frames_size, frames_growth = fsize, time.time()
+                if frames_size and time.time() - frames_growth >= args.gdb_on_stall:
+                    last_growth = min(last_growth, frames_growth)
             if args.gdb_on_stall and log_dir is not None and time.time() - last_growth >= args.gdb_on_stall:
                 thread_dump = Path(args.out) / "threads-pending.txt"
                 Path(args.out).mkdir(parents=True, exist_ok=True)

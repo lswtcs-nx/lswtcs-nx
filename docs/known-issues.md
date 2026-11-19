@@ -3,25 +3,27 @@
 The open issues, for contributors. Players need only the README's short list. Each entry says what is known, where
 the evidence is, and what is still open.
 
-## Title-idle movie: corruption and a hang at its end
+## Title-idle movie: slow, and its end may hang
 
-Leaving the title screen idle plays the attract movie (`DEMOINTRO.WMV`). The picture shows moving corruption, and the
-game hangs when the movie ends. Chapter cutscenes are a separate path and play correctly.
+Leaving the title screen idle plays the attract movie (`DEMOINTRO.WMV`). Chapter cutscenes are a separate path and play
+correctly.
 
-- **Fixed so far:**
-  - The ring walker dropped the surface-retire interrupt (callback `0x82815910`), which made the screen go black. Fixed
-    in log83.
-  - About 1,650 VMX operations of the movie decoder were left empty by XenonRecomp. log84 fills them
+- **Fixed:**
+  - The ring walker dropped the surface-retire interrupt (callback `0x82815910`): black screen. Fixed in log83.
+  - About 1,650 VMX operations, and in log127 32 more `eqv`, left empty by XenonRecomp
     (`workspace-tools/fill_tcs360_movie_ops.py`, checked by `tests/fill_ops_check.py`).
+  - The corruption (log127): the decoder's transform and motion-compensation fetch read VMX128 registers `v64`, `v65`,
+    `v69`, `v72` that nothing in the recompiled game sets. The runtime now gives them their masks
+    (`LSWTCS_MOVIEPERM=-1` turns it off). In the emulator the decoded Y, U and V planes match the trailer. Not yet seen on
+    the console.
 - **Still open:**
-  - The decoder costs about 280 ms of guest work per frame, so the movie runs at about 3 frames a second.
+  - Speed: the recompiled decoder is far from real time (about 8 frames a second in the emulator since log127).
+  - The end: in the emulator the game sometimes went minutes without a frame after the movie, while the main thread
+    freed the player's memory; log127 removes one cause (the event mutex held with the guest turn). Not shown fixed:
+    the emulator itself exited near the movie's end in the later runs.
   - The skip cannot work while the main thread waits inside the player, because nothing polls the pad.
-  - Whether the remaining corruption comes from timing or from decoding.
-- **Tried and rejected:** deferring the interrupts until the replay (`LSWTCS_AWDEFER=1`, deadlocks after three
-  frames) and kernel wake-up semantics (`LSWTCS_KEWAKE=1`, released nothing).
-- **Next evidence:** a session on the movie with `LSWTCS_TEXSNAP`, then `[TEXSNAP]` and a capture.
 
-Evidence: [progress-log.md](progress-log.md), "Run 85" to "Log 88", and
+Evidence: [progress-log.md](progress-log.md), "Run 85" to "Log 88" and "log127", and
 [history/2026-11-01-handoff/ISSUES.md](history/2026-11-01-handoff/ISSUES.md), issue 3.
 
 ## Heavy scenes on handheld run at about 30 FPS

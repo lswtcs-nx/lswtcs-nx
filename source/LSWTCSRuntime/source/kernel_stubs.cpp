@@ -2099,8 +2099,31 @@ PPC_FUNC(__imp__RtlEnterCriticalSection) {
         if (gil_on()) {
             // Cooperative: yield the turn to the holder (so it runs + releases), retry try_lock.
             // No host m->lock() block → acquisition order is guest-driven, not host-timed.
+            // log127: LSWTCS_CSYIELDMS=N blocks after N ms of yields instead of after 100,000 yields (a blocked waiter gets the
+            // lock when the holder leaves it: Horizon hands a mutex to its waiter). Tried for the title movie's end, where it was
+            // not the cause, so it is off (0) by default. [CSBLOCK] says who blocks on whom; [CSLONG] reports waits over 1 s.
+            const char* yield_env = getenv("LSWTCS_CSYIELDMS");   // read here: contended sections occur before env.txt is loaded
+            const int yield_ms = yield_env ? atoi(yield_env) : 0;
+            const auto t_start = std::chrono::steady_clock::now();
             bool got = false;
-            for (int i = 0; i < 100000; i++) { sched_yield_turn(); if (m->try_lock()) { got = true; cs_took(m, lr); break; } }
+            int yields = 0;
+            for (int i = 0; i < 100000; i++) {
+                sched_yield_turn(); ++yields;
+                if (m->try_lock()) { got = true; cs_took(m, lr); break; }
+                if (yield_ms > 0 && (i & 15) == 15 &&
+                    std::chrono::steady_clock::now() - t_start >= std::chrono::milliseconds(yield_ms)) break;
+            }
+            const int holder_sid = m->own_sid; const uint32_t holder_lr = m->own_lr; const int holder_depth = m->own_depth;
+            auto cs_long = [&](const char* how) {
+                const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t_start).count();
+                static std::atomic<int> logged{0};
+                if (ms >= 1000.0 && logged.fetch_add(1) < 40) {
+                    printf("[CSLONG] CS %08X taken %s after %.0f ms and %d yields by sid %d lr %08X; holder was sid %d lr %08X depth %d\n",
+                           ctx.r3.u32, how, ms, yields, g_sched_id, lr, holder_sid, holder_lr, holder_depth);
+                    fflush(stdout);
+                }
+            };
+            if (got) cs_long("by retry");
             if (!got) {
                 // NEVER return without the lock (it used to): when the holder is parked off the
                 // run queue (GilYield: FPS limiter, GilMutexGuard, host wait) the yields above are
@@ -2112,8 +2135,12 @@ PPC_FUNC(__imp__RtlEnterCriticalSection) {
                     static uint64_t nblk = 0; if (++nblk <= 10 || (nblk % 1000) == 0)
                         dbg_ram("[CS] contended CS 0x%08X: blocking acquire #%llu by sid=%d lr=0x%08X; held by sid=%d lr=0x%08X depth=%d\n",
                                 ctx.r3.u32, (unsigned long long)nblk, g_sched_id, lr, m->own_sid, m->own_lr, m->own_depth);
+                    { static std::atomic<int> nb{0}; if (nb.fetch_add(1) < 60) {   // log127: who waits for whom, before the wait
+                        printf("[CSBLOCK] sid %d lr %08X blocks on CS %08X held by sid %d lr %08X depth %d\n", g_sched_id, lr, ctx.r3.u32,
+                               holder_sid, holder_lr, holder_depth); fflush(stdout); } }
                     { GilYield y; m->lock(); }
                     cs_took(m, lr);
+                    cs_long("blocking");
                 }
             }
         } else {
@@ -2966,10 +2993,22 @@ PPC_FUNC(__imp__NtDuplicateObject) {
 static int blockwait_on() { static int v = -1; if (v < 0) { const char* e = getenv("LSWTCS_BLOCKWAIT"); v = (e && e[0] == '0') ? 0 : 1; } return v; }
 static std::mutex              g_kw_mtx;
 static std::condition_variable g_kw_cv;
-static uint64_t                g_kw_gen = 0;
+static std::atomic<uint64_t>   g_kw_gen{0};
+// log127: the setter no longer takes g_kw_mtx (LSWTCS_KWNOTIFYLOCK=1 does as before). It is called holding the guest turn, and
+// the mutex is shared by every waiter re-checking each 1 ms: at the title movie's end the demux thread (82826FC8), setting
+// events in a loop, sat in svcArbitrateLock on it holding the turn (about 90 % of the turn at 18 % CPU) while the main thread,
+// freeing the player's memory, barely ran. Without the lock a wake-up between a waiter's check and its wait is missed; the
+// waiter then looks again within its 1 ms step.
 static void kw_notify() {
     if (!blockwait_on()) return;
-    { std::lock_guard<std::mutex> lk(g_kw_mtx); ++g_kw_gen; }
+    static std::atomic<uint32_t> calls{0};
+    static std::atomic<int> locked{0};   // read again every 4096 calls: the first ones come before env.txt is loaded
+    if ((calls.fetch_add(1, std::memory_order_relaxed) & 4095) == 0) {
+        const char* e = getenv("LSWTCS_KWNOTIFYLOCK");
+        locked.store(e && e[0] == '1' ? 1 : 0, std::memory_order_relaxed);
+    }
+    if (locked.load(std::memory_order_relaxed)) { std::lock_guard<std::mutex> lk(g_kw_mtx); g_kw_gen.fetch_add(1); }
+    else g_kw_gen.fetch_add(1);
     g_kw_cv.notify_all();
 }
 // Off the rotation, wait until `ready()` (a racy read-only peek) is true or `ms` elapse. The caller
@@ -2981,9 +3020,9 @@ template <typename F> static void kw_block(F ready, uint32_t ms) {
     while (!ready()) {
         auto now = std::chrono::steady_clock::now();
         if (now >= deadline) break;
-        uint64_t gen = g_kw_gen;
+        uint64_t gen = g_kw_gen.load();
         auto step = std::min<std::chrono::steady_clock::duration>(deadline - now, std::chrono::milliseconds(1));
-        g_kw_cv.wait_for(lk, step, [&] { return g_kw_gen != gen; });
+        g_kw_cv.wait_for(lk, step, [&] { return g_kw_gen.load() != gen; });
     }
 }
 // log87: wake-ups as the kernel gives them. KeWaitForSingleObject only polls an event's SignalState, so a KeSetEvent followed by a
@@ -3094,6 +3133,91 @@ struct LswLongWait {
 // 10000 ms timeout and the whole guest idle, chain up to _xstart; our wait returns success at the timeout, so the game went on with
 // the link not connected (+1410 = 0). This keeps that outcome without the wait: the original only builds a string on its stack
 // besides. LSWTCS_HOSTWAIT=1 restores the original.
+// DIAG LSWTCS_MOVIEDCT=1 (log127): the title-idle movie's dequantise + inverse transform (sub_8291A558 and its twin
+// sub_8291AB90, reached through the decoder's function table: r3 = 64 coefficients, 16-bit, r4 = 8 output rows of 16 bytes).
+// Its decoded Y plane (LSWTCS_TEXPNG) shows blocks whose rows are each one value, as if horizontal frequencies landed in
+// column 0. At the first calls (from the LSWTCS_MOVIEDCTAT-th, default 3000), the original runs on synthetic blocks (DC
+// alone, row 0 col 1 alone, row 1 col 0 alone) and [MOVIEDCT] prints input regs and the 128 output bytes; then the caller's
+// own block is restored and run as usual. Read with tools/movie_dct_report.py.
+// The transform's last transpose step merges doublewords with vperm masks it reads from v69 and v72, which nothing in the
+// recompiled game sets (g_lsw_live.v69/v72 stay zero). Candidates, in PowerPC byte order: 0 = (high halves, low halves),
+// 1 = (low, high), 2 and 3 the same with the two sources swapped.
+static void movie_perm_candidate(int cand) {
+    uint8_t hi[16], lo[16];
+    for (int i = 0; i < 8; ++i) { hi[i] = uint8_t(i); hi[8 + i] = uint8_t(16 + i); lo[i] = uint8_t(8 + i); lo[8 + i] = uint8_t(24 + i); }
+    if (cand >= 2) for (int i = 0; i < 8; ++i) { std::swap(hi[i], hi[8 + i]); std::swap(lo[i], lo[8 + i]); }
+    const uint8_t* a = (cand & 1) ? lo : hi;
+    const uint8_t* c = (cand & 1) ? hi : lo;
+    for (int i = 0; i < 16; ++i) { g_lsw_live.v69.u8[i] = a[15 - i]; g_lsw_live.v72.u8[i] = c[15 - i]; }   // registers hold bytes reversed
+    // v64 / v65: zero-extend bytes 0-7 / 8-15 to halfwords when vperm takes a zero vector as its second source (sub_82D9E410,
+    // the motion-compensation reference fetch): {16, k, 16, k + 1, ...}.
+    for (int i = 0; i < 8; ++i) {
+        const uint8_t e64[2] = {16, uint8_t(i)}, e65[2] = {16, uint8_t(8 + i)};
+        for (int j = 0; j < 2; ++j) { g_lsw_live.v64.u8[15 - (2 * i + j)] = e64[j]; g_lsw_live.v65.u8[15 - (2 * i + j)] = e65[j]; }
+    }
+}
+// log127 fix (default on): candidate 0 is the one that makes the transform separable and exact (probe: DC alone flat, each
+// single coefficient one VC-1 basis function, 16 15 9 4 / 16 6). LSWTCS_MOVIEPERM=-1 leaves the registers as before (zero);
+// 1-3 try the other candidates.
+static int movie_perm_choice() {
+    static const int choice = [] { const char* e = getenv("LSWTCS_MOVIEPERM"); return e ? atoi(e) : 0; }();
+    return choice;
+}
+static void movie_dct_probe(const char* name, PPCContext& ctx, uint8_t* base, void (*orig)(PPCContext&, uint8_t*)) {
+    if (movie_perm_choice() >= 0) movie_perm_candidate(movie_perm_choice());
+    static const int on = [] { const char* e = getenv("LSWTCS_MOVIEDCT"); return e && e[0] == '1' ? 1 : 0; }();
+    static const uint32_t at = [] { const char* e = getenv("LSWTCS_MOVIEDCTAT"); return e ? uint32_t(strtoul(e, nullptr, 0)) : 3000u; }();
+    static std::atomic<uint32_t> calls{0}, probes{0};
+    const uint32_t n = calls.fetch_add(1);
+    if (!on || n < at || probes.load() >= 1) { orig(ctx, base); return; }
+    probes.fetch_add(1);
+    const uint32_t in = ctx.r3.u32, out = ctx.r4.u32;
+    uint8_t save_in[128], save_out[128];
+    for (int i = 0; i < 128; ++i) { save_in[i] = PPC_LOAD_U8(in + i); save_out[i] = PPC_LOAD_U8(out + i); }
+    char line[1200];
+    int k = snprintf(line, sizeof line, "[MOVIEDCT] %s call %u: r3 %08X r4 %08X r5 %08X r6 %08X r7 %08X r8 %08X r9 %08X r10 %08X | real in", name, n,
+                     ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32);
+    for (int i = 0; i < 128; ++i) k += snprintf(line + k, sizeof line - k, "%s%02X", (i & 15) ? "" : " ", save_in[i]);
+    puts(line);
+    static const struct { const char* what; int index; } kPatterns[] = {{"dc", 0}, {"r0c1", 1}, {"r1c0", 8}, {"r0c2", 2}, {"r2c0", 16}};
+    const LswLiveRegs live_saved = g_lsw_live;
+    for (int cand = -1; cand < 4; ++cand)
+    for (const auto& pat : kPatterns) {
+        g_lsw_live = live_saved;
+        if (cand >= 0) movie_perm_candidate(cand);
+        for (int i = 0; i < 64; ++i) PPC_STORE_U16(in + i * 2, i == pat.index ? 40 : 0);
+        for (int i = 0; i < 128; ++i) PPC_STORE_U8(out + i, 0);
+        PPCContext c = ctx;
+        orig(c, base);
+        k = snprintf(line, sizeof line, "[MOVIEDCT] %s call %u: perm %d pattern %s (coefficient %d = 40) out", name, n, cand, pat.what, pat.index);
+        for (int i = 0; i < 128; ++i) k += snprintf(line + k, sizeof line - k, "%s%02X", (i & 15) ? "" : " ", PPC_LOAD_U8(out + i));
+        k += snprintf(line + k, sizeof line - k, " | in after");
+        for (int i = 0; i < 128; ++i) k += snprintf(line + k, sizeof line - k, "%s%02X", (i & 15) ? "" : " ", PPC_LOAD_U8(in + i));
+        puts(line);
+    }
+    g_lsw_live = live_saved;
+    for (int i = 0; i < 128; ++i) { PPC_STORE_U8(in + i, save_in[i]); PPC_STORE_U8(out + i, save_out[i]); }
+    orig(ctx, base);
+    k = snprintf(line, sizeof line, "[MOVIEDCT] %s call %u: real out", name, n);
+    for (int i = 0; i < 128; ++i) k += snprintf(line + k, sizeof line - k, "%s%02X", (i & 15) ? "" : " ", PPC_LOAD_U8(out + i));
+    puts(line);
+    fflush(stdout);
+}
+extern "C" PPC_FUNC(__imp__sub_8291A558);
+extern "C" PPC_FUNC(__imp__sub_8291AB90);
+PPC_FUNC(sub_8291A558) { movie_dct_probe("8291A558", ctx, base, __imp__sub_8291A558); }
+PPC_FUNC(sub_8291AB90) { movie_dct_probe("8291AB90", ctx, base, __imp__sub_8291AB90); }
+// The decoder's other transform variants read the same two registers (vor128 vN,v69,v69 / v72): the same masks first.
+#define LSW_MOVIE_PERM_FUNC(addr) \
+    extern "C" PPC_FUNC(__imp__sub_##addr); \
+    PPC_FUNC(sub_##addr) { if (movie_perm_choice() >= 0) movie_perm_candidate(movie_perm_choice()); __imp__sub_##addr(ctx, base); }
+LSW_MOVIE_PERM_FUNC(82D9C258)
+LSW_MOVIE_PERM_FUNC(82D9C600)
+LSW_MOVIE_PERM_FUNC(82D9C8C0)
+LSW_MOVIE_PERM_FUNC(82D9CB28)
+LSW_MOVIE_PERM_FUNC(82A97D10)
+LSW_MOVIE_PERM_FUNC(82D9E410)   // v64 / v65
+#undef LSW_MOVIE_PERM_FUNC
 extern "C" PPC_FUNC(__imp__sub_8250D550);
 PPC_FUNC(sub_8250D550) {
     static const bool wait = [] { const char* e = getenv("LSWTCS_HOSTWAIT"); return e && e[0] == '1'; }();
@@ -6614,7 +6738,9 @@ static bool aw_isr_defer(uint32_t cpu_mask) {   // on the walker thread
 // the bytes of every texture the frames not yet replayed sample are copied: the frame being recorded and the published one not
 // yet taken. The render thread decodes a texture from its copy when one matches the fetch constant and covers the frame
 // (lsw_tex_snapshot_find, the oldest copy taken at or after it). On the 360 the GPU has sampled them by the time the interrupt runs.
-// LSWTCS_TEXSNAP=0 turns it off. Copies are dropped once their frames have been replayed.
+// LSWTCS_TEXSNAP=1 turns it on. Off by default since log127: run 87's mostly dark-green frames, which it was written for, came
+// from the decoder's unset VMX128 registers; in the emulator the copies cost the walker about 200 ms per movie frame, and
+// without them the decoded planes show no tearing. Copies are dropped once their frames have been replayed.
 struct TexSnap { uint32_t f6[6]; uint32_t lo; uint64_t serial_max; std::shared_ptr<const std::vector<uint8_t>> data; };
 static std::mutex g_snap_mtx;
 static std::vector<TexSnap> g_snaps;
@@ -6631,7 +6757,7 @@ bool lsw_tex_snapshot_find(const uint32_t* f6, uint64_t serial, std::shared_ptr<
     ++g_snap_found;
     return true;
 }
-static bool texsnap_on() { static const bool on = [] { const char* e = getenv("LSWTCS_TEXSNAP"); return !(e && e[0] == '0'); }(); return on; }
+static bool texsnap_on() { static const bool on = [] { const char* e = getenv("LSWTCS_TEXSNAP"); return e && e[0] == '1'; }(); return on; }
 static void tex_snapshot_at_interrupt() {
     if (!texsnap_on()) return;
     const uint64_t smax = g_pub_serial.load() + 1, done = g_tex_done_serial.load();

@@ -346,6 +346,9 @@ extern "C" int lsw_core3_move_thread(Handle handle, const char* name) { return c
 extern "C" int lsw_core3_active() { return g_core3_on.load() ? 1 : 0; }
 // log125: the calling thread will visit core 3 on its own (lsw_offcore_begin_on(3, ...)); the meter counts its time there and
 // beyond (its CPU anywhere, so the count errs high). Returns whether core 3 is in use; call once per thread.
+// log129: the runtime declares the movie decoder bridge (lsw_movie_vc1.c) weak; this strong reference links it in.
+extern "C" void* lsw_vc1_open(uint32_t fourcc, const uint8_t* extradata, int extradata_size, int width, int height);
+extern "C" void* const g_lsw_vc1_link = (void*)&lsw_vc1_open;
 extern "C" int lsw_core3_visitor(const char* name) {
     if (!core3_available() || !g_core3_on.load()) return 0;
     mutexLock(&g_core3_lock);

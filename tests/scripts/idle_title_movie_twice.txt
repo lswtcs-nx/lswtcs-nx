@@ -1,0 +1,46 @@
+# The title-idle movie twice (about 11 minutes in the emulator): the trailer, back to the title, and the trailer again; a capture every 30 s.
+log idle_title_movie_twice
+waitlight 3000 120
+wait 30000
+capture
+wait 30000
+capture
+wait 30000
+capture
+wait 30000
+capture
+wait 30000
+capture
+wait 30000
+capture
+wait 30000
+capture
+wait 30000
+capture
+wait 30000
+capture
+wait 30000
+capture
+wait 30000
+capture
+wait 30000
+capture
+wait 30000
+capture
+wait 30000
+capture
+wait 30000
+capture
+wait 30000
+capture
+wait 30000
+capture
+wait 30000
+capture
+wait 30000
+capture
+wait 30000
+capture
+wait 30000
+capture
+done

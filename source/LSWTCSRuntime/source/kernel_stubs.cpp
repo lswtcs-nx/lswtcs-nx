@@ -3218,6 +3218,226 @@ LSW_MOVIE_PERM_FUNC(82D9CB28)
 LSW_MOVIE_PERM_FUNC(82A97D10)
 LSW_MOVIE_PERM_FUNC(82D9E410)   // v64 / v65
 #undef LSW_MOVIE_PERM_FUNC
+// DIAG (log129, LSWTCS_MOVIETRACE=1): the movie decoder's call chain (emulator GDB stacks: 82827918 -> 82818718 -> 82822030
+// -> 8281DF00 -> 8282A300 -> 8282BD30 -> 8285FBC0 -> 82874090 -> 82873440). Prints arguments, results, time and the
+// vtables of the objects, to find where a compressed frame goes in and a picture comes out.
+static bool movie_trace_on() {
+    static const bool on = [] { const char* e = getenv("LSWTCS_MOVIETRACE"); return e && e[0] == '1'; }();
+    return on;
+}
+static void movie_trace_words(uint8_t* base, char* line, size_t cap, int& k, const char* what, uint32_t addr, int n) {
+    if (addr < 0x40000000u || addr >= 0xF0000000u) return;
+    k += snprintf(line + k, cap - k, " %s@%08X:", what, addr);
+    for (int i = 0; i < n && k < int(cap) - 12; ++i) k += snprintf(line + k, cap - k, " %08X", PPC_LOAD_U32(addr + 4 * i));
+}
+static void movie_trace_call(const char* name, PPCContext& ctx, uint8_t* base, void (*orig)(PPCContext&, uint8_t*),
+                             std::atomic<uint32_t>& calls) {
+    const uint32_t n = calls.fetch_add(1, std::memory_order_relaxed);
+    if (!movie_trace_on() || !(n < 40 || n % 250 == 0)) { orig(ctx, base); return; }
+    const uint32_t a[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};
+    char line[1600];
+    int k = snprintf(line, sizeof line, "[MOVIETRACE] %s #%u in r3 %08X r4 %08X r5 %08X r6 %08X r7 %08X r8 %08X", name, n,
+                     a[0], a[1], a[2], a[3], a[4], a[5]);
+    if (n < 3) {
+        movie_trace_words(base, line, sizeof line, k, "r3", a[0], 40);
+        if (a[0] >= 0x40000000u && a[0] < 0xF0000000u) movie_trace_words(base, line, sizeof line, k, "vt", PPC_LOAD_U32(a[0]), 32);
+    }
+    for (int i = 1; i < 6; ++i)
+        if (a[i] >= 0x40000000u && a[i] < 0xF0000000u) { char w[8]; snprintf(w, sizeof w, "r%d", 3 + i); movie_trace_words(base, line, sizeof line, k, w, a[i], 6); }
+    puts(line);
+    const auto t0 = std::chrono::steady_clock::now();
+    orig(ctx, base);
+    const double us = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - t0).count();
+    k = snprintf(line, sizeof line, "[MOVIETRACE] %s #%u out r3 %08X %.0f us", name, n, ctx.r3.u32, us);
+    for (int i = 1; i < 6; ++i)
+        if (a[i] >= 0x40000000u && a[i] < 0xF0000000u) { char w[8]; snprintf(w, sizeof w, "r%d", 3 + i); movie_trace_words(base, line, sizeof line, k, w, a[i], 6); }
+    puts(line);
+}
+#define LSW_MOVIE_TRACE_FUNC(addr) \
+    extern "C" PPC_FUNC(__imp__sub_##addr); \
+    PPC_FUNC(sub_##addr) { static std::atomic<uint32_t> calls{0}; movie_trace_call(#addr, ctx, base, __imp__sub_##addr, calls); }
+LSW_MOVIE_TRACE_FUNC(82818718)
+LSW_MOVIE_TRACE_FUNC(82822030)
+LSW_MOVIE_TRACE_FUNC(8281DF00)
+LSW_MOVIE_TRACE_FUNC(8282A300)
+LSW_MOVIE_TRACE_FUNC(8282BD30)
+LSW_MOVIE_TRACE_FUNC(8285FBC0)
+LSW_MOVIE_TRACE_FUNC(82874090)
+#undef LSW_MOVIE_TRACE_FUNC
+// log129: the movies' video through FFmpeg's WMV3/VC-1 decoder (source/switch/source/lsw_movie_vc1.c), in place of the
+// recompiled Windows Media decoder (about a third of real time on the console, run 122). LSWTCS_MOVIEFF=0 keeps the game's.
+// The game's player (emulator trace, LSWTCS_MOVIETRACE):
+//  - 8285F7F8, the decoder's data callback: r3 the codec object, r5/r7/r8 out pointer, byte count, "more" flag. It hands
+//    out the compressed frame in pieces and returns 0xA with the last. Called once at the decoder's start for the
+//    sequence header (5 bytes for the trailer).
+//  - 82873440, decode one frame (under 82874090): r3 the decoder's handle (codec object + 132), r4 a u16 frame count out.
+//  - 82872488, the picture out: r3 the handle, r4 the FourCC wanted ('I420' for the trailer), r8 the buffer.
+extern "C" void* lsw_vc1_open(uint32_t fourcc, const uint8_t* extradata, int extradata_size, int width, int height) __attribute__((weak));
+extern "C" int lsw_vc1_decode(void* h, const uint8_t* data, int size) __attribute__((weak));
+extern "C" int lsw_vc1_copy_planar(void* h, uint8_t* dst, int width, int height, int v_first) __attribute__((weak));
+extern "C" void lsw_vc1_close(void* h) __attribute__((weak));
+static bool movieff_on() {
+    static const bool on = [] { const char* e = getenv("LSWTCS_MOVIEFF"); return !(e && e[0] == '0') && lsw_vc1_open != nullptr; }();
+    return on;
+}
+struct MovieFF {
+    uint32_t obj = 0, handle = 0, fourcc = 0;
+    int width = 0, height = 0;
+    std::vector<uint8_t> header, frame;
+    void* dec = nullptr;
+    bool failed = false;
+    uint32_t frames = 0, pictures = 0, errors = 0, outs = 0, refused = 0;
+    int ready = 0;   // pictures not yet taken, as the game's decoder counts them (handle + 3684)
+    double decode_us = 0, out_us = 0;
+    uint64_t bytes = 0;
+    // Shared: a new stream (header read on the main thread) may start while the video thread is still inside a pull
+    // for the previous one (the callback can give the guest turn away), so the last user frees FFmpeg's state.
+    ~MovieFF() { if (dec && lsw_vc1_close) lsw_vc1_close(dec); }
+};
+using MovieFFRef = std::shared_ptr<MovieFF>;
+static std::mutex g_movieff_mtx;
+static std::vector<MovieFFRef> g_movieff;
+static thread_local bool t_movieff_pull = false;
+extern "C" PPC_FUNC(__imp__sub_8285F7F8);
+extern "C" PPC_FUNC(__imp__sub_82873440);
+extern "C" PPC_FUNC(__imp__sub_82872488);
+static MovieFFRef movieff_by_handle(uint32_t handle) {
+    std::lock_guard<std::mutex> lk(g_movieff_mtx);
+    for (const MovieFFRef& m : g_movieff) if (m->handle == handle) return m;
+    return nullptr;
+}
+// The decoder reads its sequence header in 8286FD88 (r3 points at its handle; the handle's +3340 holds {codec object,
+// data callback}). A stream starts there; the callback calls made inside it are the header's bytes.
+static thread_local MovieFFRef t_movieff_header;
+extern "C" PPC_FUNC(__imp__sub_8286FD88);
+PPC_FUNC(sub_8286FD88) {
+    if (!movieff_on()) { __imp__sub_8286FD88(ctx, base); return; }
+    const uint32_t holder = ctx.r3.u32;
+    const uint32_t handle = holder ? PPC_LOAD_U32(holder) : 0u;
+    const uint32_t thunk = handle ? PPC_LOAD_U32(handle + 3340) : 0u;
+    const bool ours = thunk >= 0x40000000u && thunk < 0xF0000000u && PPC_LOAD_U32(thunk + 4) == 0x8285F7F8u;
+    MovieFFRef m;
+    if (ours) {
+        std::lock_guard<std::mutex> lk(g_movieff_mtx);
+        // One movie plays at a time: the decoders of earlier streams go.
+        g_movieff.clear();
+        m = std::make_shared<MovieFF>();
+        m->handle = handle;
+        m->obj = PPC_LOAD_U32(thunk);
+        g_movieff.push_back(m);
+    }
+    t_movieff_header = m;
+    __imp__sub_8286FD88(ctx, base);
+    t_movieff_header = nullptr;
+    if (m) {
+        char line[200];
+        int k = snprintf(line, sizeof line, "[MOVIEFF] stream: handle %08X codec object %08X, header read returned %X, %zu bytes:", handle,
+                         m->obj, ctx.r3.u32, m->header.size());
+        for (size_t i = 0; i < m->header.size() && i < 16; ++i) k += snprintf(line + k, sizeof line - k, " %02X", m->header[i]);
+        k += snprintf(line + k, sizeof line - k, " (thread %d)", g_sched_id);
+        puts(line);
+        fflush(stdout);
+    }
+}
+PPC_FUNC(sub_8285F7F8) {
+    static std::atomic<uint32_t> calls{0};
+    MovieFFRef m = t_movieff_pull ? nullptr : t_movieff_header;
+    const uint32_t pptr = ctx.r5.u32, psize = ctx.r7.u32;
+    movie_trace_call("8285F7F8", ctx, base, __imp__sub_8285F7F8, calls);
+    if (m && ctx.r3.u32 != 0 && ctx.r3.u32 != 0xA) return;
+    if (m) {
+        const uint32_t p = PPC_LOAD_U32(pptr), n = PPC_LOAD_U32(psize);
+        if (p && n && m->header.size() + n <= 4096) m->header.insert(m->header.end(), base + p, base + p + n);
+    }
+}
+PPC_FUNC(sub_82873440) {
+    static std::atomic<uint32_t> calls{0};
+    MovieFFRef m = movieff_on() ? movieff_by_handle(ctx.r3.u32) : nullptr;
+    if (m && !m->dec && !m->failed) {
+        // The picture size from the handle (+88, +92); WVC1 when the header is an advanced-profile sequence header
+        // (start code 00 00 01 0F), else WMV3 (its 4-byte header, 5 bytes in the trailer's stream).
+        m->width = int(PPC_LOAD_U32(ctx.r3.u32 + 88));
+        m->height = int(PPC_LOAD_U32(ctx.r3.u32 + 92));
+        const auto& h = m->header;
+        m->fourcc = h.size() >= 4 && h[0] == 0 && h[1] == 0 && h[2] == 1 && h[3] == 0x0F ? 0x57564331u : 0x574D5633u;
+        const bool ok_size = m->width > 0 && m->width <= 4096 && m->height > 0 && m->height <= 4096 && h.size() >= 4;
+        m->dec = ok_size ? lsw_vc1_open(m->fourcc, m->header.data(), int(m->header.size()), m->width, m->height) : nullptr;
+        m->failed = !m->dec;
+        printf("[MOVIEFF] FFmpeg %s for %08X (%dx%d, header %zu bytes)\n", m->dec ? "opened" : "did not open; the game's decoder stays",
+               m->fourcc, m->width, m->height, m->header.size());
+    }
+    if (!m || !m->dec) { movie_trace_call("82873440", ctx, base, __imp__sub_82873440, calls); return; }
+    const auto t0 = std::chrono::steady_clock::now();
+    const uint32_t count_out = ctx.r4.u32;
+    // Pull the frame's pieces through the game's callback, as its decoder would.
+    PPCContext c = ctx;
+    c.r1.u32 = (ctx.r1.u32 - 0x300) & ~15u;
+    const uint32_t pp = c.r1.u32 + 0x100, ps = pp + 4, pm = pp + 8;   // between the callee's frame and ours
+    m->frame.clear();
+    uint32_t ret = 0;
+    for (int i = 0; i < 8192; ++i) {
+        PPC_STORE_U32(pp, 0); PPC_STORE_U32(ps, 0); PPC_STORE_U32(pm, 0);
+        c.r3.u32 = m->obj; c.r4.u32 = 0; c.r5.u32 = pp; c.r6.u32 = 4; c.r7.u32 = ps; c.r8.u32 = pm;
+        t_movieff_pull = true;
+        sub_8285F7F8(c, base);
+        t_movieff_pull = false;
+        ret = c.r3.u32;
+        const uint32_t p = PPC_LOAD_U32(pp), n = PPC_LOAD_U32(ps);
+        if (p && n && n <= 0x1000000u) m->frame.insert(m->frame.end(), base + p, base + p + n);
+        if (ret != 0) break;
+    }
+    int got = 0;
+    if (!m->frame.empty()) {
+        // LSWTCS_MOVIEFFYIELD=1 gives the guest turn to the other threads while FFmpeg decodes (it reads only the copy
+        // above). Off: in the emulator it made the decode 20 ms a frame instead of 9 (waiting for the turn back), the
+        // video slower than real time and 335 presented frames per 30 s instead of 569-748.
+        static const bool yield = [] { const char* e = getenv("LSWTCS_MOVIEFFYIELD"); return e && e[0] == '1'; }();
+        if (yield) { GilYield y; got = lsw_vc1_decode(m->dec, m->frame.data(), int(m->frame.size())); }
+        else got = lsw_vc1_decode(m->dec, m->frame.data(), int(m->frame.size()));
+        if (got < 0) ++m->errors;
+    }
+    ++m->frames;
+    m->bytes += m->frame.size();
+    if (got > 0) ++m->pictures;
+    m->decode_us += std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - t0).count();
+    if (m->frames <= 3 || m->frames % 120 == 0 || (got < 0 && m->errors <= 5) || m->frame.empty())
+        printf("[MOVIEFF] frame %u: %zu bytes (callback %X), picture %d; so far %u pictures, %u errors, decode %.1f ms and out "
+               "%.1f ms a frame\n", m->frames, m->frame.size(), ret, got, m->pictures, m->errors, m->decode_us / 1000.0 / m->frames,
+               m->out_us / 1000.0 / m->frames);
+    // The game's decoder reports one decoded frame per call (r4 out, u16) and 0 for success.
+    PPC_STORE_U16(count_out, m->frame.empty() ? 0 : 1);
+    if (!m->frame.empty()) m->ready = 1;
+    ctx.r3.u64 = 0;
+}
+PPC_FUNC(sub_82872488) {
+    static std::atomic<uint32_t> calls{0};
+    MovieFFRef m = movieff_on() ? movieff_by_handle(ctx.r3.u32) : nullptr;
+    if (!m || !m->dec) { movie_trace_call("82872488", ctx, base, __imp__sub_82872488, calls); return; }
+    const auto t0 = std::chrono::steady_clock::now();
+    const uint32_t fourcc = ctx.r4.u32, dst = ctx.r8.u32;
+    const bool i420 = fourcc == 0x30323449u || fourcc == 0x56555949u, yv12 = fourcc == 0x32315659u;
+    // As the game's own: no picture waiting, nothing written and 9 back (after the last frame the player asks again).
+    if (m->ready <= 0) {
+        if (m->refused++ < 8) { printf("[MOVIEFF] picture asked with none waiting: handle %08X to %08X, thread %d; 9 back\n", ctx.r3.u32, dst, g_sched_id); fflush(stdout); }
+        ctx.r3.u64 = 9;
+        return;
+    }
+    --m->ready;
+    if (!(i420 || yv12)) {
+        static std::atomic<int> told{0};
+        if (told.fetch_add(1) < 3) printf("[MOVIEFF] picture wanted as %08X: not handled, nothing written\n", fourcc);
+    } else {
+        const int wrote = lsw_vc1_copy_planar(m->dec, base + dst, m->width, m->height, yv12 ? 1 : 0);
+        const uint32_t o = m->outs++;
+        if (o < 2) {
+            printf("[MOVIEFF] picture out %u: handle %08X to %08X-%08X (%dx%d %s), thread %d, wrote %d\n", o, ctx.r3.u32, dst,
+                   dst + uint32_t(m->width * m->height * 3 / 2), m->width, m->height, yv12 ? "YV12" : "I420", g_sched_id, wrote);
+            fflush(stdout);
+        }
+    }
+    m->out_us += std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - t0).count();
+    ctx.r3.u64 = 0;
+}
 extern "C" PPC_FUNC(__imp__sub_8250D550);
 PPC_FUNC(sub_8250D550) {
     static const bool wait = [] { const char* e = getenv("LSWTCS_HOSTWAIT"); return e && e[0] == '1'; }();

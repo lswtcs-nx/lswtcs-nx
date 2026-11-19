@@ -5081,3 +5081,51 @@ attract movie. Core mask 0xF; the walker visited core 3 in `t` (`[CORE3]`: walke
   then many motion-compensation variants at 1-5 %. No single hot spot makes it 3 times faster.
 
 **Build `0.0.99-log128`:** log127 with `n` in the built-in player settings; NRO `1758e693…`, ELF kept privately, on the SD folder (emulator quick route: same game).
+
+## log129: the movies' video through FFmpeg's WMV3/VC-1 decoder
+
+Run 122 showed the recompiled Windows Media decoder at about a third of real time on the console, so the trailer's
+sound ran ahead and ended with the picture minutes behind. The video decode now goes to FFmpeg's `wmv3` decoder, which was
+already in the source tree (Xenia's FFmpeg 8, with its aarch64 NEON code); only its files were not built. Nothing was
+installed or downloaded.
+
+**How the game's player works** (emulator; GDB stacks with `emu_run --gdb-at`, then a call tracer, `LSWTCS_MOVIETRACE=1`,
+DIAG, off by default):
+- The video thread (`82827918`) asks the player for a picture (`82818718`, an I420 buffer of 1280x720) through a chain of
+  graph objects down to a codec object (FourCC `WMV3`) and the Windows Media decoder's handle.
+- `82874090` decodes one frame (body `82873440`). The decoder pulls the compressed frame through the codec object's data
+  callback `8285F7F8` (pointer, byte count and a "more" flag out; 0xA with the last piece).
+- At its start the decoder reads the sequence header in `8286FD88` through the same callback (5 bytes for the trailer,
+  `4F F1 08 01 00`). The handle's +3340 holds {codec object, callback}.
+- `82872488` writes the picture in the format asked for (`I420` here) and counts down the pictures waiting (handle +3684;
+  9 back when none is).
+
+**The change** (`kernel_stubs.cpp`; `LSWTCS_MOVIEFF=0` restores the game's decoder):
+- `8286FD88` starts a stream and records the header bytes its callback calls return.
+- `82873440` pulls the frame through the same callback and gives it to FFmpeg (`source/switch/source/lsw_movie_vc1.c`,
+  a small C bridge). `82872488` copies FFmpeg's latest picture into the game's buffer, once per decoded frame.
+- WVC1 when the header is an advanced-profile sequence header, else WMV3. If FFmpeg does not open, the game's decoder stays.
+- A stream's state is shared (`std::shared_ptr`): a new stream's header read on the main thread can come while the video
+  thread is still inside a pull for the previous one.
+- `LSWTCS_MOVIEFFYIELD=1` releases the guest turn while FFmpeg decodes. Off: one emulator run with it was slower (decode
+  20 ms a frame against 9, 335 presented frames per 30 s), though a run without it was as slow once, so this is not shown.
+- Build: the FFmpeg files FFmpeg 8's own configure selects for `--disable-everything --enable-decoder=wmv3,vc1` on aarch64,
+  listed in `CMakeLists.txt`; components in `include/ffmpeg/config.h`; `include/ffmpeg/libavcodec/codec_list.c` adds the
+  two decoders to Xenia's audio ones.
+
+**Emulator** (no console run yet, so no console gain is claimed):
+- The trailer: 1,830 frames, 0 decode errors, the pictures right (Y and chroma planes dumped with `LSWTCS_TEXPNG`).
+- FFmpeg 9-22 ms a frame depending on the run, against 83 ms for the recompiled decoder in log127. The video keeps real
+  time (600 frames per 20 s); the game presents 566-748 frames per 30 s during the movie, against about 250.
+- The movie ends about 61 s after it starts and the game returns to the title (before: it hung or took minutes).
+- Quick route: same game.
+
+**Still open:** if the title stays idle, the movie plays again and the game crashes in the emulator.
+- In the player's list of file blocks (`828454B0`, reached from the data callback; the same bad address in three runs).
+  This one also happened with the game's own decoder (`LSWTCS_MOVIEFF=0`), late in a first play, and with state `U` off.
+- Or on the main thread in a texture unlock (`822A6FE0`): r13 + 256 read picture bytes. A host thread polling the main
+  PCR saw no change, and r13 was right on entry, so where it comes from is not found.
+- The second play never happened before (the movie never finished), so neither crash could be seen.
+- New script: `tests/scripts/idle_title_movie_twice.txt` (11 minutes: the movie, the title, the movie again).
+
+**Build `0.0.99-log129`:** log128 with FFmpeg's decoder for the movies; NRO `b34ca1aa…`, ELF kept privately, on the SD folder.

@@ -158,6 +158,23 @@ foreach(f libavcodec/aarch64/idctdsp_init_aarch64.c libavcodec/aarch64/mpegaudio
         list(APPEND FFMPEG_LIBAVCODEC_SOURCES "${FFMPEG_ROOT}/${f}")
     endif()
 endforeach()
+# log129: the WMV3/VC-1 decoder for the movies (kernel_stubs.cpp, LSWTCS_MOVIEFF). The files FFmpeg 8's configure
+# adds for "--disable-everything --enable-decoder=wmv3,vc1" on aarch64; components in include/ffmpeg/config.h.
+foreach(f vc1.c vc1_block.c vc1_loopfilter.c vc1_mc.c vc1_pred.c vc1data.c vc1dec.c vc1dsp.c msmpeg4_vc1_data.c
+          intrax8.c intrax8dsp.c wmv2data.c wmv2dsp.c blockdsp.c error_resilience.c mpeg_er.c h264chroma.c h264qpel.c
+          hpeldsp.c qpeldsp.c me_cmp.c videodsp.c startcode.c mpeg12framerate.c mpegpicture.c mpegutils.c mpegvideo.c
+          mpegvideo_dec.c mpegvideo_motion.c mpegvideo_unquantize.c mpegvideodata.c rl.c to_upper4.c
+          neon/mpegvideo.c
+          aarch64/vc1dsp_init_aarch64.c aarch64/vc1dsp_neon.S aarch64/h264chroma_init_aarch64.c aarch64/h264cmc_neon.S
+          aarch64/h264qpel_init_aarch64.c aarch64/h264qpel_neon.S aarch64/hpeldsp_init_aarch64.c aarch64/hpeldsp_neon.S
+          aarch64/idctdsp_neon.S aarch64/me_cmp_init_aarch64.c aarch64/me_cmp_neon.S aarch64/videodsp.S
+          aarch64/videodsp_init.c)
+    if(NOT EXISTS "${FFMPEG_ROOT}/libavcodec/${f}")
+        message(FATAL_ERROR "FFmpeg file missing for the movie decoder: libavcodec/${f}")
+    endif()
+    list(APPEND FFMPEG_LIBAVCODEC_SOURCES "${FFMPEG_ROOT}/libavcodec/${f}")
+endforeach()
+list(REMOVE_DUPLICATES FFMPEG_LIBAVCODEC_SOURCES)
 # FFmpeg's asserts print __FILE__, so the NRO carried the build machine's absolute paths (log109). Map the source root to
 # "source/" in both spellings the compiler may see under MSYS2 (/c/... and C:/...). tools/make_release.py refuses an NRO
 # that still has the repository's absolute path.
@@ -173,6 +190,10 @@ foreach(lib avutil avcodec)
         ${LSW_PREFIX_MAP})
 endforeach()
 target_include_directories(lsw_avcodec PRIVATE "${FFMPEG_ROOT}/libavcodec")
+# log129: the runtime's bridge to FFmpeg's WMV3/VC-1 decoder (the game's movies).
+add_library(lsw_movie STATIC source/lsw_movie_vc1.c)
+target_include_directories(lsw_movie PRIVATE include/ffmpeg "${FFMPEG_CFG}" "${FFMPEG_ROOT}")
+target_compile_options(lsw_movie PRIVATE ${LSW_ARCH_FLAGS} -O2 -std=gnu11 ${LSW_PREFIX_MAP})
 
 # Xenia sources see the Switch as Linux (XE_PLATFORM_LINUX); the two Linux syscalls they use
 # (futex, gettid) come from source/linux_shim.cpp, Win32 events from the win32 shim.
@@ -355,9 +376,9 @@ if(LSW_DEKO_BACKEND)
     target_compile_definitions(lswtcs PRIVATE LSW_DEKO_BACKEND=1 LSW_GUEST_MEMORY_TRACKING=1)
     target_compile_definitions(GameCode PRIVATE LSW_GUEST_MEMORY_TRACKING=1)
     target_compile_definitions(lsw_xma PRIVATE LSW_GUEST_MEMORY_TRACKING=1)
-    target_link_libraries(lswtcs PRIVATE GameCode lsw_spirv lsw_xma lsw_avcodec lsw_avutil deko3dd)
+    target_link_libraries(lswtcs PRIVATE GameCode lsw_spirv lsw_xma lsw_movie lsw_avcodec lsw_avutil deko3dd)
 else()
-    target_link_libraries(lswtcs PRIVATE GameCode lsw_spirv lsw_xma lsw_avcodec lsw_avutil glad ${LSW_MESA_LIBS} drm_nouveau)
+    target_link_libraries(lswtcs PRIVATE GameCode lsw_spirv lsw_xma lsw_movie lsw_avcodec lsw_avutil glad ${LSW_MESA_LIBS} drm_nouveau)
     if(LSW_GUEST_NONVOLATILE)
         target_compile_definitions(lswtcs PRIVATE LSW_BUILD_GUEST_NV=1)   # the log line only; the runtime stays volatile
     endif()
@@ -400,7 +421,7 @@ else()
         if(LSW_PGO STREQUAL "generate")
             set(LSW_NACP_VERSION "0.0.99-log97nvg")   # log97: the instrumented NRO of log96's code (wide counts)
         elseif(LSW_PGO STREQUAL "use")
-            set(LSW_NACP_VERSION "0.0.99-log128")   # log107: the image from default.xex, built-in player settings, file checks; log108: log text; log109: shader translations saved on the SD card; log110: scripted input and pad recording; log111: [WORK], [CHAIN], waitloads; log112: save copy to and from the SD card; log113: frame-exact input, fixed frame time; log114: shader translation off the guest thread (LSWTCS_GLXLATEASYNC); log115: programs asked for while translations finish (taken out in log116); log116: nvc0 translations kept on the SD card; log117: written in 256 KB blocks; log118: the exece break before the main loop's end (LSWTCS_GLLOOPEND); log119: nvc0 file flushed every 300 replays; log120: pixel outputs without invariant (LSWTCS_GLPSINVARIANT=0); log121: vertex invariance on the position only (LSWTCS_GLVSPOSINV=1); log122: translation cache tied to the translator, not the build; log123: resolve hand-over (LSWTCS_GLHANDOVER=1); log124: hand-over on by default; log125: the ring walker on core 3 (A/B state t); log126: lean walker (A/B state n); log127: title movie decodes (VMX128 constant registers, empty eqv), critical sections block after 20 ms of yields; log128: state n in the built-in player settings
+            set(LSW_NACP_VERSION "0.0.99-log129")   # log107: the image from default.xex, built-in player settings, file checks; log108: log text; log109: shader translations saved on the SD card; log110: scripted input and pad recording; log111: [WORK], [CHAIN], waitloads; log112: save copy to and from the SD card; log113: frame-exact input, fixed frame time; log114: shader translation off the guest thread (LSWTCS_GLXLATEASYNC); log115: programs asked for while translations finish (taken out in log116); log116: nvc0 translations kept on the SD card; log117: written in 256 KB blocks; log118: the exece break before the main loop's end (LSWTCS_GLLOOPEND); log119: nvc0 file flushed every 300 replays; log120: pixel outputs without invariant (LSWTCS_GLPSINVARIANT=0); log121: vertex invariance on the position only (LSWTCS_GLVSPOSINV=1); log122: translation cache tied to the translator, not the build; log123: resolve hand-over (LSWTCS_GLHANDOVER=1); log124: hand-over on by default; log125: the ring walker on core 3 (A/B state t); log126: lean walker (A/B state n); log127: title movie decodes (VMX128 constant registers, empty eqv), critical sections block after 20 ms of yields; log128: state n in the built-in player settings; log129: the movies' video through FFmpeg's WMV3 decoder (LSWTCS_MOVIEFF)
         endif()
     else()
         set(LSW_NACP_VERSION "0.0.99-log93")

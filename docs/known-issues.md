@@ -3,7 +3,7 @@
 The open issues, for contributors. Players need only the README's short list. Each entry says what is known, where
 the evidence is, and what is still open.
 
-## Title-idle movie: slow, and its end may hang
+## Title-idle movie: its second play may crash
 
 Leaving the title screen idle plays the attract movie (`DEMOINTRO.WMV`). Chapter cutscenes are a separate path and play
 correctly.
@@ -16,16 +16,20 @@ correctly.
     `v69`, `v72` that nothing in the recompiled game sets. The runtime now gives them their masks
     (`LSWTCS_MOVIEPERM=-1` turns it off). In the emulator the decoded Y, U and V planes match the trailer. Not yet seen on
     the console.
-- **Still open (run 122, console: picture and colour good):**
-  - Speed: the recompiled decoder runs the video at about a third of real time (about 10 frames a second, 80 % of a
-    core, a flat profile). The sound runs in real time, so the two drift apart, and when the sound ends the picture
-    still has about two minutes of the trailer to decode: what looks like a hang at the end. A native WMV3 decoder
-    (FFmpeg's `vc1dec`) would be the route to real time.
-  - The render thread spends about 44 ms a frame on the movie's planes.
-  - In the emulator the game sometimes went minutes without a frame after the movie (log127 removed one cause).
+  - Speed (log129): the video now goes through FFmpeg's WMV3 decoder instead of the recompiled one, which ran at about
+    a third of real time on the console (run 122: sound and picture drifted apart, and the end looked hung). In the
+    emulator the trailer decodes in real time with no errors and the game returns to the title. Not yet seen on the
+    console. `LSWTCS_MOVIEFF=0` restores the game's decoder.
+- **Still open:**
+  - In the emulator, when the title stays idle and the movie plays a second time, the game crashes: in the player's list
+    of file blocks (`828454B0`, a bad node pointer; the same address run after run), or on the main thread in a texture
+    unlock (`822A6FE0`, r13 + 256 reading picture bytes). The first also happened with the game's own decoder, late in
+    a first play; the second is not separated (the game's decoder never reached a second play in the emulator).
+  - The render thread spent about 44 ms a frame on the movie's planes on the console (run 122); in the emulator the game
+    now shows about 19 of the trailer's 30 frames a second.
   - The skip cannot work while the main thread waits inside the player, because nothing polls the pad.
 
-Evidence: [progress-log.md](progress-log.md), "Run 85" to "Log 88", "log127" and "Run 122", and
+Evidence: [progress-log.md](progress-log.md), "Run 85" to "Log 88", "log127", "Run 122" and "log129", and
 [history/2026-11-01-handoff/ISSUES.md](history/2026-11-01-handoff/ISSUES.md), issue 3.
 
 ## Heavy scenes on handheld run at about 30 FPS

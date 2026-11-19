@@ -4078,9 +4078,26 @@ static inline uint64_t reg_mix(uint32_t reg, uint32_t value) {
 // The cache-coherency registers (COHER_*_PM4 / _RT / _HOST, 0x0A29-0x0A31): the game's coherency packets set them around resolves, and no draw
 // reads them. Run 13: every refusal of the tile entry check was on 0x0A2F, and the hash stopped T at the first draw of nearly every repeat.
 static inline bool reg_not_draw_state(uint32_t reg) { return reg >= 0x0A29 && reg <= 0x0A31; }
+// A/B state n (log126, "lean walker"): no tile-skip capture and no register hash. Both exist only to copy draws of a repeated EDRAM
+// tile from tile 0's records; with LSWTCS_ONETILE=1 (one pass per frame) no IB repeats ([TILESKIP] repeats 0 all of run 121), yet each
+// ring-level IB of 64+ dwords copied the 24,580-entry register file (96 KB) into a fresh vector, compared it again at its first draw,
+// and every changed register paid two 64-bit mixes. Run 121's walker: tile_skip_begin/note about 5 % of its samples, half of it while
+// holding the guest turn. Requested from the A/B cycle (render thread), applied by the walk at a ring-level IB (tile_skip_begin), so
+// the hash never changes mid-IB; leaving n rebuilds the hash from the register file. Draws are recorded the same either way.
+static bool g_walk_lean = false;                  // applied; read and written only by the walk
+static std::atomic<int> g_walk_lean_req{0};
+extern "C" void lsw_walk_lean_set(int on) { g_walk_lean_req.store(on != 0, std::memory_order_relaxed); }
+static inline bool reg_hash_skipped(uint32_t reg) {
+    return (reg >= 0x2080 && reg <= 0x2082) || reg == 0x2319 || reg == 0x21FC || reg == 0x21F9 || reg_not_draw_state(reg);
+}
 static inline void reg_hash_update(uint32_t reg, uint32_t old_value, uint32_t new_value) {
-    if ((reg >= 0x2080 && reg <= 0x2082) || reg == 0x2319 || reg == 0x21FC || reg == 0x21F9 || reg_not_draw_state(reg)) return;
+    if (g_walk_lean || reg_hash_skipped(reg)) return;
     g_reg_hash ^= reg_mix(reg, old_value) ^ reg_mix(reg, new_value);
+}
+static void reg_hash_rebuild() {   // what the updates above would have made from the all-zero start
+    uint64_t h = 0;
+    for (uint32_t reg = 0; reg < 0x6000; ++reg) if (!reg_hash_skipped(reg)) h ^= reg_mix(reg, g_xe_regs[reg]);
+    g_reg_hash = h;
 }
 static inline void reg_set(uint32_t reg, uint32_t value) {
     if (g_xe_regs[reg] == value) return;
@@ -5249,7 +5266,12 @@ static const char* tskip_content_differs(const LswGpuFrame& f, const LswGpuDrawR
 static void tile_skip_begin(uint32_t addr, uint32_t len) {
     g_tskip_capture = g_tskip_repeat = nullptr;
     g_tskip_relaxed = false;
-    if (!tskip_on() || len < 64) return;
+    if (const bool lean = g_walk_lean_req.load(std::memory_order_relaxed) != 0; lean != g_walk_lean) {   // state n (log126)
+        if (!lean) reg_hash_rebuild();
+        g_tskip_ibs.clear();
+        g_walk_lean = lean;
+    }
+    if (g_walk_lean || !tskip_on() || len < 64) return;
     if (g_tskip_frame != g_shm_frame) { g_tskip_ibs.clear(); g_tskip_frame = g_shm_frame; }
     const uint64_t key = (uint64_t(addr) << 32) | len;
     auto it = g_tskip_ibs.find(key);
@@ -5938,9 +5960,11 @@ static inline bool pm4_regs_copy(uint32_t reg, const uint32_t* src, uint32_t n) 
         const uint32x4_t v = vreinterpretq_u32_u8(vrev32q_u8(vld1q_u8(reinterpret_cast<const uint8_t*>(src))));
         const uint32x4_t old = vld1q_u32(dst);
         if (vmaxvq_u32(veorq_u32(v, old))) {   // a changed block: the register hash needs each changed value
-            uint32_t o[4], w[4];
-            vst1q_u32(o, old); vst1q_u32(w, v);
-            for (int k = 0; k < 4; ++k) if (o[k] != w[k]) reg_hash_update(reg + k, o[k], w[k]);
+            if (!g_walk_lean) {
+                uint32_t o[4], w[4];
+                vst1q_u32(o, old); vst1q_u32(w, v);
+                for (int k = 0; k < 4; ++k) if (o[k] != w[k]) reg_hash_update(reg + k, o[k], w[k]);
+            }
             any = 1;
         }
         vst1q_u32(dst, v);

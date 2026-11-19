@@ -71,6 +71,7 @@ extern "C" void lsw_async_walk_set(int on);   // kernel_stubs.cpp
 extern "C" void lsw_kick_walk_set(int on);    // kernel_stubs.cpp
 extern "C" void lsw_hsio_nowait_set(int on);  // kernel_stubs.cpp
 extern "C" void lsw_walk_prio_set(int prio);  // kernel_stubs.cpp
+extern "C" void lsw_walk_lean_set(int on);     // kernel_stubs.cpp, state n (log126)
 extern "C" void lsw_walk_float_set(int on);   // kernel_stubs.cpp
 extern "C" void lsw_ring_early_set(int on);   // kernel_stubs.cpp
 extern "C" volatile int lsw_nvc0_cb_dedupe;   // mesa_cbdedupe_edits.py
@@ -3443,6 +3444,7 @@ void ab_cycle_tick() {
     lsw_hsio_nowait_set(has('h'));  // h: flushes do not wait for the GPU, as on a console whose CPU-GPU link trained (lsw_hsio_nowait_set)
     lsw_walk_prio_set(has('w') ? 0x3D : 0);   // w: the off-turn walk below the render thread's priority (kernel_stubs.cpp)
     lsw_ring_early_set(has('r'));   // r: the ring-space wait ends once the reader is past the window (ring_window_wait)
+    lsw_walk_lean_set(has('n'));    // n (log126): no tile-skip capture or register hash in the walk (kernel_stubs.cpp)
     lsw_walk_float_set(has('f'));   // f: the off-turn walk on core 1 or 2, whichever has time
     lsw_nvc0_cb_dedupe = has('B');   // B: nouveau skips constant buffer binds that change nothing (mesa_cbdedupe_edits.py)
     lsw_nvc0_zcull = has('c');   // c (log62): ZCULL set up in nouveau (mesa_zcull_edits.py); out after run 62, exact but no gain

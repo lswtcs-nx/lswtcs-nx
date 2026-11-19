@@ -4962,3 +4962,25 @@ From run 121's `hwprof.txt` (heavy band), `[CHAIN]`, `[THREADCPU]` and `[GPUPAGE
   `env.txt` from `profiles/hardware-ab.env`, which alternates the current state and `t` every 6 s.
 - **Console test:** one session with the 4-core forwarder, the usual Gungan route (hub, A, B, C, hub); docked if
   possible, handheld also tells. Decides whether `t` joins the default.
+
+## log126: a leaner walk (A/B state `n`)
+
+- **Why:** in run 121 the tile-skip machinery still ran with `LSWTCS_ONETILE=1`, where no IB repeats (`[TILESKIP]`:
+  0 repeats all session). Each ring-level IB of 64+ dwords copied the register file (24,580 entries, 96 KB) into a
+  new vector and compared it again at its first draw (`tile_skip_begin`/`tile_skip_note`, about 5 % of the walker's
+  samples, half of it while the walker held the guest turn). Each changed register also paid two 64-bit mixes for
+  the register hash, which only tile skipping reads.
+- **Change (`kernel_stubs.cpp`):** with `n`, neither runs. The A/B cycle asks; the walk applies the request at a
+  ring-level IB, so the hash never changes inside an IB, and leaving `n` rebuilds the hash from the register file.
+  Draws are recorded the same way. With three tiles (`LSWTCS_ONETILE=0`) `n` would only lose the tile copies.
+- **Dropped:** keeping the last shader per type in `get_shader` (about 3 % of the walker). `gl_bridge.cc` is part of
+  the translation cache's identity, so the change would have made every console start the translations over.
+- **Emulator, quick route, four states alternating** (base, `t`, `n`, `tn`): done, same game, work within noise, no
+  crash. Walker CPU per 100k guest calls in the six heavy `Gungan_B` windows on each side: 16.2 ms without `n`, 14.6
+  with it (about -10 %). PC timings, so only a direction; Ryubing still has no core 3 for `t`.
+- **What to expect on the console:** about 1-1.5 ms less walker CPU per heavy frame, partly on the guest's critical
+  path (the part done holding the turn). Measured by `[THREADCPU]` walker CPU and `[CHAIN]` per state.
+- **Build:** `0.0.99-log126` (`build-nvpgo`), NRO `c5669cdf…`, ELF kept privately; staged with `env.txt` from
+  `profiles/hardware-ab.env`, now four states (`q`, `qt`, `qn`, `qtn`, 6 s each).
+- **Console test:** one session, 4-core forwarder, Gungan route with longer play in `Gungan_B` and `C` (5-6 minutes of
+  heavy play so each state gets enough visits). It decides whether `t` and `n` join the default.

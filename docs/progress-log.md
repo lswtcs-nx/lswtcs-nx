@@ -5047,3 +5047,37 @@ code outside the movie; not filled, as nothing shows them wrong yet.
 
 **Build:** `0.0.99-log127` (`build-nvpgo`), NRO `8a32e2cf…`, ELF kept privately, staged with log125/126's A/B states. Console test, the same session as log126's:
 the four states as before, then leave the title screen idle once (about 30 s) and watch the movie to its end.
+
+## Run 122: log127 on the console (handheld, 4-core forwarder, 19 November 2026)
+
+One session (`run122-log127`, 475 s): the hub, `Gungan_A` to `C`, the hub, then the title screen left idle and the
+attract movie. Core mask 0xF; the walker visited core 3 in `t` (`[CORE3]`: walker 27-34 % of core 3, XMA 8-12 %).
+
+**The walker states, heavy frames (1300+ draws), `ab_factorial.py`:**
+
+| Letter | FPS by state | Load-matched (90 %) | Walker CPU per replay (all frames) | `[CHAIN]` VdSwap walk, p50 |
+| --- | --- | --- | --- | --- |
+| none | 35.0 | | 5.54 ms | 7.4 ms |
+| `n` | 36.0 | +4.0 % (-4.3 to +16.3) | 4.84 ms | 6.8 ms |
+| `t` | 29.8 | **-14.5 % (-23.2 to -7.6)** | 4.69 ms | 9.8 ms |
+| `tn` | 29.9 | | 4.38 ms | 12.0 ms |
+
+- **`t` is out.** On core 3 the walk ends later in heavy frames (`VdSwap` waits 2.4-4.6 ms longer), though its wall time
+  over the whole session is the same as on core 1 (wall/CPU 1.99 both). Likely causes, not separated: XMA (0x2B) and
+  system threads ahead of it on core 3, and a core 0 <-> 3 move at every IB.
+- **`n` joins the base** (`player.env`, `hardware-ab.env`, `emulator.env`): exact, walker CPU -13 % per replay, the
+  `VdSwap` wait and the replay shorter; the FPS gain is not shown (interval crosses 0).
+
+**The title movie on the console:**
+- The tester: colour and picture good; the sound "does not come out exactly"; the movie is not at full speed; it hangs
+  at the end.
+- The decoder thread (`82826FF8`) holds the guest turn 80-85 % at 73-80 % CPU: about 10 presented frames a second.
+  The render thread spends about 44 ms per replay on the movie's planes.
+- The demux/sound thread ended about 63 s after the movie began (the trailer's length: sound ran in real time) and the
+  audio went silent; the decoder kept decoding until the session was closed 32 s later. The video runs at about a
+  third of real time, so the 61 s trailer needs about 3 minutes. The "hang" is the end of the sound with the picture
+  far behind; the sound "not exact" is the same lag.
+- The decoder profile (band 0, its own samples) is flat: transform `8291A558` 8 %, `82D588B8` 9 %, `82D999F0` 8.6 %,
+  then many motion-compensation variants at 1-5 %. No single hot spot makes it 3 times faster.
+
+**Build `0.0.99-log128`:** log127 with `n` in the built-in player settings; NRO `1758e693…`, ELF kept privately, on the SD folder (emulator quick route: same game).

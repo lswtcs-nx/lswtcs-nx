@@ -16,14 +16,16 @@ correctly.
     `v69`, `v72` that nothing in the recompiled game sets. The runtime now gives them their masks
     (`LSWTCS_MOVIEPERM=-1` turns it off). In the emulator the decoded Y, U and V planes match the trailer. Not yet seen on
     the console.
-- **Still open:**
-  - Speed: the recompiled decoder is far from real time (about 8 frames a second in the emulator since log127).
-  - The end: in the emulator the game sometimes went minutes without a frame after the movie, while the main thread
-    freed the player's memory; log127 removes one cause (the event mutex held with the guest turn). Not shown fixed:
-    the emulator itself exited near the movie's end in the later runs.
+- **Still open (run 122, console: picture and colour good):**
+  - Speed: the recompiled decoder runs the video at about a third of real time (about 10 frames a second, 80 % of a
+    core, a flat profile). The sound runs in real time, so the two drift apart, and when the sound ends the picture
+    still has about two minutes of the trailer to decode: what looks like a hang at the end. A native WMV3 decoder
+    (FFmpeg's `vc1dec`) would be the route to real time.
+  - The render thread spends about 44 ms a frame on the movie's planes.
+  - In the emulator the game sometimes went minutes without a frame after the movie (log127 removed one cause).
   - The skip cannot work while the main thread waits inside the player, because nothing polls the pad.
 
-Evidence: [progress-log.md](progress-log.md), "Run 85" to "Log 88" and "log127", and
+Evidence: [progress-log.md](progress-log.md), "Run 85" to "Log 88", "log127" and "Run 122", and
 [history/2026-11-01-handoff/ISSUES.md](history/2026-11-01-handoff/ISSUES.md), issue 3.
 
 ## Heavy scenes on handheld run at about 30 FPS

@@ -4915,3 +4915,50 @@ Route: hub, Gungan A, B and C, hub. No crash. `LSWTCS_ABCYCLE=6` alternated the 
   measured there (-1.3 ms median per heavy frame), so it is now on by default; `LSWTCS_GLHANDOVER=0` turns it off.
 - Emulator: same game, 14 hand-overs logged. Build `0.0.99-log124`, NRO `05617e89…`, on the staged SD with the normal
   `env.txt`.
+
+
+## Run 121's heavy frames, read again: core 1 is full (analysis, 19 November 2026)
+
+From run 121's `hwprof.txt` (heavy band), `[CHAIN]`, `[THREADCPU]` and `[GPUPAGES]`:
+
+- **The frame:** swap-to-swap 28.6 ms (median) = the game about 21.5 ms + the main thread waiting in `VdSwap` for the
+  walk about 7 ms. The GPU takes 25.4 ms per heavy frame since the hand-over, so in handheld the GPU is no longer the
+  limit; the game plus the wait for the walk is.
+- **CPU per replay by core:**
+
+  | Core | Threads | CPU ms per replay |
+  | --- | --- | --- |
+  | 0 | the main thread and the other guest threads | about 22 |
+  | 1 | render 14.7, ring walker (scheduler id 11) 13.8 | **about 28.5 in a 28.6 ms frame** |
+  | 2 | Mesa's worker 12.5, the audio guest thread 7.3, audio output 0.5 | about 20 |
+  | 3 | the XMA worker | 4-13 % of the core (`[CORE3]`) |
+
+- The walker runs at 0x3D, below the render thread (state `w`, run 52), so it walks when the render thread waits.
+  `[GPUPAGES]` puts a frame's walk at about 27 ms of wall time for about 14 ms of CPU.
+- The walker on core 2 (state K, run 47) was -12 %; on core 1 or 2 (f, runs 53-54) +2 %, not shown. Core 3 came later
+  and was never tried for it.
+- Inside the walker (its own samples): `pm4_extract_ib` itself 25 % (spread over `kernel_stubs.cpp` ~5920-6350),
+  page hashes (XXH3 in `gpu_shm_track`) 11 %, `get_shader` with its `memcmp` about 5 %, `memset` in
+  `gpu_record_draw_impl` 3.4 %, `pack_floats` 3.7 %.
+
+## log125: the ring walker on core 3 (A/B state `t`)
+
+- **Change:** with `t`, the walker's off-turn walks go to core 3 at 0x2D (`LSWTCS_WALKCORE3_PRIO`) instead of
+  `LSWTCS_WALKOFF_CORE` at `w`'s 0x3D (`walk_off_enter`, `kernel_stubs.cpp`). There it yields only to the XMA worker
+  (0x2B) and the log writer (0x2C), and goes ahead of `compile_1` (0x3F) and the file writer (0x3A).
+- **Core-3 meter:** the walker registers as a visitor (`lsw_core3_visitor`, `platform_switch.cpp`): the meter counts its
+  CPU (all of it, so the count errs high), and when the meter sends the moved threads home it leaves the walker alone,
+  which then walks on its old core because `lsw_core3_active()` reads 0. Only the walker thread (`t_async_walker`) goes
+  to core 3; a walk on another thread keeps the old core.
+- **Without core 3** (mask 0x7, no forwarder) `t` changes nothing.
+- **Emulator, quick route** (`LSWTCS_ABSTATES=MAPXSHNLUBIkhwregdq,MAPXSHNLUBIkhwregdqt`, 14 visits to `t`): done, same
+  game (hub 796), work within noise (`Gungan_B` draws -2.1 %, guest calls -0.6 %). Ryubing gives the process mask 0x7,
+  so it ran `t`'s fallback, not core 3: the core-3 path is untested until the console.
+- **What to expect on the console:** the wait in `VdSwap` (`[CHAIN]` "VdSwap walk", about 7 ms) should fall toward the
+  last segment's walk, and the render replay should shorten (core 1 to itself). Handheld can gain up to the GPU's 25.4
+  ms (about +10 % at most in heavy frames); docked, where the GPU has slack, more. Watch `[CORE3]` (walker share, any
+  send-home), audio (`[AUDIO]`), and the boot queue (compile_1 now yields to the walker).
+- **Build:** `0.0.99-log125` (`build-nvpgo`), NRO `d69d7ae5…`, ELF kept privately; staged on the SD folder with
+  `env.txt` from `profiles/hardware-ab.env`, which alternates the current state and `t` every 6 s.
+- **Console test:** one session with the 4-core forwarder, the usual Gungan route (hub, A, B, C, hub); docked if
+  possible, handheld also tells. Decides whether `t` joins the default.

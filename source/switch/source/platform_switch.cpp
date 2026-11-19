@@ -228,7 +228,9 @@ extern "C" void lsw_offcore_end() {
 // 8.7 s against 3.3 in run 105, one 3 s texture stall. Now the steady threads keep the priority they had at home (XMA 0x2B,
 // log writer 0x2C, file writer 0x3A); texdec_0 runs at 0x3E and compile_1 at 0x3F, so the compiler only takes what is left.
 namespace {
-struct Core3Thread { Handle handle; s32 home_core; u64 home_mask; s32 home_prio; u64 ticks_last; u64 ticks_10s; bool metered; char name[16]; };
+// visitor (log125): a thread that moves itself to core 3 and back (the ring walker, state t). The meter counts it; sending
+// threads home leaves it alone, and it stops coming once lsw_core3_active() reads 0.
+struct Core3Thread { Handle handle; s32 home_core; u64 home_mask; s32 home_prio; u64 ticks_last; u64 ticks_10s; bool metered; bool visitor; char name[16]; };
 Core3Thread g_core3[8];
 std::atomic<int> g_core3_count{0};
 std::atomic<bool> g_core3_on{false};
@@ -246,6 +248,7 @@ void core3_send_home() {
     mutexLock(&g_core3_lock);
     g_core3_on.store(false);
     for (int i = 0; i < g_core3_count.load(); ++i) {
+        if (g_core3[i].visitor) continue;
         svcSetThreadCoreMask(g_core3[i].handle, g_core3[i].home_core, g_core3[i].home_mask);
         if (g_core3[i].home_prio >= 0) svcSetThreadPriority(g_core3[i].handle, g_core3[i].home_prio);
     }
@@ -310,6 +313,7 @@ static int core3_move(Handle handle, const char* name, bool metered, int want_pr
     svcGetInfo(&t.ticks_last, InfoType_ThreadTickCount, t.handle, UINT64_MAX);
     t.ticks_10s = t.ticks_last;
     t.metered = metered;
+    t.visitor = false;
     snprintf(t.name, sizeof t.name, "%s", name);
     s32 prio = want_prio < 0 ? t.home_prio : want_prio;
     Result rp = 0;
@@ -340,6 +344,28 @@ extern "C" int lsw_core3_begin_bursty(const char* name, int prio) { return core3
 extern "C" int lsw_core3_move_thread(Handle handle, const char* name) { return core3_move(handle, name, true, -1); }
 // Whether moved threads are still on core 3 (the meter can send them home).
 extern "C" int lsw_core3_active() { return g_core3_on.load() ? 1 : 0; }
+// log125: the calling thread will visit core 3 on its own (lsw_offcore_begin_on(3, ...)); the meter counts its time there and
+// beyond (its CPU anywhere, so the count errs high). Returns whether core 3 is in use; call once per thread.
+extern "C" int lsw_core3_visitor(const char* name) {
+    if (!core3_available() || !g_core3_on.load()) return 0;
+    mutexLock(&g_core3_lock);
+    const int i = g_core3_count.load();
+    if (i >= 8) { mutexUnlock(&g_core3_lock); return 0; }
+    Core3Thread& t = g_core3[i];
+    t.handle = threadGetCurHandle();
+    svcGetThreadCoreMask(&t.home_core, &t.home_mask, t.handle);
+    t.home_prio = -1;
+    svcGetInfo(&t.ticks_last, InfoType_ThreadTickCount, t.handle, UINT64_MAX);
+    t.ticks_10s = t.ticks_last;
+    t.metered = true;
+    t.visitor = true;
+    snprintf(t.name, sizeof t.name, "%s", name);
+    g_core3_count.store(i + 1);
+    mutexUnlock(&g_core3_lock);
+    printf("[CORE3] %s visits core 3 (metered)\n", name);
+    fflush(stdout);
+    return 1;
+}
 
 // DIAG: per-core load ([CPULOAD], printed with [GLPROF]). Horizon reports a core's idle ticks only to a thread running
 // on that core (InfoType_IdleTickCount, sub-id -1 = the caller's core), so one sampler thread per core, at the lowest

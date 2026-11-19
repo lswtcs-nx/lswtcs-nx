@@ -1596,6 +1596,13 @@ extern "C" void lsw_walk_prio_set(int prio) { g_walk_prio_ab.store(prio, std::me
 static std::atomic<int> g_walk_float_ab{0};
 extern "C" void lsw_walk_float_set(int on) { g_walk_float_ab.store(on, std::memory_order_relaxed); }
 extern "C" __attribute__((weak)) void lsw_offcore_begin_mask(int, unsigned, int) {}   // Switch: platform_switch.cpp
+// A/B state t (log125): the ring walker on core 3 (lsw_walk_core_set(3)) at 0x2D (LSWTCS_WALKCORE3_PRIO). Run 121's heavy frames:
+// core 1 carried the render thread (14.7 ms CPU) and the walker (13.8 ms, at 0x3D below render) in a 28.6 ms frame, the main
+// thread waited ~7 ms in VdSwap for the walk, and core 3 ran only the XMA worker (4-13 %). There the walker yields only to XMA
+// (0x2B) and the log writer (0x2C). The core-3 meter counts it (lsw_core3_visitor); once the meter sends threads home, it
+// walks on LSWTCS_WALKOFF_CORE again.
+extern "C" __attribute__((weak)) int lsw_core3_visitor(const char*) { return 0; }   // Switch: platform_switch.cpp
+extern "C" __attribute__((weak)) int lsw_core3_active() { return 0; }
 static thread_local bool t_walk_off = false;      // this thread is walking off the rotation right now
 static thread_local bool t_async_walker = false;  // state I: this is the ring walker thread (async_walker_body)
 static std::atomic<int> g_walk_off_sid{-1};       // scheduler id of the thread off the rotation in a walk, -1 = none
@@ -1627,8 +1634,16 @@ static void walk_off_enter() {
     // Core 2 by default. Run 7's trial there shared it with shader compiles and Mesa's worker; LSWTCS_WALKOFF_CORE=1 puts it beside the render thread.
     static const int core_env = [] { const char* e = getenv("LSWTCS_WALKOFF_CORE"); return e ? atoi(e) : 2; }();
     const int core_ab = g_walk_core_ab.load(std::memory_order_relaxed), prio_ab = g_walk_prio_ab.load(std::memory_order_relaxed);
-    if (g_walk_float_ab.load(std::memory_order_relaxed)) lsw_offcore_begin_mask(1, 6u, prio_ab > 0 ? prio_ab : prio);
-    else lsw_offcore_begin_on(core_ab > 0 ? core_ab : core_env, prio_ab > 0 ? prio_ab : prio);
+    int core = core_ab > 0 ? core_ab : core_env, wprio = prio_ab > 0 ? prio_ab : prio;
+    if (core == 3) {   // state t (log125): only the ring walker thread, only while the core-3 meter has not sent threads home
+        static thread_local int visitor = -1;
+        if (visitor < 0) visitor = t_async_walker ? lsw_core3_visitor("walker") : 0;
+        static const int core3_prio = [] { const char* e = getenv("LSWTCS_WALKCORE3_PRIO"); return e ? int(strtol(e, nullptr, 0)) : 0x2D; }();
+        if (visitor && lsw_core3_active()) wprio = core3_prio;
+        else core = core_env;   // keeps w's priority, as without t
+    }
+    if (g_walk_float_ab.load(std::memory_order_relaxed)) lsw_offcore_begin_mask(1, 6u, wprio);
+    else lsw_offcore_begin_on(core, wprio);
     t_walk_off = true;
 }
 static void walk_off_leave() {

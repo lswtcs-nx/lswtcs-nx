@@ -3418,7 +3418,7 @@ void ab_cycle_tick() {
     g_ut_off_ab = !has('M');
     lsw_sched_ab_set(has('A'), has('W'));
     lsw_walk_ab_set(has('Y'), has('D'));
-    lsw_walk_core_set(has('K') ? 2 : 0);
+    lsw_walk_core_set(has('K') ? 2 : has('t') ? 3 : 0);   // t (log125): the ring walker on core 3 at 0x2D while the core-3 meter allows (kernel_stubs.cpp)
     // R: the render thread at 0x2C instead of 0x3B (run 22: the lowest but one, equal to the guest threads, which may run on its core,
     // and below the file loader's off-turn decompression there). G and C: guest thread priority and core (hw_profiler.cpp).
     svcSetThreadPriority(CUR_THREAD_HANDLE, has('R') ? 0x2C : g_render_prio_start);

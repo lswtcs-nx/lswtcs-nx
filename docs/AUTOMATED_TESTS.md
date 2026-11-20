@@ -10,6 +10,21 @@ emulator on a PC. The same script and the same NRO serve both.
 - `python tools/emu_test.py` tests a build in one command (about 3 minutes): same game or not, and the work it did
   against a baseline. See "Testing a build in the emulator".
 - The console route `tests/scripts/console_gungan.txt` is recorded but has not been replayed on the console yet.
+  `python tools/stage_run.py <label> --script console_gungan.txt` stages a console test that replays it (below).
+
+## Staging a console test
+
+```
+python tools/stage_run.py log132                              # the usual hand-played route
+python tools/stage_run.py log132 --script console_gungan.txt  # the recorded route plays itself
+```
+
+It refuses a build whose NACP version does not end with the label, or whose NRO is older than its ELF. It keeps the
+ELF as `private/lswtcs-<label>.elf` (refusing to replace a different one), copies the NRO, `env.txt` (from
+`profiles/hardware-ab.env`, plus `LSWTCS_INPUTSCRIPT` with `--script`) and every `tests/scripts/*.txt` into
+`private/sdcard/`, checks each copy's SHA-256, and writes a manifest for `workspace-tools/verify_tcs360_sd.py` and the
+test request, listing only the files that changed since the last staging. `--read <file.md>` fills the request's
+"what will be read" list; `--out <dir>` sends the ELF, manifest and request elsewhere for a trial.
 
 ## Testing a build in the emulator
 

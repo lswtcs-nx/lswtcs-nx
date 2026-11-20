@@ -5202,3 +5202,15 @@ play, by timing.
 - Quick route: same game (one earlier attempt exited silently at replay 2977 with no invalid access, the emulator's own exit).
 
 **Build `0.0.99-log131`:** log130 with the change; the SD's `env.txt` keeps `LSWTCS_TEXSNAP=m` for the tearing test.
+
+## Run 124: log131 on the console (handheld, 19 November 2026)
+
+One session (`run124-log131`), with `LSWTCS_TEXSNAP=m` from `hardware-ab.env`.
+
+- The tester: the game did not crash or hang at the movie's end; the movie ran at a very low frame rate.
+- **The black end is fixed on the console:** at the end the player's threads exited, `[SCHED] slot 13/14/15 ... not
+  added again` (log130) printed, the teardown thread ran, and the game went on.
+- **`LSWTCS_TEXSNAP=m` is what slowed the movie:** about 11 interrupts a second, each copying the movie's planes (145-155 MB
+  per 5 s). The game presented about 190 frames per 30 s during the movie, against 450-580 in run 123 without it, and the
+  61 s trailer took about 300 s. FFmpeg itself stayed at 13 ms a frame. Whether it removed the tearing is not known.
+- `hardware-ab.env` drops it again (the code default is off). The tearing stays open.

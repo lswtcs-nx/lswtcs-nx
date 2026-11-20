@@ -5214,3 +5214,40 @@ One session (`run124-log131`), with `LSWTCS_TEXSNAP=m` from `hardware-ab.env`.
   per 5 s). The game presented about 190 frames per 30 s during the movie, against 450-580 in run 123 without it, and the
   61 s trailer took about 300 s. FFmpeg itself stayed at 13 ms a frame. Whether it removed the tearing is not known.
 - `hardware-ab.env` drops it again (the code default is off). The tearing stays open.
+
+## log132: the movie waits for the renderer; the virtual heap no longer runs into physical memory
+
+Two changes in `kernel_stubs.cpp`, both found in the emulator (`tests/scripts/idle_title_movie_twice.txt`).
+
+**Movie fences wait for the render thread** (`LSWTCS_MOVIEFENCE=0` turns it off). The player rotates three sets of
+Y/U/V textures and rewrites a set once D3D's fence says the GPU is done with it. Our fence completed when the walker had
+read the commands, while the render thread could still be frames behind replaying them and sample a set already rewritten
+(the tearing of runs 123-124 is the suspected result). While a movie plays, a fence wait now also waits, off the guest
+turn and at most 50 ms, until the render thread has read the textures of every frame published so far. Emulator:
+presented frames during the movie 939-998 per 30 s against 519-604 before, renderer at most 2 frames behind. Tearing and
+console speed are not measured yet.
+
+**The movie's replay through a new player** (main thread crash in `sub_82533320`, every emulator run that took that path):
+- Found from the Ryujinx log's host stack and registers (`PrintGuestStackTrace`, resolved with addr2line on the ELF):
+  the main thread's PCR page (0x88010000) was filled with 0x11 bytes, so `[[r13 + 256] + 332]` read 0x11111111.
+- Cause: `NtAllocateVirtualMemory` was a bump allocator from 0x84000000 that never reused a range, 64 MB under the
+  physical allocator's first blocks (0x88010000 the PCR, then the game's own 370 MB block, asked for at boot by
+  `82536924`). The title-movie player reserves its heaps anew for each player and keeps some of them (the game's
+  growable heaps, about 30 MB a player), so a second player ran the virtual heap past 0x88000000 and its picture
+  buffer landed on the PCR.
+- Also found: the physical allocator could hand out 0xA4000000-0xA8000000, the same memory as the virtual heap.
+- Change (`LSWTCS_VREUSE=0` restores the old allocators): a released reservation (`MEM_RELEASE` at its start) goes on a
+  free list and is handed out again, zeroed; once the virtual heap's 64 MB are used, reservations come from the physical
+  allocator (returned in the 0x80 view); a reservation that fits nowhere is refused (`STATUS_NO_MEMORY`, `[VHEAP] OUT OF
+  MEMORY`) instead of overwriting; the physical allocator stops at 0xA4000000 (`[PHYS] OUT OF MEMORY` now prints).
+  The movie hooks fold guest addresses (`lsw_host`), as reservations may now lie in another view.
+- Emulator, final build: the new-player path went through in 2 of 3 runs (it crashed in every one before; with
+  earlier versions of the change, 6 more went through). The main-thread crash did not come back. A different crash
+  remains: a new player's thread (demux `82826FC8` or video `82826FF8`) reads near address 0 (seen 3 times across the
+  versions, once with the final build), with no refusal printed: probably memory running short in the game's own heap,
+  not understood. In one run the new player's 16 MB heap was refused and the movie went on.
+- Tried and dropped on the way: joining the walker when the ring is rebuilt (D3D rebuilds it before every movie, like
+  Xenia's `InitializeRingBuffer` our runtime already resets it), and a per-thread "current thread" (KPRCB + 332, still 0
+  on every thread; no effect on the crash, left unset).
+
+**Build `0.0.99-log132`.**

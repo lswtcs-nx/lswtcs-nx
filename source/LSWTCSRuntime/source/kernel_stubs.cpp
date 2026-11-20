@@ -494,8 +494,10 @@ static int g_imlog_left_fwd();
 // LSWTCS_GETMODE: 0 = old model, get = put (claims even the segment still being recorded is done, so
 // D3D re-patches shader slots in place that the deferred walk has not read yet -> wrong vfetch strides
 // in the shadow pass); 1 (default) = get = max(get, fence): only the awaited fence is completed.
+static void movie_fence_wait();   // log132, defined with the movie code
 extern "C" void ppc_ringbuf_advance_get(uint8_t* base, uint32_t gpu_obj_addr, void* ctxp) {
     g_fence_dev = gpu_obj_addr;
+    struct MovieFenceAtExit { ~MovieFenceAtExit() { movie_fence_wait(); } } movie_fence_at_exit;   // log132: on every return
     const bool noted = ctxp && PPC_LOAD_U32(gpu_obj_addr + 10896) >= 0x80000000u &&
         walk_fence_note(static_cast<PPCContext*>(ctxp)->r4.u32, PPC_LOAD_U32(gpu_obj_addr + 10908), PPC_LOAD_U32(PPC_LOAD_U32(gpu_obj_addr + 10896)));
     // State I: the awaited fence's segment was read by an earlier walk (run 41: 9558 of 9559 waits), so this wait does not need the
@@ -2284,6 +2286,45 @@ PPC_FUNC(__imp__KeTlsSetValue) {
 }
 
 // ── Memory ────────────────────────────────────────────────────────────────────
+// log132: released reservations are handed out again. The bump allocator below never reused a range, and it starts
+// 64 MB under the physical allocator's first block (0x88000000, g_phys_bump). Each title-movie player reserves its heaps
+// anew, so when the game made a second player the heap ran into the physical blocks: the main thread's PCR (0x88010000)
+// was overwritten with picture bytes (0x11) and the emulator crashed in sub_82533320. A reservation the game releases
+// (MEM_RELEASE at its start) now goes on a free list; a new reservation takes the first free range that fits, zeroed.
+// The player also keeps heaps it never releases (about 30 MB a player), so once the 64 MB below 0x88000000 are used,
+// reservations come from the physical allocator, which keeps its blocks apart (as on the console, virtual and physical
+// memory share the 512 MB). LSWTCS_VREUSE=0 restores the plain bump allocator.
+static std::mutex g_vheap_mtx;
+static std::map<uint32_t, uint32_t> g_vres;    // live reservations from the bump/free list: start -> size
+static std::map<uint32_t, uint32_t> g_vfree;   // released ranges: start -> size
+static uint32_t g_phys_alloc(uint32_t raw_size);
+static void g_phys_free_block(uint32_t addr);
+static std::map<uint32_t, uint32_t> g_vphys;   // reservations taken from the physical allocator: start -> block
+static bool vheap_in_reservation(uint32_t a) {
+    std::lock_guard<std::mutex> lk(g_vheap_mtx);
+    auto it = g_vres.upper_bound(a);
+    if (it == g_vres.begin()) return false;
+    --it;
+    return a - it->first < it->second;
+}
+static bool vreuse_on() { static const bool on = [] { const char* e = getenv("LSWTCS_VREUSE"); return !(e && e[0] == '0'); }(); return on; }
+static uint32_t vheap_take_free(uint32_t size) {   // under g_vheap_mtx
+    for (auto it = g_vfree.begin(); it != g_vfree.end(); ++it) {
+        if (it->second < size) continue;
+        const uint32_t a = it->first, left = it->second - size;
+        g_vfree.erase(it);
+        if (left) g_vfree[a + size] = left;
+        return a;
+    }
+    return 0;
+}
+static void vheap_release(uint32_t a, uint32_t size) {   // under g_vheap_mtx
+    auto next = g_vfree.lower_bound(a);
+    if (next != g_vfree.end() && a + size == next->first) { size += next->second; g_vfree.erase(next); }
+    auto prev = g_vfree.lower_bound(a);
+    if (prev != g_vfree.begin()) { --prev; if (prev->first + prev->second == a) { prev->second += size; return; } }
+    g_vfree[a] = size;
+}
 PPC_FUNC(__imp__NtAllocateVirtualMemory) {
     PPC_FUNC_PROLOGUE();
 #ifdef LSW_DEKO_BACKEND
@@ -2303,15 +2344,52 @@ PPC_FUNC(__imp__NtAllocateVirtualMemory) {
     // Honor requested base address if specified and within valid heap range
     uint32_t requested_base = base_addr_ptr ? PPC_LOAD_U32(base_addr_ptr) : 0;
     uint32_t alloc_addr;
-    const bool requested_range = requested_base >= 0x84000000 && requested_base < 0x94000000;
+    const bool requested_range = (requested_base >= 0x84000000 && requested_base < 0x94000000) ||
+                                 (requested_base && vreuse_on() && vheap_in_reservation(requested_base));
     if (requested_range) {
         alloc_addr = requested_base;
         // Advance bump pointer past this allocation if needed
         if (requested_base + region_size > guest_heap)
             guest_heap = requested_base + region_size;
     } else {
-        alloc_addr = guest_heap;
-        guest_heap += region_size;
+        uint32_t reused = 0;
+        if (vreuse_on()) {
+            std::lock_guard<std::mutex> lk(g_vheap_mtx);
+            reused = vheap_take_free(region_size);
+            if (reused) g_vres[reused] = region_size;
+        }
+        if (!reused && vreuse_on() && uint64_t(guest_heap) + region_size > 0x88000000ull) {
+            const uint32_t blk = g_phys_alloc(region_size + 0x10000u);   // zeroed; aligned to 64 KB below
+            if (blk) {
+                reused = ((blk + 0xFFFFu) & ~0xFFFFu) & 0x9FFFFFFFu;   // the 0x80 view: below 0xA0000000, as virtual memory is
+                std::lock_guard<std::mutex> lk(g_vheap_mtx);
+                g_vres[reused] = region_size;
+                g_vphys[reused] = blk;
+                static int told = 0;
+                if (told++ < 4) { printf("[VHEAP] reservation of %u KB from the physical allocator at %08X\n", region_size >> 10, reused); fflush(stdout); }
+            }
+        }
+        if (!reused && vreuse_on() && uint64_t(guest_heap) + region_size > 0x88000000ull) {
+            // Past 0x88000000 lie the main thread's PCR and the game's own physical arena: refuse instead.
+            static int told = 0;
+            if (told++ < 8) { printf("[VHEAP] OUT OF MEMORY: reservation of %u KB refused (lr %08X)\n", region_size >> 10, (uint32_t)ctx.lr); fflush(stdout); }
+            ctx.r3.u32 = 0xC0000017u;   // STATUS_NO_MEMORY
+            return;
+        }
+        if (reused) {
+            alloc_addr = reused;
+            lsw_guest::fill(lsw_host(alloc_addr), 0, region_size);   // a fresh reservation reads as zero
+        } else {
+            alloc_addr = guest_heap;
+            guest_heap += region_size;
+            if (vreuse_on()) { std::lock_guard<std::mutex> lk(g_vheap_mtx); g_vres[alloc_addr] = region_size; }
+            static bool warned = false;
+            if (!warned && guest_heap > 0x88000000u) {
+                warned = true;
+                printf("[VHEAP] the virtual heap reached %08X, over the physical blocks from 88000000 (reservation %08X, %u KB)\n", guest_heap, alloc_addr, region_size >> 10);
+                fflush(stdout);
+            }
+        }
     }
 #ifdef LSW_DEKO_BACKEND
     // A commit of a requested existing range does not start a new lifetime.
@@ -2335,9 +2413,19 @@ PPC_FUNC(__imp__NtFreeVirtualMemory) {
     PPC_FUNC_PROLOGUE();
     static const bool zero = [] { const char* e = getenv("LSWTCS_VFREEZERO"); return !(e && e[0] == '0'); }();
     const uint32_t start = ctx.r3.u32 ? PPC_LOAD_U32(ctx.r3.u32) : 0u, size = ctx.r4.u32 ? PPC_LOAD_U32(ctx.r4.u32) : 0u;
-    if (zero && size && (ctx.r5.u32 & 0xC000u) && start >= 0x84000000u && uint64_t(start) + size <= 0x94000000ull) {
+    if (zero && size && (ctx.r5.u32 & 0xC000u) && ((start >= 0x84000000u && uint64_t(start) + size <= 0x94000000ull) ||
+                                                   (vreuse_on() && vheap_in_reservation(start)))) {
         const uint32_t lo = start & ~0xFFFu, hi = (start + size + 0xFFFu) & ~0xFFFu;
         lsw_guest::fill(lsw_host(lo), 0, hi - lo);
+    }
+    if (vreuse_on() && (ctx.r5.u32 & 0x8000u) && start) {
+        std::lock_guard<std::mutex> lk(g_vheap_mtx);
+        auto it = g_vres.find(start);
+        if (it != g_vres.end()) {
+            auto ph = g_vphys.find(start);
+            if (ph != g_vphys.end()) { g_phys_free_block(ph->second); g_vphys.erase(ph); g_vres.erase(it); }   // other mutex
+            else { vheap_release(it->first, it->second); g_vres.erase(it); }
+        }
     }
     ctx.r3.u32 = 0;
 }
@@ -2402,8 +2490,10 @@ static uint32_t g_phys_alloc(uint32_t raw_size) {
     // 0xA2000000: never hand those pages out.
     const uint32_t img_lo = 0xA2000000u, img_hi = 0xA2000000u + ((PPC_IMAGE_SIZE_RT + 0xFFFFu) & ~0xFFFFu);
     if (addr < img_hi && addr + size > img_lo) addr = img_hi;
-    if (addr + size > 0xA8000000u) {
-        static int n = 0; if (n++ < 8) dbg_ram("[PHYS] OUT OF MEMORY: 0x%X bytes requested, bump=0x%08X\n", size, g_phys_bump);
+    // log132: 0xA4000000-0xA8000000 is the same memory as the virtual heap (0x84000000-0x88000000): stop below it.
+    const uint32_t phys_top = vreuse_on() ? 0xA4000000u : 0xA8000000u;
+    if (addr + size > phys_top) {
+        static int n = 0; if (n++ < 8) { printf("[PHYS] OUT OF MEMORY: 0x%X bytes requested, bump=0x%08X\n", size, g_phys_bump); fflush(stdout); }
         return 0;
     }
     g_phys_bump = addr;
@@ -3387,6 +3477,48 @@ struct MovieFF {
 };
 using MovieFFRef = std::shared_ptr<MovieFF>;
 static std::atomic<int64_t> g_movieff_frame_ms{0};   // log130: when FFmpeg last decoded a movie frame (lswtcs_now_ms)
+// log132: the movie's tearing (runs 123-124). The player rotates three sets of Y/U/V textures and rewrites a set after D3D's
+// BlockOnFence (sub_822AE698 -> ppc_ringbuf_advance_get) says the GPU is done with it. Our fence completes when the walker
+// has read the commands, while the render thread may still be frames behind replaying them, so it could sample a set
+// already rewritten. While a movie plays, a fence wait now also waits until the render thread has read the textures of
+// every frame published so far (g_tex_done_serial >= g_pub_serial), off the guest turn, at most 50 ms.
+// LSWTCS_MOVIEFENCE=0 turns it off. [MOVIEFENCE] every 5 s: waits, how far behind the renderer was, the time waited.
+static void movie_fence_wait() {
+    static const bool on = [] { const char* e = getenv("LSWTCS_MOVIEFENCE"); return !(e && e[0] == '0'); }();
+    if (!on || t_async_walker || g_sched_id < 0) return;
+    const int64_t last = g_movieff_frame_ms.load(std::memory_order_relaxed);
+    if (!last || lswtcs_now_ms() - uint64_t(last) >= 1000) return;
+    static std::atomic<uint64_t> calls{0}, behind_sum{0}, behind_max{0}, behind2{0}, waited_us{0}, waited_max{0}, timeouts{0};
+    static std::atomic<int64_t> t_report{0};
+    const uint64_t need = g_pub_serial.load(), done = g_tex_done_serial.load();
+    ++calls;
+    const uint64_t behind = need > done ? need - done : 0;
+    behind_sum += behind;
+    if (behind >= 2) ++behind2;
+    for (uint64_t m = behind_max.load(); behind > m && !behind_max.compare_exchange_weak(m, behind);) {}
+    if (behind) {
+        const auto t0 = std::chrono::steady_clock::now();
+        GilYield y;
+        while (g_tex_done_serial.load() < need) {
+            if (std::chrono::steady_clock::now() - t0 >= std::chrono::milliseconds(50)) { ++timeouts; break; }
+            if (lsw_gpu_replay_request) lsw_gpu_replay_request();
+            std::this_thread::sleep_for(std::chrono::microseconds(200));
+        }
+        const uint64_t us = uint64_t(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - t0).count());
+        waited_us += us;
+        for (uint64_t m = waited_max.load(); us > m && !waited_max.compare_exchange_weak(m, us);) {}
+    }
+    const int64_t now = int64_t(lswtcs_now_ms());
+    int64_t tr = t_report.load();
+    if (!tr) t_report.compare_exchange_strong(tr, now);
+    else if (now - tr >= 5000 && t_report.compare_exchange_strong(tr, now)) {
+        const uint64_t c = calls.exchange(0);
+        printf("[MOVIEFENCE] 5 s: %llu fence waits in a movie, renderer behind %.2f frames avg (max %llu, 2+ in %llu), waited %.1f ms in all "
+               "(max %.1f), %llu timeouts\n", (unsigned long long)c, c ? double(behind_sum.exchange(0)) / c : 0.0, (unsigned long long)behind_max.exchange(0),
+               (unsigned long long)behind2.exchange(0), waited_us.exchange(0) / 1000.0, waited_max.exchange(0) / 1000.0, (unsigned long long)timeouts.exchange(0));
+        fflush(stdout);
+    }
+}
 static std::mutex g_movieff_mtx;
 static std::vector<MovieFFRef> g_movieff;
 static thread_local bool t_movieff_pull = false;
@@ -3439,7 +3571,7 @@ PPC_FUNC(sub_8285F7F8) {
     if (m && ctx.r3.u32 != 0 && ctx.r3.u32 != 0xA) return;
     if (m) {
         const uint32_t p = PPC_LOAD_U32(pptr), n = PPC_LOAD_U32(psize);
-        if (p && n && m->header.size() + n <= 4096) m->header.insert(m->header.end(), base + p, base + p + n);
+        if (p && n && m->header.size() + n <= 4096) m->header.insert(m->header.end(), lsw_host(p), lsw_host(p) + n);
     }
 }
 PPC_FUNC(sub_82873440) {
@@ -3475,7 +3607,7 @@ PPC_FUNC(sub_82873440) {
         t_movieff_pull = false;
         ret = c.r3.u32;
         const uint32_t p = PPC_LOAD_U32(pp), n = PPC_LOAD_U32(ps);
-        if (p && n && n <= 0x1000000u) m->frame.insert(m->frame.end(), base + p, base + p + n);
+        if (p && n && n <= 0x1000000u) m->frame.insert(m->frame.end(), lsw_host(p), lsw_host(p) + n);
         if (ret != 0) break;
     }
     int got = 0;
@@ -3520,7 +3652,7 @@ PPC_FUNC(sub_82872488) {
         static std::atomic<int> told{0};
         if (told.fetch_add(1) < 3) printf("[MOVIEFF] picture wanted as %08X: not handled, nothing written\n", fourcc);
     } else {
-        const int wrote = lsw_vc1_copy_planar(m->dec, base + dst, m->width, m->height, yv12 ? 1 : 0);
+        const int wrote = lsw_vc1_copy_planar(m->dec, lsw_host(dst), m->width, m->height, yv12 ? 1 : 0);
         const uint32_t o = m->outs++;
         if (o < 2) {
             printf("[MOVIEFF] picture out %u: handle %08X to %08X-%08X (%dx%d %s), thread %d, wrote %d\n", o, ctx.r3.u32, dst,

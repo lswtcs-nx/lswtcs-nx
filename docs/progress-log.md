@@ -5168,3 +5168,37 @@ which shows whether it removes the tearing and what it costs there.
 
 **Build `0.0.99-log130`:** NRO `f920bbc2…`, ELF kept privately, on the SD folder with `LSWTCS_TEXSNAP=m` in
 `env.txt`. Quick route: same game.
+
+## log131: decommitted virtual pages read as zero again (the movie's second play)
+
+If the title stays idle after the trailer, it plays again. In the emulator that second play crashed (log129): in the
+player's list of file blocks (`828454B0`, a node pointer that was data, at the same node `86420010` run after run) or on
+the main thread in a texture unlock (`822A6FE0`). The first also happened with the game's own decoder late in a first play.
+
+**What was found** (emulator, `tests/scripts/idle_title_movie_twice.txt`):
+- The node was already bad when the second stream began; no write reached it afterwards (a host thread polled it). The
+  list still pointed at memory of the first play.
+- When the movie ends, its video thread decommits 64 KB pages of the player's heaps (`NtFreeVirtualMemory`, MEM_DECOMMIT)
+  and releases whole reservations. The next play commits those pages again (`NtAllocateVirtualMemory` with a base) and,
+  as on the console, expects them zeroed. `NtFreeVirtualMemory` was a no-op, so they came back with the old bytes:
+  picture data and old list nodes.
+- Not the cause: the D3D device fields, the main thread's PCR and context (host threads polled both and saw no change).
+- Also noted, not changed: the "current thread" the game reads (`82533320`: PCR + 256 -> KPRCB + 332) is 0 on every
+  thread, since nothing sets KPRCB + 332. The player does not use it (D3D, the CRT and XAudio do).
+
+**The change** (`kernel_stubs.cpp`; `LSWTCS_VFREEZERO=0` restores the no-op): `NtFreeVirtualMemory` zeroes a decommitted
+or released range of the virtual heap (0x84000000-0x94000000). A release with size 0 (a whole reservation) is left as it
+is, since the bump allocator never hands a reservation out again.
+
+**Emulator** (seven runs with the change, `idle_title_movie_twice.txt`): the game takes one of two paths for the second
+play, by timing.
+- The same player plays again (its threads stay): this was the block-list crash. With the change it played through in
+  every such run, three plays in a row in one; that run crashed after the third play's end on the main thread in title
+  code (`822B4F40` from `82506A38`), not understood.
+- A new player is made (new threads after `82827058` tears the first down): two of the seven runs crashed as soon as it
+  started, on the main thread in a texture unlock (`822A6FE0`, a word read as picture bytes). Not fixed: the emulator
+  reports only the block's first instruction, and an attached GDB froze the run.
+- The log130 scheduler fix showed in these runs: `[SCHED] slot 13/14/15 ... not added again`, then back to the title.
+- Quick route: same game (one earlier attempt exited silently at replay 2977 with no invalid access, the emulator's own exit).
+
+**Build `0.0.99-log131`:** log130 with the change; the SD's `env.txt` keeps `LSWTCS_TEXSNAP=m` for the tearing test.

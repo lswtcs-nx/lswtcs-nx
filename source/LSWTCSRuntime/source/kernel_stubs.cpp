@@ -2324,7 +2324,23 @@ PPC_FUNC(__imp__NtAllocateVirtualMemory) {
     ctx.r3.u32 = 0;
 }
 
-PPC_FUNC(__imp__NtFreeVirtualMemory)       { PPC_FUNC_PROLOGUE(); ctx.r3.u32 = 0; }
+// log131: decommitted or released pages read as zero when the game commits them again, as on the console (this was a
+// no-op). The title movie's player decommits pages of its heaps when it ends and commits them again for the next play;
+// with the old bytes left there (picture data, old list nodes) the second play crashed in the emulator: in the player's
+// list of file blocks (828454B0) or on the main thread in a texture unlock (822A6FE0). With the pages zeroed, two
+// emulator runs played the movie two and three times. r3 = *BaseAddress, r4 = *RegionSize (0 with MEM_RELEASE: the
+// whole reservation, which this bump allocator never hands out again, so it is left), r5 = FreeType (MEM_DECOMMIT
+// 0x4000, MEM_RELEASE 0x8000). LSWTCS_VFREEZERO=0 restores the no-op.
+PPC_FUNC(__imp__NtFreeVirtualMemory) {
+    PPC_FUNC_PROLOGUE();
+    static const bool zero = [] { const char* e = getenv("LSWTCS_VFREEZERO"); return !(e && e[0] == '0'); }();
+    const uint32_t start = ctx.r3.u32 ? PPC_LOAD_U32(ctx.r3.u32) : 0u, size = ctx.r4.u32 ? PPC_LOAD_U32(ctx.r4.u32) : 0u;
+    if (zero && size && (ctx.r5.u32 & 0xC000u) && start >= 0x84000000u && uint64_t(start) + size <= 0x94000000ull) {
+        const uint32_t lo = start & ~0xFFFu, hi = (start + size + 0xFFFu) & ~0xFFFu;
+        lsw_guest::fill(lsw_host(lo), 0, hi - lo);
+    }
+    ctx.r3.u32 = 0;
+}
 
 PPC_FUNC(__imp__NtQueryVirtualMemory) {
     PPC_FUNC_PROLOGUE();

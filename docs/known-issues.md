@@ -26,15 +26,14 @@ correctly.
 - **Still open:**
   - Tearing on the console (run 123). `LSWTCS_TEXSNAP=m` (log130, off by default) copies the textures at each
     interrupt while a movie plays; on test.
-  - In the emulator, when the title stays idle and the movie plays a second time, the game crashes: in the player's list
-    of file blocks (`828454B0`, a bad node pointer; the same address run after run), or on the main thread in a texture
-    unlock (`822A6FE0`, r13 + 256 reading picture bytes). The first also happened with the game's own decoder, late in
-    a first play; the second is not separated (the game's decoder never reached a second play in the emulator).
+  - The movie's second play (the title left idle again) in the emulator: when the same player plays again it now works
+    (log131: decommitted pages read as zero again); when a new player is made, the game still crashed as it started in
+    two of seven runs (main thread, texture unlock `822A6FE0`). Not seen on the console yet.
   - The render thread spent about 44 ms a frame on the movie's planes on the console (run 122); in the emulator the game
     now shows about 19 of the trailer's 30 frames a second.
   - The skip cannot work while the main thread waits inside the player, because nothing polls the pad.
 
-Evidence: [progress-log.md](progress-log.md), "Run 85" to "Log 88", "log127", "Run 122", "log129", "Run 123" and "log130", and
+Evidence: [progress-log.md](progress-log.md), "Run 85" to "Log 88", "log127", "Run 122", "log129", "Run 123", "log130" and "log131", and
 [history/2026-11-01-handoff/ISSUES.md](history/2026-11-01-handoff/ISSUES.md), issue 3.
 
 ## Heavy scenes on handheld run at about 30 FPS

@@ -30,13 +30,13 @@ correctly.
   - The movie's second play (the title left idle again): when the same player plays again it works (log131; on the
     console in run 125). When the game makes a new player, its memory no longer fits (the game keeps its earlier heap
     segments, and here a reservation costs real memory): since log137 the player fails and the screen stays black, the
-    game still running; restart the app. Experiments that give it room (log134-136, `LSWTCS_VEXT`, `LSWTCS_VEXTRA`) are
+    game still running; a button press goes on (run 128: the game then started and `Gungan_A` loaded). Experiments that give it room (log134-136, `LSWTCS_VEXT`, `LSWTCS_VEXTRA`) are
     off by default: they broke on the console (run 127) or froze in the emulator.
   - The render thread spent about 44 ms a frame on the movie's planes on the console (run 122); in the emulator the game
     now shows about 19 of the trailer's 30 frames a second.
   - The skip cannot work while the main thread waits inside the player, because nothing polls the pad.
 
-Evidence: [progress-log.md](progress-log.md), "Run 85" to "Log 88", "log127", "Run 122", "log129", "Run 123", "log130", "log131", "Run 124", "log132", "Run 125", "log133", "Run 126", "log134", "log135", "Run 127", "log136" and "log137", and
+Evidence: [progress-log.md](progress-log.md), "Run 85" to "Log 88", "log127", "Run 122", "log129", "Run 123", "log130", "log131", "Run 124", "log132", "Run 125", "log133", "Run 126", "log134", "log135", "Run 127", "log136", "log137" and "Run 128", and
 [history/2026-11-01-handoff/ISSUES.md](history/2026-11-01-handoff/ISSUES.md), issue 3.
 
 ## Heavy scenes on handheld run at about 30 FPS

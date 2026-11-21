@@ -96,8 +96,8 @@ play they keep the Xbox 360 positions: the bottom button (B on the Switch) jumps
 
 ## Known issues
 
-- **The movie that plays when the title screen is left idle** can show corruption and hang at its end. Avoid leaving
-  the title screen idle.
+- **The movie that plays when the title screen is left idle** can stay black when it plays a second time and the game
+  starts a new movie player. The game keeps running: press a button to go on.
 
 The full list, with the technical detail for contributors, is in [docs/known-issues.md](docs/known-issues.md).
 

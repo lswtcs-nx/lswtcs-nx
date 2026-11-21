@@ -3,7 +3,7 @@
 What changes for players in each release. The engineering record behind every change is in
 [docs/progress-log.md](docs/progress-log.md).
 
-## Unreleased
+## v0.5.0 (21 November 2026)
 
 **Title movie**
 - The movie that plays when the title screen is left idle now plays at full speed with a clean picture: its video is
@@ -12,9 +12,14 @@ What changes for players in each release. The engineering record behind every ch
   when the movie ends instead of hanging on a black screen. `LSWTCS_MOVIEFF=0` in `env.txt` brings back the game's
   decoder.
 
+**Performance**
+- The thread that reads the GPU's command stream does less work per frame (about 13 % less CPU time in the test
+  session); no change in frame rate was measured.
+
 **Known issues**
-- Leaving the title screen idle until the movie plays a second time can leave a black screen when the game starts a
-  new movie player (the game keeps running; restart the app). When it reuses the same player it plays fine.
+- Leaving the title screen idle until the movie plays a second time can leave the movie screen black when the game
+  starts a new movie player. The game keeps running: press a button to go on. When it reuses the same player the movie
+  plays fine.
 
 ## v0.4.0 (18 November 2026)
 

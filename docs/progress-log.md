@@ -5377,3 +5377,14 @@ second play through a new player: its 6.6 MB block is refused, the player fails 
 game still running (known issue).
 
 **Build `0.0.99-log137`.**
+
+## Run 128: log137, the release candidate, on the console (handheld, 21 November 2026)
+
+One session (`run128-log137`, 307 s): the title screen left idle (the movie), then `Gungan_A` and `Gungan_B`.
+
+- The tester: nothing wrong seen.
+- The movie played through and the game returned to the title. The second play made a new player whose 6.6 MB block was
+  refused (`[VHEAP] OUT OF MEMORY ... lr 822A1D70`); the player failed at once (the known issue). The game kept
+  responding: the next button presses started the game and `Gungan_A` loaded normally.
+- No crash, no other out-of-memory line, no scheduler stall. Heavy frames as before (`[GLSPAN]` p50 16.6 ms swap to swap).
+- log137 goes out as v0.5.0.

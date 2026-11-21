@@ -2292,14 +2292,16 @@ PPC_FUNC(__imp__KeTlsSetValue) {
 // was overwritten with picture bytes (0x11) and the emulator crashed in sub_82533320. A reservation the game releases
 // (MEM_RELEASE at its start) now goes on a free list; a new reservation takes the first free range that fits, zeroed.
 // The player also keeps heaps it never releases (about 30 MB a player), so once the 64 MB below 0x88000000 are used,
-// reservations come from the physical allocator, which keeps its blocks apart (as on the console, virtual and physical
-// memory share the 512 MB). LSWTCS_VREUSE=0 restores the plain bump allocator.
+// reservations come from the 11.6 MB between the executable image's end and 0x84000000 (log134; the physical
+// allocator no longer hands that memory out). log132 took them from the physical allocator instead, but those blocks
+// lie below 0x82000000 in the 0x80 view, and the game's heap (sub_8229FBE0, a runtime patch) only unlinks free-list
+// nodes inside 0x82000000-0x94000000: its lists broke and a new player crashed (emulator, log133).
+// LSWTCS_VREUSE=0 restores the plain bump allocator.
 static std::mutex g_vheap_mtx;
 static std::map<uint32_t, uint32_t> g_vres;    // live reservations from the bump/free list: start -> size
 static std::map<uint32_t, uint32_t> g_vfree;   // released ranges: start -> size
-static uint32_t g_phys_alloc(uint32_t raw_size);
-static void g_phys_free_block(uint32_t addr);
-static std::map<uint32_t, uint32_t> g_vphys;   // reservations taken from the physical allocator: start -> block
+static uint32_t vheap_extra_lo();   // the executable image's end in the 0x80 view (defined with PPC_IMAGE_SIZE_RT)
+static std::map<uint32_t, uint32_t> g_vextra;   // the range after the image, used once the bump allocator is full
 static bool vheap_in_reservation(uint32_t a) {
     std::lock_guard<std::mutex> lk(g_vheap_mtx);
     auto it = g_vres.upper_bound(a);
@@ -2359,15 +2361,20 @@ PPC_FUNC(__imp__NtAllocateVirtualMemory) {
             if (reused) g_vres[reused] = region_size;
         }
         if (!reused && vreuse_on() && uint64_t(guest_heap) + region_size > 0x88000000ull) {
-            const uint32_t blk = g_phys_alloc(region_size + 0x10000u);   // zeroed; aligned to 64 KB below
-            if (blk) {
-                reused = ((blk + 0xFFFFu) & ~0xFFFFu) & 0x9FFFFFFFu;   // the 0x80 view: below 0xA0000000, as virtual memory is
-                std::lock_guard<std::mutex> lk(g_vheap_mtx);
-                g_vres[reused] = region_size;
-                g_vphys[reused] = blk;
-                static int told = 0;
-                if (told++ < 4) { printf("[VHEAP] reservation of %u KB from the physical allocator at %08X\n", region_size >> 10, reused); fflush(stdout); }
+            std::lock_guard<std::mutex> lk(g_vheap_mtx);
+            static bool seeded = false;
+            if (!seeded) { seeded = true; const uint32_t lo = vheap_extra_lo(); if (lo < 0x84000000u) g_vextra[lo] = 0x84000000u - lo; }
+            for (auto it = g_vextra.begin(); it != g_vextra.end(); ++it) {
+                if (it->second < region_size) continue;
+                const uint32_t a = it->first, left = it->second - region_size;
+                g_vextra.erase(it);
+                if (left) g_vextra[a + region_size] = left;
+                reused = a;
+                g_vres[a] = region_size;
+                break;
             }
+            static int told = 0;
+            if (reused && told++ < 4) { printf("[VHEAP] reservation of %u KB after the image at %08X\n", region_size >> 10, reused); fflush(stdout); }
         }
         if (!reused && vreuse_on() && uint64_t(guest_heap) + region_size > 0x88000000ull) {
             // Past 0x88000000 lie the main thread's PCR and the game's own physical arena: refuse instead.
@@ -2421,11 +2428,7 @@ PPC_FUNC(__imp__NtFreeVirtualMemory) {
     if (vreuse_on() && (ctx.r5.u32 & 0x8000u) && start) {
         std::lock_guard<std::mutex> lk(g_vheap_mtx);
         auto it = g_vres.find(start);
-        if (it != g_vres.end()) {
-            auto ph = g_vphys.find(start);
-            if (ph != g_vphys.end()) { g_phys_free_block(ph->second); g_vphys.erase(ph); g_vres.erase(it); }   // other mutex
-            else { vheap_release(it->first, it->second); g_vres.erase(it); }
-        }
+        if (it != g_vres.end()) { vheap_release(it->first, it->second); g_vres.erase(it); }
     }
     ctx.r3.u32 = 0;
 }
@@ -2452,6 +2455,7 @@ PPC_FUNC(__imp__NtQueryVirtualMemory) {
 // ~0xA0214000, plus additional pool/thread buffers. 0xC0000000 is safe (896 MB space).
 // Returns 0 for allocations too large to fit — callers handle 0 gracefully.
 static const uint32_t PPC_IMAGE_SIZE_RT = 0x1460000u;   // image.bin at VA 0x82000000 (= main.cpp PPC_IMAGE_SIZE)
+static uint32_t vheap_extra_lo() { return 0x82000000u + ((PPC_IMAGE_SIZE_RT + 0xFFFFu) & ~0xFFFFu); }
 static uint32_t   g_phys_bump = 0x88000000u;
 static std::mutex g_phys_mutex;
 // Freed blocks are recycled by exact size (MmFreePhysicalMemory used to be a no-op: the game's
@@ -2490,8 +2494,9 @@ static uint32_t g_phys_alloc(uint32_t raw_size) {
     // 0xA2000000: never hand those pages out.
     const uint32_t img_lo = 0xA2000000u, img_hi = 0xA2000000u + ((PPC_IMAGE_SIZE_RT + 0xFFFFu) & ~0xFFFFu);
     if (addr < img_hi && addr + size > img_lo) addr = img_hi;
-    // log132: 0xA4000000-0xA8000000 is the same memory as the virtual heap (0x84000000-0x88000000): stop below it.
-    const uint32_t phys_top = vreuse_on() ? 0xA4000000u : 0xA8000000u;
+    // log132/log134: 0xA2000000 + image .. 0xA8000000 is the same memory as the range after the image and the virtual
+    // heap (0x83460000-0x88000000): stop at the image.
+    const uint32_t phys_top = vreuse_on() ? img_lo : 0xA8000000u;
     if (addr + size > phys_top) {
         static int n = 0; if (n++ < 8) { printf("[PHYS] OUT OF MEMORY: 0x%X bytes requested, bump=0x%08X\n", size, g_phys_bump); fflush(stdout); }
         return 0;

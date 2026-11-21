@@ -5287,3 +5287,28 @@ One session (`run126-log133`).
   log132's new-player path are still unseen on the console.
 - So the tearing was the player rewriting a texture set the render thread had not yet read. `LSWTCS_MOVIEFENCELAG=1`
   stays the default; the remaining cost is about 8 % of the movie's time against run 123.
+
+## log134: a new player's heap stays inside the range the heap patch accepts
+
+The rare crash of a new title-movie player (emulator, log133, `tests/scripts/idle_title_movie_twice.txt`), located from
+the Ryujinx log's host stack (addr2line on `private/lswtcs-log133.elf`):
+- On a new player's thread, in the game's heap (`8229FBE0` from `822A0A80`, under the player's allocation `82533258`),
+  at a garbage address, right after `[VHEAP] OUT OF MEMORY: reservation of 16384 KB refused (lr 822A0BB0)`.
+- The refusal itself is handled: the heap halves the size and asks again (`822A0BB8`). The 8 MB it then got came from
+  log132's fallback, the physical allocator, at 0x816xxxxx (the 0x80 view). The runtime's patch in `8229FBE0` only
+  unlinks free-list nodes whose links lie inside 0x82000000-0x94000000, so the heap skipped the unlink, its lists broke,
+  and a later allocation followed a bad link.
+- Also found: the game's 370 MB physical block is a constant in the image (0x17200000 at 0x82E84904, read by
+  `8229DDB0`), not computed from free memory.
+
+**The change** (`kernel_stubs.cpp`, under `LSWTCS_VREUSE`): once the bump allocator's 64 MB are used, reservations come
+from the 11.6 MB between the executable image's end and 0x84000000 (inside the patch's range) instead of the physical
+allocator, and the physical allocator now stops at the image (0xA2000000), since that range is the same memory.
+
+**Emulator:** four runs of `idle_title_movie_twice.txt`, all through a new player: three played the movie three times
+with no crash. In the fourth, the game made a third and a fourth player whose threads exited at once, and the main thread
+then crashed in the player (`82814098`, a garbage pointer): the next limit. Each new player keeps about 30 MB of heaps
+(its growable heap reserves 16 MB, then 24 MB), and here a reservation takes real memory at once, while on the console it
+is address space until pages are committed. Quick and full routes: same game, no out-of-memory line.
+
+**Build `0.0.99-log134`.**

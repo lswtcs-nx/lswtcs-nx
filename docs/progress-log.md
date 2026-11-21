@@ -5353,7 +5353,7 @@ One session (`run127-log135`), title screen only (no level was loaded).
   main thread's stack grows down from 0x835FFFF0 (`main.cpp`), so zeroing the block wiped it, and the player failed at
   once (all four threads started and exited in the same millisecond).
 - The third player needed log135's reservation range: the fifth 1 MB mapping made at run time failed
-  (`guest map ... FAILED rc=0xCE01`, the kernel out of a resource; the emulator has no such limit), its reservation was
+  (`guest map ... FAILED rc=0xCE01`, the kernel out of a resource; the emulator runs never needed more than four chunks, so whether it has the same limit is not known), its reservation was
   refused, and it failed too. From then on the title tried to start the movie again every 4 s (`[LOADEP]` #25-#43, 0.1 MB
   each) and never did: the black screen. The game itself kept running (frames presented, pad presses logged).
 

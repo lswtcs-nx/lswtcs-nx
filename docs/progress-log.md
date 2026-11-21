@@ -5251,3 +5251,25 @@ console speed are not measured yet.
   on every thread; no effect on the crash, left unset).
 
 **Build `0.0.99-log132`.**
+
+## Run 125: log132 on the console (handheld, 20 November 2026)
+
+One session (`run125-log132`).
+
+- The tester: **the movie's tearing is gone.**
+- The movie played twice (the title left idle; the same player played again, so the new-player path of log132's heap
+  fix did not come up; no `[VHEAP]` line). After the end the game went on normally; no crash.
+- FFmpeg stayed at 13-14 ms a frame. But the movie ran slower: about 102 s a play for 1,800 frames (about 18 frames a
+  second), against 68 s in run 123 (about 26). `[MOVIEFENCE]`: about 330 fence waits per 5 s, 3.1 s of every 5 s spent
+  waiting, about 35 of them at the 50 ms cap; the renderer was 0.27 frames behind on average (max 1, once 2). The render
+  thread then waited for the game's next swap while the game waited in the fence.
+
+## log133: the movie fence allows the renderer one frame of lag
+
+`LSWTCS_MOVIEFENCELAG` (default 1): a fence wait during a movie now waits only until the renderer is at most that many
+published frames behind (0 = log132). The player rotates three texture sets and rewrites the oldest, so one frame of lag
+should still keep it off a set being read, while the waits that made the movie slow (the renderer exactly one frame
+behind) end at once. Whether the tearing stays away is for the console to show. Emulator: the movie plays to the end and
+the game goes on; quick route same game.
+
+**Build `0.0.99-log133`.**

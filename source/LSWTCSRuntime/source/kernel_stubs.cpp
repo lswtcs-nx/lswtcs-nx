@@ -3490,13 +3490,19 @@ static void movie_fence_wait() {
     if (!last || lswtcs_now_ms() - uint64_t(last) >= 1000) return;
     static std::atomic<uint64_t> calls{0}, behind_sum{0}, behind_max{0}, behind2{0}, waited_us{0}, waited_max{0}, timeouts{0};
     static std::atomic<int64_t> t_report{0};
-    const uint64_t need = g_pub_serial.load(), done = g_tex_done_serial.load();
+    // log133: the renderer may stay this many published frames behind (LSWTCS_MOVIEFENCELAG, default 1). The player rotates
+    // three texture sets and rewrites the oldest; waiting for every published frame (lag 0, log132) removed the tearing
+    // on the console (run 125) but cut the movie to about 18 frames a second, since the render thread then waited for
+    // the game's next swap while the game waited in the fence, until the 50 ms cap.
+    static const uint64_t lag = [] { const char* e = getenv("LSWTCS_MOVIEFENCELAG"); return e ? uint64_t(strtoul(e, nullptr, 10)) : 1ull; }();
+    const uint64_t pub = g_pub_serial.load(), done = g_tex_done_serial.load();
+    const uint64_t need = pub > lag ? pub - lag : 0;
     ++calls;
-    const uint64_t behind = need > done ? need - done : 0;
+    const uint64_t behind = pub > done ? pub - done : 0;   // the renderer's lag, reported as before
     behind_sum += behind;
     if (behind >= 2) ++behind2;
     for (uint64_t m = behind_max.load(); behind > m && !behind_max.compare_exchange_weak(m, behind);) {}
-    if (behind) {
+    if (done < need) {
         const auto t0 = std::chrono::steady_clock::now();
         GilYield y;
         while (g_tex_done_serial.load() < need) {

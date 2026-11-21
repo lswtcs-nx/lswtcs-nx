@@ -5342,3 +5342,38 @@ in the emulator (`tests/scripts/idle_title_movie_twice.txt`, 600 s runs):
 1-2 MB mapped (the heap's 16 MB reservation: 0 MB mapped). Quick and full routes: same game, no out-of-memory line.
 
 **Build `0.0.99-log135`.**
+
+## Run 127: log135 on the console (handheld, 21 November 2026)
+
+One session (`run127-log135`), title screen only (no level was loaded).
+
+- The tester: the game did not load; the screen stayed black.
+- The first movie played as in run 126 (75.5 s, the fence as before).
+- The second play made a new player whose 6.6 MB block came from log134's range after the image, at 0x83460000: the
+  main thread's stack grows down from 0x835FFFF0 (`main.cpp`), so zeroing the block wiped it, and the player failed at
+  once (all four threads started and exited in the same millisecond).
+- The third player needed log135's reservation range: the fifth 1 MB mapping made at run time failed
+  (`guest map ... FAILED rc=0xCE01`, the kernel out of a resource; the emulator has no such limit), its reservation was
+  refused, and it failed too. From then on the title tried to start the movie again every 4 s (`[LOADEP]` #25-#43, 0.1 MB
+  each) and never did: the black screen. The game itself kept running (frames presented, pad presses logged).
+
+## log136: the range after the image starts above the stack; the reservation range is mapped at once
+
+`vheap_extra_lo()` now starts at 0x83600000, above the main stack, and log135's range is mapped as one 64 MB mapping at
+its first use. Emulator: the second player's block landed at 0x83600000 and the player started, but the game froze
+right after (two runs; a stall dump showed the new video thread in the player's file-block code, `828470F8`, and every
+other thread waiting for the turn). Not understood; log136 was not staged.
+
+## log137: release candidate
+
+The memory paths that the console has not run are off by default: log135's reservation range (`LSWTCS_VEXT=1` turns it
+on) and log134's range after the stack (`LSWTCS_VEXTRA=1`); released ranges are not reused (log135). What stays: the
+movie (FFmpeg, the fence with one frame of lag), decommitted pages read as zero (log131), the virtual heap refusing
+instead of running into the main thread's PCR and the game's physical block (log132), the physical allocator stopping
+at the image (so it never hands out the main stack), and the widened pointer checks (they only accept more addresses).
+
+Emulator: quick and full routes same game, no out-of-memory line; the movie plays to its end and the game goes on. A
+second play through a new player: its 6.6 MB block is refused, the player fails at once and the screen stays black, the
+game still running (known issue).
+
+**Build `0.0.99-log137`.**

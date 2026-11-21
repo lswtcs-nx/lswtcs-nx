@@ -3,6 +3,19 @@
 What changes for players in each release. The engineering record behind every change is in
 [docs/progress-log.md](docs/progress-log.md).
 
+## Unreleased
+
+**Title movie**
+- The movie that plays when the title screen is left idle now plays at full speed with a clean picture: its video is
+  decoded with FFmpeg's WMV3/VC-1 decoder instead of the game's own, which ran at about a third of real time. The
+  tearing is gone (the game now waits for the renderer before reusing a picture), and the game returns to the title
+  when the movie ends instead of hanging on a black screen. `LSWTCS_MOVIEFF=0` in `env.txt` brings back the game's
+  decoder.
+
+**Known issues**
+- Leaving the title screen idle until the movie plays a second time can leave a black screen when the game starts a
+  new movie player (the game keeps running; restart the app). When it reuses the same player it plays fine.
+
 ## v0.4.0 (18 November 2026)
 
 **Performance**

@@ -2293,7 +2293,7 @@ PPC_FUNC(__imp__KeTlsSetValue) {
 // was overwritten with picture bytes (0x11) and the emulator crashed in sub_82533320. A reservation the game releases
 // (MEM_RELEASE at its start) now goes on a free list; a new reservation takes the first free range that fits, zeroed.
 // The player also keeps heaps it never releases (about 30 MB a player), so once the 64 MB below 0x88000000 are used,
-// reservations come from the 11.6 MB between the executable image's end and 0x84000000 (log134; the physical
+// reservations come from the 10 MB between the main thread's stack (0x83600000) and 0x84000000 (log134; the physical
 // allocator no longer hands that memory out). log132 took them from the physical allocator instead, but those blocks
 // lie below 0x82000000 in the 0x80 view, and the game's heap (sub_8229FBE0, a runtime patch) only unlinks free-list
 // nodes inside 0x82000000-0x94000000: its lists broke and a new player crashed (emulator, log133).
@@ -2303,30 +2303,34 @@ static std::map<uint32_t, uint32_t> g_vres;    // live reservations from the bum
 static std::map<uint32_t, uint32_t> g_vfree;   // released ranges: start -> size
 static uint32_t vheap_extra_lo();   // the executable image's end in the 0x80 view (defined with PPC_IMAGE_SIZE_RT)
 static std::map<uint32_t, uint32_t> g_vextra;   // the range after the image, used once the bump allocator is full
-// into the guest window in 1 MB chunks only when the game commits pages there (lsw_switch_guest_map), as a console
-// reservation is address space until committed. Chunks stay mapped once made (at most 192 MB); released address space
-// is handed out again. LSWTCS_VEXT=0 turns it off (the reservation is refused, as in log134).
+// log135: reservations past both: address space at LSW_VEXT_LO (lsw_guest_ptr.h). log136: the console allows only a few
+// mappings made at run time (run 127: the fifth 1 MB chunk failed, rc 0xCE01), so the range's first 64 MB are mapped at
+// once, at the first such reservation (lsw_switch_guest_map); play that never needs it pays nothing. Never-used address
+// space goes first, released space only once the 64 MB were all used (the oldest first). LSWTCS_VEXT=0 turns it off
+// (the reservation is refused, as in log134).
 extern "C" int lsw_switch_guest_map(uint32_t guest, uint32_t size) __attribute__((weak));
 static std::map<uint32_t, uint32_t> g_vext_free;   // released address space in the range, reused only once it is full
 static uint32_t g_vext_next = LSW_VEXT_LO;           // never-used address space starts here
+static constexpr uint32_t kVextPool = 64u << 20;     // log136: mapped at once
+static int g_vext_pool = 0;                          // 0 not tried, 1 mapped, -1 failed
 static uint8_t g_vext_mapped[(LSW_VEXT_HI - LSW_VEXT_LO) >> 20];
 static uint32_t g_vext_mapped_mb = 0;
 static bool vext_on() {
-    static const bool on = [] { const char* e = getenv("LSWTCS_VEXT"); return !(e && e[0] == '0'); }();
+    // log137: off by default (LSWTCS_VEXT=1 turns it on). The emulator froze when a second movie player started with it
+    // (log136), and the console has not run it.
+    static const bool on = [] { const char* e = getenv("LSWTCS_VEXT"); return e && e[0] == '1'; }();
     return on && lsw_switch_guest_map;
 }
-static bool vext_map(uint32_t a, uint32_t size) {   // under g_vheap_mtx
-    for (uint32_t c = (a - LSW_VEXT_LO) >> 20, e = (a + size - 1 - LSW_VEXT_LO) >> 20; c <= e; ++c) {
-        if (g_vext_mapped[c]) continue;
-        if (g_vext_mapped_mb >= 192 || !lsw_switch_guest_map(LSW_VEXT_LO + (c << 20), 1u << 20)) {
-            static int told = 0;
-            if (told++ < 4) { printf("[VEXT] cannot map the chunk at %08X (%u MB mapped)\n", LSW_VEXT_LO + (c << 20), g_vext_mapped_mb); fflush(stdout); }
-            return false;
-        }
-        g_vext_mapped[c] = 1;
-        ++g_vext_mapped_mb;
+static bool vext_pool() {   // under g_vheap_mtx
+    if (!g_vext_pool) {
+        g_vext_pool = lsw_switch_guest_map(LSW_VEXT_LO, kVextPool) ? 1 : -1;
+        if (g_vext_pool > 0) { for (uint32_t c = 0; c < (kVextPool >> 20); ++c) g_vext_mapped[c] = 1; g_vext_mapped_mb = kVextPool >> 20; }
+        printf("[VEXT] %s the range's %u MB at %08X\n", g_vext_pool > 0 ? "mapped" : "cannot map", kVextPool >> 20, LSW_VEXT_LO); fflush(stdout);
     }
-    return true;
+    return g_vext_pool > 0;
+}
+static bool vext_map(uint32_t a, uint32_t size) {   // under g_vheap_mtx
+    return vext_pool() && uint64_t(a) + size <= uint64_t(LSW_VEXT_LO) + kVextPool;
 }
 static void vext_zero(uint32_t a, uint32_t size) {   // zero the mapped parts only; unmapped chunks read as zero when mapped
     for (uint32_t c = (a - LSW_VEXT_LO) >> 20, e = (a + size - 1 - LSW_VEXT_LO) >> 20; c <= e; ++c) {
@@ -2430,7 +2434,9 @@ PPC_FUNC(__imp__NtAllocateVirtualMemory) {
             if (reuse_free) reused = vheap_take_free(region_size);
             if (reused) g_vres[reused] = region_size;
         }
-        if (!reused && vreuse_on() && uint64_t(guest_heap) + region_size > 0x88000000ull) {
+        // log137: off by default (LSWTCS_VEXTRA=1): log134/log135 handed out the main thread's stack from it (run 127).
+        static const bool vextra = [] { const char* e = getenv("LSWTCS_VEXTRA"); return e && e[0] == '1'; }();
+        if (!reused && vreuse_on() && vextra && uint64_t(guest_heap) + region_size > 0x88000000ull) {
             std::lock_guard<std::mutex> lk(g_vheap_mtx);
             static bool seeded = false;
             if (!seeded) { seeded = true; const uint32_t lo = vheap_extra_lo(); if (lo < 0x84000000u) g_vextra[lo] = 0x84000000u - lo; }
@@ -2449,7 +2455,8 @@ PPC_FUNC(__imp__NtAllocateVirtualMemory) {
         if (!reused && vreuse_on() && vext_on() && uint64_t(guest_heap) + region_size > 0x88000000ull) {
             std::lock_guard<std::mutex> lk(g_vheap_mtx);
             uint32_t a = 0;
-            if (uint64_t(g_vext_next) + region_size <= LSW_VEXT_HI) { a = g_vext_next; g_vext_next += region_size; }
+            if (!vext_pool()) {}
+            else if (uint64_t(g_vext_next) + region_size <= uint64_t(LSW_VEXT_LO) + kVextPool) { a = g_vext_next; g_vext_next += region_size; }
             else {
                 for (auto it = g_vext_free.begin(); it != g_vext_free.end(); ++it) {
                     if (it->second < region_size) continue;
@@ -2549,7 +2556,12 @@ PPC_FUNC(__imp__NtQueryVirtualMemory) {
 // ~0xA0214000, plus additional pool/thread buffers. 0xC0000000 is safe (896 MB space).
 // Returns 0 for allocations too large to fit — callers handle 0 gracefully.
 static const uint32_t PPC_IMAGE_SIZE_RT = 0x1460000u;   // image.bin at VA 0x82000000 (= main.cpp PPC_IMAGE_SIZE)
-static uint32_t vheap_extra_lo() { return 0x82000000u + ((PPC_IMAGE_SIZE_RT + 0xFFFFu) & ~0xFFFFu); }
+// log136: not from the image's end: the main thread's stack grows down from 0x835FFFF0 (main.cpp), so log134/log135
+// handed out the stack (run 127: a 6.6 MB player block at 0x83460000, zeroed, and the player failed at once).
+static uint32_t vheap_extra_lo() {
+    const uint32_t img_end = 0x82000000u + ((PPC_IMAGE_SIZE_RT + 0xFFFFu) & ~0xFFFFu);
+    return img_end > 0x83600000u ? img_end : 0x83600000u;
+}
 static uint32_t   g_phys_bump = 0x88000000u;
 static std::mutex g_phys_mutex;
 // Freed blocks are recycled by exact size (MmFreePhysicalMemory used to be a no-op: the game's

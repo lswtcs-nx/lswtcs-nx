@@ -27,18 +27,16 @@ correctly.
     movie's fence waits also wait until the renderer is at most one frame behind (`LSWTCS_MOVIEFENCE`,
     `LSWTCS_MOVIEFENCELAG`). On the console (run 126): no tearing, the 61 s trailer in 73.5 s (68 s before).
 - **Still open:**
-  - The movie's second play (the title left idle again) in the emulator: when the same player plays again it now works
-    (log131: decommitted pages read as zero again). When a new player is made, the virtual heap used to run into the
-    main thread's PCR and the game's physical memory (main-thread crash in every such run); log132 reuses released
-    reservations and keeps the heap off physical memory (`LSWTCS_VREUSE`). log134 fixed the next crash (the heap's
-    lists broke on a segment below 0x82000000). log135 gives reservations past the 512 MB memory only when committed
-    (`LSWTCS_VEXT`) and stops reusing released ranges: in the emulator, no crash in 10 runs, 7 of them with three new
-    players. Not seen on the console yet.
+  - The movie's second play (the title left idle again): when the same player plays again it works (log131; on the
+    console in run 125). When the game makes a new player, its memory no longer fits (the game keeps its earlier heap
+    segments, and here a reservation costs real memory): since log137 the player fails and the screen stays black, the
+    game still running; restart the app. Experiments that give it room (log134-136, `LSWTCS_VEXT`, `LSWTCS_VEXTRA`) are
+    off by default: they broke on the console (run 127) or froze in the emulator.
   - The render thread spent about 44 ms a frame on the movie's planes on the console (run 122); in the emulator the game
     now shows about 19 of the trailer's 30 frames a second.
   - The skip cannot work while the main thread waits inside the player, because nothing polls the pad.
 
-Evidence: [progress-log.md](progress-log.md), "Run 85" to "Log 88", "log127", "Run 122", "log129", "Run 123", "log130", "log131", "Run 124", "log132", "Run 125", "log133", "Run 126", "log134" and "log135", and
+Evidence: [progress-log.md](progress-log.md), "Run 85" to "Log 88", "log127", "Run 122", "log129", "Run 123", "log130", "log131", "Run 124", "log132", "Run 125", "log133", "Run 126", "log134", "log135", "Run 127", "log136" and "log137", and
 [history/2026-11-01-handoff/ISSUES.md](history/2026-11-01-handoff/ISSUES.md), issue 3.
 
 ## Heavy scenes on handheld run at about 30 FPS

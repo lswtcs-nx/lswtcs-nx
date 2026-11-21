@@ -23,12 +23,10 @@ correctly.
   - The black screen at the end (run 123): the scheduler gave the turn to the player's exited demux thread, which a
     resume had put back in the rotation. Fixed in log130 (exited threads stay out; a stall watchdog); confirmed on the
     console in run 124.
+  - Tearing (run 123): the player rewrote a texture set the render thread had not yet read. Since log132/log133 the
+    movie's fence waits also wait until the renderer is at most one frame behind (`LSWTCS_MOVIEFENCE`,
+    `LSWTCS_MOVIEFENCELAG`). On the console (run 126): no tearing, the 61 s trailer in 73.5 s (68 s before).
 - **Still open:**
-  - Tearing on the console (run 123). `LSWTCS_TEXSNAP=m` (log130, off by default), texture copies at each interrupt
-    while a movie plays, cut the movie to about 6 frames a second on the console (run 124), so it is not the fix. log132
-    makes the movie's fence waits also wait for the render thread (`LSWTCS_MOVIEFENCE`): on the console (run 125) the
-    tearing was gone, but the movie ran at about 18 frames a second (26 in run 123). log133 lets the renderer be one
-    frame behind (`LSWTCS_MOVIEFENCELAG`); not yet seen on the console.
   - The movie's second play (the title left idle again) in the emulator: when the same player plays again it now works
     (log131: decommitted pages read as zero again). When a new player is made, the virtual heap used to run into the
     main thread's PCR and the game's physical memory (main-thread crash in every such run); log132 reuses released
@@ -39,7 +37,7 @@ correctly.
     now shows about 19 of the trailer's 30 frames a second.
   - The skip cannot work while the main thread waits inside the player, because nothing polls the pad.
 
-Evidence: [progress-log.md](progress-log.md), "Run 85" to "Log 88", "log127", "Run 122", "log129", "Run 123", "log130", "log131", "Run 124", "log132", "Run 125" and "log133", and
+Evidence: [progress-log.md](progress-log.md), "Run 85" to "Log 88", "log127", "Run 122", "log129", "Run 123", "log130", "log131", "Run 124", "log132", "Run 125", "log133" and "Run 126", and
 [history/2026-11-01-handoff/ISSUES.md](history/2026-11-01-handoff/ISSUES.md), issue 3.
 
 ## Heavy scenes on handheld run at about 30 FPS

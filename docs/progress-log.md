@@ -5273,3 +5273,17 @@ behind) end at once. Whether the tearing stays away is for the console to show. 
 the game goes on; quick route same game.
 
 **Build `0.0.99-log133`.**
+
+## Run 126: log133 on the console (handheld, 20 November 2026)
+
+One session (`run126-log133`).
+
+- The tester: **no tearing**, as in run 125.
+- Speed is back near real time: the player ran 73.5 s for the 61 s trailer (run 125: 102 s; run 123, with tearing:
+  68 s). FFmpeg decoded all 1,800 frames. `[MOVIEFENCE]`: about 1.3 s of every 5 s spent waiting (run 125: 3.1 s), 19
+  waits at the 50 ms cap over the whole movie (run 125: about 35 every 5 s); the renderer was 0.7-0.9 frames behind on
+  average (max 2).
+- The game went on after the movie; no crash. The movie did not play a second time in this session, so the replay and
+  log132's new-player path are still unseen on the console.
+- So the tearing was the player rewriting a texture set the render thread had not yet read. `LSWTCS_MOVIEFENCELAG=1`
+  stays the default; the remaining cost is about 8 % of the movie's time against run 123.

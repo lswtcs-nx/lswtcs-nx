@@ -796,6 +796,8 @@ namespace {
 // nfsmw-sdk.patch (GPL-3, technique only, no code taken), where a TLB miss there measured 100-170 ns on the console.
 // Now the window is rounded up to 2 MB, and every range whose offset and size are multiples of 2 MB gets a 2 MB-aligned backing
 // (2 MB more is asked for and the pointer rounded up; the backings are never freed). LSWTCS_GUEST2MB=0 = the old layout.
+static uint8_t* g_guest_window = nullptr;   // log135: for lsw_switch_guest_map
+static size_t g_guest_window_size = 0;
 extern "C" uint8_t* lsw_switch_guest_window(size_t size) {
     constexpr size_t kBlock = 0x200000;
     const char* g2 = getenv("LSWTCS_GUEST2MB");
@@ -831,7 +833,23 @@ extern "C" uint8_t* lsw_switch_guest_window(size_t size) {
     }
     printf("[NX] UsedMemory after window: %llu MB\n", (unsigned long long)(info_u64(InfoType_UsedMemorySize) >> 20));
     tlb_bench(w);
+    g_guest_window = w;
+    g_guest_window_size = size;
     return w;
+}
+
+// log135: map zeroed memory into the guest window at run time (virtual reservations the 512 MB cannot hold; memory only
+// for committed pages). Same mapping as the ranges above; the backing is never freed. 0 on failure.
+extern "C" int lsw_switch_guest_map(uint32_t guest, uint32_t size) {
+    if (!g_guest_window || !size || (guest & 0xFFFu) || (size & 0xFFFu) || uint64_t(guest) + size > g_guest_window_size) return 0;
+    void* src = aligned_alloc(0x1000, size);
+    if (!src) return 0;
+    Handle h;
+    Result rc = svcCreateCodeMemory(&h, src, size);
+    if (R_SUCCEEDED(rc)) rc = svcControlCodeMemory(h, CodeMapOperation_MapOwner, g_guest_window + guest, size, Perm_Rw);
+    if (R_FAILED(rc)) { printf("[NX] guest map 0x%08X +0x%X FAILED rc=0x%X\n", guest, size, rc); free(src); return 0; }
+    memset(g_guest_window + guest, 0, size);
+    return 1;
 }
 
 // ---- game files (log107) ----------------------------------------------------------------------

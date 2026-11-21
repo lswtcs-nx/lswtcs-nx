@@ -7,6 +7,7 @@
 #define LSW_DATA_DIR LSW_ROOT_DIR "/Convert 360/LSWTCS"
 #endif
 #include <set>
+#include "lsw_guest_ptr.h"   // log135 (workspace-tools/widen_guest_ptr_checks.py)
 #ifdef __aarch64__
 #include <arm_neon.h>
 #endif
@@ -1877,7 +1878,7 @@ static void spin_won(uint8_t* base, SpinStat& st, uint32_t lock, uint32_t lr) {
 static void sched_yield_turn();
 static void sched_yield_to(int h);
 static inline uint32_t spin_tag() { return 0x4C535700u | uint32_t(g_sched_id + 2); }   // nonzero, any byte order
-static bool spin_lock_ok(uint32_t lock) { return lock >= 0x80000000u && lock < 0xC0000000u && !(lock & 3); }
+static bool spin_lock_ok(uint32_t lock) { return (lsw_vext_ptr(lock) || (lock >= 0x80000000u && lock < 0xC0000000u)) && !(lock & 3); }
 static void spin_acquire(uint8_t* base, uint32_t lock, uint32_t lr) {
     lswtcs_spin_enter();
     spin_depth_publish();
@@ -2134,7 +2135,7 @@ static std::mutex             g_cs_registry_lock;
 static std::unordered_map<uint32_t, LswCs*> g_cs_registry;
 
 static LswCs* cs_get(uint32_t addr) {
-    if (addr < 0x80000000u || addr >= 0x94000000u) return nullptr;
+    if (!lsw_gptr80(addr)) return nullptr;
     std::lock_guard<std::mutex> lk(g_cs_registry_lock);
     auto& slot = g_cs_registry[addr];
     if (!slot) slot = new LswCs();
@@ -2162,7 +2163,7 @@ static void cs_init_guest(uint32_t cs, uint8_t* base) {
 
 PPC_FUNC(__imp__RtlInitializeCriticalSection) {
     PPC_FUNC_PROLOGUE();
-    if (ctx.r3.u32 >= 0x82000000u && ctx.r3.u32 < 0x94000000u) {
+    if (lsw_gptr82(ctx.r3.u32)) {
         cs_init_guest(ctx.r3.u32, base);
         cs_get(ctx.r3.u32);  // pre-allocate mutex
     }
@@ -2240,7 +2241,7 @@ PPC_FUNC(__imp__RtlTryEnterCriticalSection) {
 }
 PPC_FUNC(__imp__RtlInitializeCriticalSectionAndSpinCount) {
     PPC_FUNC_PROLOGUE();
-    if (ctx.r3.u32 >= 0x82000000u && ctx.r3.u32 < 0x94000000u) {
+    if (lsw_gptr82(ctx.r3.u32)) {
         cs_init_guest(ctx.r3.u32, base);
         cs_get(ctx.r3.u32);
     }
@@ -2302,6 +2303,39 @@ static std::map<uint32_t, uint32_t> g_vres;    // live reservations from the bum
 static std::map<uint32_t, uint32_t> g_vfree;   // released ranges: start -> size
 static uint32_t vheap_extra_lo();   // the executable image's end in the 0x80 view (defined with PPC_IMAGE_SIZE_RT)
 static std::map<uint32_t, uint32_t> g_vextra;   // the range after the image, used once the bump allocator is full
+// into the guest window in 1 MB chunks only when the game commits pages there (lsw_switch_guest_map), as a console
+// reservation is address space until committed. Chunks stay mapped once made (at most 192 MB); released address space
+// is handed out again. LSWTCS_VEXT=0 turns it off (the reservation is refused, as in log134).
+extern "C" int lsw_switch_guest_map(uint32_t guest, uint32_t size) __attribute__((weak));
+static std::map<uint32_t, uint32_t> g_vext_free;   // released address space in the range, reused only once it is full
+static uint32_t g_vext_next = LSW_VEXT_LO;           // never-used address space starts here
+static uint8_t g_vext_mapped[(LSW_VEXT_HI - LSW_VEXT_LO) >> 20];
+static uint32_t g_vext_mapped_mb = 0;
+static bool vext_on() {
+    static const bool on = [] { const char* e = getenv("LSWTCS_VEXT"); return !(e && e[0] == '0'); }();
+    return on && lsw_switch_guest_map;
+}
+static bool vext_map(uint32_t a, uint32_t size) {   // under g_vheap_mtx
+    for (uint32_t c = (a - LSW_VEXT_LO) >> 20, e = (a + size - 1 - LSW_VEXT_LO) >> 20; c <= e; ++c) {
+        if (g_vext_mapped[c]) continue;
+        if (g_vext_mapped_mb >= 192 || !lsw_switch_guest_map(LSW_VEXT_LO + (c << 20), 1u << 20)) {
+            static int told = 0;
+            if (told++ < 4) { printf("[VEXT] cannot map the chunk at %08X (%u MB mapped)\n", LSW_VEXT_LO + (c << 20), g_vext_mapped_mb); fflush(stdout); }
+            return false;
+        }
+        g_vext_mapped[c] = 1;
+        ++g_vext_mapped_mb;
+    }
+    return true;
+}
+static void vext_zero(uint32_t a, uint32_t size) {   // zero the mapped parts only; unmapped chunks read as zero when mapped
+    for (uint32_t c = (a - LSW_VEXT_LO) >> 20, e = (a + size - 1 - LSW_VEXT_LO) >> 20; c <= e; ++c) {
+        if (!g_vext_mapped[c]) continue;
+        const uint32_t clo = LSW_VEXT_LO + (c << 20), lo = a > clo ? a : clo;
+        const uint32_t chi = clo + (1u << 20), hi = a + size < chi ? a + size : chi;
+        lsw_guest::fill(lsw_host(lo), 0, hi - lo);
+    }
+}
 static bool vheap_in_reservation(uint32_t a) {
     std::lock_guard<std::mutex> lk(g_vheap_mtx);
     auto it = g_vres.upper_bound(a);
@@ -2320,12 +2354,26 @@ static uint32_t vheap_take_free(uint32_t size) {   // under g_vheap_mtx
     }
     return 0;
 }
-static void vheap_release(uint32_t a, uint32_t size) {   // under g_vheap_mtx
-    auto next = g_vfree.lower_bound(a);
-    if (next != g_vfree.end() && a + size == next->first) { size += next->second; g_vfree.erase(next); }
-    auto prev = g_vfree.lower_bound(a);
-    if (prev != g_vfree.begin()) { --prev; if (prev->first + prev->second == a) { prev->second += size; return; } }
-    g_vfree[a] = size;
+static void vheap_release(uint32_t a, uint32_t size, std::map<uint32_t, uint32_t>& fl = g_vfree) {   // under g_vheap_mtx
+    auto next = fl.lower_bound(a);
+    if (next != fl.end() && a + size == next->first) { size += next->second; fl.erase(next); }
+    auto prev = fl.lower_bound(a);
+    if (prev != fl.begin()) { --prev; if (prev->first + prev->second == a) { prev->second += size; return; } }
+    fl[a] = size;
+}
+// log135: a request at a fixed address outside the known reservations takes that range out of every free list, so it
+// is never handed out a second time.
+static void vheap_carve(std::map<uint32_t, uint32_t>& fl, uint32_t a, uint32_t size) {   // under g_vheap_mtx
+    const uint32_t e = a + size;
+    auto it = fl.upper_bound(a);
+    if (it != fl.begin()) --it;
+    while (it != fl.end() && it->first < e) {
+        const uint32_t s0 = it->first, t = s0 + it->second;
+        if (t <= a) { ++it; continue; }
+        it = fl.erase(it);
+        if (s0 < a) fl[s0] = a - s0;
+        if (t > e) fl[e] = t - e;
+    }
 }
 PPC_FUNC(__imp__NtAllocateVirtualMemory) {
     PPC_FUNC_PROLOGUE();
@@ -2350,6 +2398,24 @@ PPC_FUNC(__imp__NtAllocateVirtualMemory) {
                                  (requested_base && vreuse_on() && vheap_in_reservation(requested_base));
     if (requested_range) {
         alloc_addr = requested_base;
+        if (vreuse_on()) {
+            std::lock_guard<std::mutex> lk(g_vheap_mtx);
+            auto it = g_vres.upper_bound(requested_base);
+            bool known = false;
+            if (it != g_vres.begin()) { --it; known = requested_base - it->first < it->second; }
+            if (!known) {
+                vheap_carve(g_vfree, requested_base, region_size);
+                vheap_carve(g_vextra, requested_base, region_size);
+                vheap_carve(g_vext_free, requested_base, region_size);
+                if (ctx.r5.u32 & 0x2000u) g_vres[requested_base] = region_size;
+                static int told = 0;
+                if (told++ < 8) { printf("[VHEAP] request at %08X +%u KB outside the known reservations (type %X, lr %08X)\n", requested_base, region_size >> 10, ctx.r5.u32, (uint32_t)ctx.lr); fflush(stdout); }
+            }
+        }
+        if (lsw_vext_ptr(requested_base) && (ctx.r5.u32 & 0x1000u)) {   // log135: memory for committed pages
+            std::lock_guard<std::mutex> lk(g_vheap_mtx);
+            if (!vext_map(requested_base, region_size)) { ctx.r3.u32 = 0xC0000017u; return; }   // STATUS_NO_MEMORY
+        }
         // Advance bump pointer past this allocation if needed
         if (requested_base + region_size > guest_heap)
             guest_heap = requested_base + region_size;
@@ -2357,7 +2423,11 @@ PPC_FUNC(__imp__NtAllocateVirtualMemory) {
         uint32_t reused = 0;
         if (vreuse_on()) {
             std::lock_guard<std::mutex> lk(g_vheap_mtx);
-            reused = vheap_take_free(region_size);
+            // log135: off by default. With it the emulator crashed in the game's heap in 2 of 10 new-player runs, without
+            // it in none of 6: the game seems to touch some ranges after releasing them, harmless while nothing reuses
+            // them (as up to log131). LSWTCS_VREUSEFREE=1 turns it back on.
+            static const bool reuse_free = [] { const char* e = getenv("LSWTCS_VREUSEFREE"); return e && e[0] == '1'; }();
+            if (reuse_free) reused = vheap_take_free(region_size);
             if (reused) g_vres[reused] = region_size;
         }
         if (!reused && vreuse_on() && uint64_t(guest_heap) + region_size > 0x88000000ull) {
@@ -2376,6 +2446,29 @@ PPC_FUNC(__imp__NtAllocateVirtualMemory) {
             static int told = 0;
             if (reused && told++ < 4) { printf("[VHEAP] reservation of %u KB after the image at %08X\n", region_size >> 10, reused); fflush(stdout); }
         }
+        if (!reused && vreuse_on() && vext_on() && uint64_t(guest_heap) + region_size > 0x88000000ull) {
+            std::lock_guard<std::mutex> lk(g_vheap_mtx);
+            uint32_t a = 0;
+            if (uint64_t(g_vext_next) + region_size <= LSW_VEXT_HI) { a = g_vext_next; g_vext_next += region_size; }
+            else {
+                for (auto it = g_vext_free.begin(); it != g_vext_free.end(); ++it) {
+                    if (it->second < region_size) continue;
+                    a = it->first;
+                    const uint32_t left = it->second - region_size;
+                    g_vext_free.erase(it);
+                    if (left) g_vext_free[a + region_size] = left;
+                    break;
+                }
+            }
+            if (a && (ctx.r5.u32 & 0x1000u) && !vext_map(a, region_size)) { vheap_release(a, region_size, g_vext_free); a = 0; }
+            if (a) {
+                vext_zero(a, region_size);   // a fresh reservation reads as zero
+                g_vres[a] = region_size;
+                reused = a;
+            }
+            static int told = 0;
+            if (reused && told++ < 6) { printf("[VEXT] reservation of %u KB at %08X (type %X), %u MB mapped\n", region_size >> 10, reused, ctx.r5.u32, g_vext_mapped_mb); fflush(stdout); }
+        }
         if (!reused && vreuse_on() && uint64_t(guest_heap) + region_size > 0x88000000ull) {
             // Past 0x88000000 lie the main thread's PCR and the game's own physical arena: refuse instead.
             static int told = 0;
@@ -2385,7 +2478,7 @@ PPC_FUNC(__imp__NtAllocateVirtualMemory) {
         }
         if (reused) {
             alloc_addr = reused;
-            lsw_guest::fill(lsw_host(alloc_addr), 0, region_size);   // a fresh reservation reads as zero
+            if (!lsw_vext_ptr(alloc_addr)) lsw_guest::fill(lsw_host(alloc_addr), 0, region_size);   // a fresh reservation reads as zero
         } else {
             alloc_addr = guest_heap;
             guest_heap += region_size;
@@ -2423,12 +2516,13 @@ PPC_FUNC(__imp__NtFreeVirtualMemory) {
     if (zero && size && (ctx.r5.u32 & 0xC000u) && ((start >= 0x84000000u && uint64_t(start) + size <= 0x94000000ull) ||
                                                    (vreuse_on() && vheap_in_reservation(start)))) {
         const uint32_t lo = start & ~0xFFFu, hi = (start + size + 0xFFFu) & ~0xFFFu;
-        lsw_guest::fill(lsw_host(lo), 0, hi - lo);
+        if (lsw_vext_ptr(lo)) { std::lock_guard<std::mutex> lk(g_vheap_mtx); vext_zero(lo, hi - lo); }
+        else lsw_guest::fill(lsw_host(lo), 0, hi - lo);
     }
     if (vreuse_on() && (ctx.r5.u32 & 0x8000u) && start) {
         std::lock_guard<std::mutex> lk(g_vheap_mtx);
         auto it = g_vres.find(start);
-        if (it != g_vres.end()) { vheap_release(it->first, it->second); g_vres.erase(it); }
+        if (it != g_vres.end()) { vheap_release(it->first, it->second, lsw_vext_ptr(start) ? g_vext_free : g_vfree); g_vres.erase(it); }
     }
     ctx.r3.u32 = 0;
 }
@@ -3020,7 +3114,7 @@ PPC_FUNC(__imp__NtWriteFile) {
     // Write at ByteOffset (r10; null or -1/-2 = the current position) and keep the read-ahead cache
     // honest: the tracked position advances and cached bytes are dropped (saves are read back on load).
     // The old version ignored the offset and left a stale read cache.
-    bool has_off = off_ptr >= 0x80000000u && off_ptr < 0x94000000u;
+    bool has_off = lsw_gptr80(off_ptr);
     uint64_t pos = has_off ? (((uint64_t)PPC_LOAD_U32(off_ptr) << 32) | PPC_LOAD_U32(off_ptr + 4)) : 0;
     if (pos >= 0xFFFFFFFFFFFFFFFEull) has_off = false;
     DWORD written = 0; BOOL ok;
@@ -3157,7 +3251,7 @@ PPC_FUNC(__imp__NtQueryFullAttributesFile) {
 // test 2026-10-15). LSWTCS_KOBJOUT=0 restores the old bound.
 static bool kout_ok(uint32_t p) {
     static const uint32_t hi = [] { const char* e = getenv("LSWTCS_KOBJOUT"); return (e && e[0] == '0') ? 0x94000000u : 0xE0000000u; }();
-    return p >= 0x80000000u && p < hi;
+    return lsw_vext_ptr(p) || (p >= 0x80000000u && p < hi);
 }
 // NtDuplicateObject(handle r3, out_handle* r4, options r5): the old stub succeeded without writing the new handle.
 // The duplicate is the same handle value (kobj handles are not reference counted; the voice engine duplicates the
@@ -3235,7 +3329,7 @@ static void kewake_set(uint8_t* base, uint32_t ptr) {   // KeSetEvent / KePulseE
 }
 // Guest relative timeout (LARGE_INTEGER*, 100 ns, negative = relative) -> ms; nullptr = infinite.
 static uint32_t guest_timeout_ms(uint8_t* base, uint32_t p, uint32_t infinite_ms) {
-    if (p < 0x80000000u || p >= 0xC0000000u) return infinite_ms;
+    if ((!lsw_vext_ptr(p) && (p < 0x80000000u || p >= 0xC0000000u))) return infinite_ms;
     int64_t t = (int64_t)PPC_LOAD_U64(p);
     if (t == 0) return 0;
     if (t < 0) { uint64_t ms = uint64_t(-t) / 10000u; return ms ? uint32_t(std::min<uint64_t>(ms, 0x7FFFFFFF)) : 1u; }
@@ -3284,7 +3378,7 @@ PPC_FUNC(__imp__NtClearEvent) {
 // first frame, however many saved programs there are (269 in run 7, 941 in run 67).
 extern "C" long long lsw_boot_ms();   // main.cpp: milliseconds since the process started
 static long long guest_timeout_ms(uint8_t* base, uint32_t p) {
-    if (p < 0x80000000u || p >= 0x94000000u) return -1;   // no timeout: infinite
+    if (!lsw_gptr80(p)) return -1;   // no timeout: infinite
     const int64_t t = (int64_t)PPC_LOAD_U64(p);
     return t == 0 ? 0 : t < 0 ? (long long)((uint64_t)(-t) / 10000u) : -2;   // -2: an absolute time
 }
@@ -3679,7 +3773,7 @@ PPC_FUNC(sub_8250D550) {
     static const bool wait = [] { const char* e = getenv("LSWTCS_HOSTWAIT"); return e && e[0] == '1'; }();
     if (wait) { __imp__sub_8250D550(ctx, base); return; }
     const uint32_t link = ctx.r3.u32;
-    if (link >= 0x80000000u && link < 0x94000000u) PPC_STORE_U8(link + 1410, 0);   // not connected, as the original sets first
+    if (lsw_gptr80(link)) PPC_STORE_U8(link + 1410, 0);   // not connected, as the original sets first
     printf("[HOSTLINK] link %08X: no 10 s wait for the PC tool's reply (LSWTCS_HOSTWAIT=1 waits)\n", link);
     fflush(stdout);
     ctx.r3.u64 = 1;
@@ -3693,7 +3787,7 @@ PPC_FUNC(__imp__NtWaitForSingleObjectEx) {
     HANDLE h = kobj_get(ctx.r3.u32);
     if (h) {
         DWORD ms = INFINITE;
-        if (ctx.r6.u32 >= 0x80000000u && ctx.r6.u32 < 0x94000000u) {
+        if (lsw_gptr80(ctx.r6.u32)) {
             int64_t t = (int64_t)PPC_LOAD_U64(ctx.r6.u32);
             if (t == 0) ms = 0;
             else if (t < 0) { uint64_t rel = (uint64_t)(-t); ms = (DWORD)(rel / 10000u); if (!ms) ms = 1; }
@@ -3733,7 +3827,7 @@ PPC_FUNC(__imp__NtWaitForMultipleObjectsEx) {
     }
     if (valid) {
         DWORD ms = INFINITE;
-        if (ctx.r8.u32 >= 0x80000000u && ctx.r8.u32 < 0x94000000u) {
+        if (lsw_gptr80(ctx.r8.u32)) {
             int64_t t = (int64_t)PPC_LOAD_U64(ctx.r8.u32);
             if (t == 0) ms = 0;
             else if (t < 0) { uint64_t rel = (uint64_t)(-t); ms = (DWORD)(rel / 10000u); if (!ms) ms = 1; }
@@ -3779,7 +3873,7 @@ PPC_FUNC(__imp__NtReleaseSemaphore) {
     if (h) {
         LONG prev = 0;
         ReleaseSemaphore(h, ctx.r4.u32 ? (LONG)ctx.r4.u32 : 1, &prev);
-        if (ctx.r5.u32 >= 0x80000000u && ctx.r5.u32 < 0x94000000u) PPC_STORE_U32(ctx.r5.u32, (uint32_t)prev);
+        if (lsw_gptr80(ctx.r5.u32)) PPC_STORE_U32(ctx.r5.u32, (uint32_t)prev);
     }
     ctx.r3.u32 = 0;
 }
@@ -3821,7 +3915,7 @@ PPC_FUNC(__imp__NtSetTimerEx) {
     PPC_FUNC_PROLOGUE();
     // r3=handle, r4=*due_time (LARGE_INTEGER 100ns), r7=period_ms
     HANDLE h = kobj_get(ctx.r3.u32);
-    if (h && ctx.r4.u32 >= 0x80000000u && ctx.r4.u32 < 0x94000000u) {
+    if (h && lsw_gptr80(ctx.r4.u32)) {
         LARGE_INTEGER li;
         li.QuadPart = (LONGLONG)(int64_t)PPC_LOAD_U64(ctx.r4.u32);
         SetWaitableTimer(h, &li, (LONG)ctx.r7.u32, nullptr, nullptr, FALSE);
@@ -3838,7 +3932,7 @@ PPC_FUNC(__imp__KeSetEvent) {
     uint32_t ptr = ctx.r3.u32;
     if (ptr >= 0x83212790u && ptr < 0x832127E0u) { static int n = 0; if (n++ < 60)   // DIAG: XAudio worker sync objects
         dbg_ram("[XAEV] set 0x%08X type=%u state=%d lr=0x%08X\n", ptr, PPC_LOAD_U8(ptr), (int32_t)PPC_LOAD_U32(ptr + 4), (uint32_t)ctx.lr); }
-    if (ptr >= 0x80000000u && ptr < 0xC0000000u) {
+    if ((lsw_vext_ptr(ptr) || (ptr >= 0x80000000u && ptr < 0xC0000000u))) {
         PPC_STORE_U32(ptr + 4, 1);
         kewake_set(base, ptr);   // log87
     }
@@ -3848,7 +3942,7 @@ PPC_FUNC(__imp__KeSetEvent) {
 PPC_FUNC(__imp__KePulseEvent) {
     PPC_FUNC_PROLOGUE();
     uint32_t ptr = ctx.r3.u32;
-    if (ptr >= 0x80000000u && ptr < 0xC0000000u) {
+    if ((lsw_vext_ptr(ptr) || (ptr >= 0x80000000u && ptr < 0xC0000000u))) {
         PPC_STORE_U32(ptr + 4, 1);
         kewake_set(base, ptr);   // log87: the threads waiting now are released, though the event ends clear
         PPC_STORE_U32(ptr + 4, 0);
@@ -3865,7 +3959,7 @@ PPC_FUNC(__imp__KeWaitForSingleObject) {
     // KeWaitForSingleObject returns STATUS_TIMEOUT (258), not when it returns 0.
     uint32_t ptr = ctx.r3.u32;
     bool signaled = false;
-    if (ptr >= 0x80000000u && ptr < 0xC0000000u) {
+    if ((lsw_vext_ptr(ptr) || (ptr >= 0x80000000u && ptr < 0xC0000000u))) {
         // log87: register as a waiter (events only), so a set that is cleared again before the next poll still releases us.
         const uint8_t type = PPC_LOAD_U8(ptr);
         const bool track = kewake_on() && (type == 0 || type == 1);
@@ -3975,19 +4069,19 @@ PPC_FUNC(__imp__KeWaitForMultipleObjects) {
     bool wait_all = (ctx.r5.u32 == 0);
     uint32_t tptr = ctx.r9.u32;
     bool poll_once = false;
-    if (tptr >= 0x80000000u && tptr < 0xC0000000u && (int64_t)PPC_LOAD_U64(tptr) == 0) poll_once = true;
-    if (count == 0 || count > 64 || arr < 0x80000000u || arr >= 0xC0000000u) { ctx.r3.u32 = 258u; return; }
+    if ((lsw_vext_ptr(tptr) || (tptr >= 0x80000000u && tptr < 0xC0000000u)) && (int64_t)PPC_LOAD_U64(tptr) == 0) poll_once = true;
+    if (count == 0 || count > 64 || (!lsw_vext_ptr(arr) && (arr < 0x80000000u || arr >= 0xC0000000u))) { ctx.r3.u32 = 258u; return; }
     uint32_t objs[64];
     for (uint32_t i = 0; i < count; ++i) objs[i] = PPC_LOAD_U32(arr + i * 4);
     { static int n = 0; if (++n <= 12 || (n % 20000) == 0) {
         char b[256]; int k = snprintf(b, sizeof b, "[KWAITM] #%d count=%u all=%d lr=0x%08X:", n, count, wait_all, (uint32_t)ctx.lr);
         for (uint32_t i = 0; i < count && i < 4 && k < 220; ++i) {
             uint32_t o = objs[i];
-            bool v = o >= 0x80000000u && o < 0xC0000000u;
+            bool v = (lsw_vext_ptr(o) || (o >= 0x80000000u && o < 0xC0000000u));
             k += snprintf(b + k, sizeof b - k, " [%u]=0x%08X t=%u s=%d", i, o, v ? PPC_LOAD_U8(o) : 0xFF, v ? (int32_t)PPC_LOAD_U32(o + 4) : -999);
         }
         dbg_ram("%s\n", b); } }
-    auto valid = [](uint32_t o) { return o >= 0x80000000u && o < 0xC0000000u; };
+    auto valid = [](uint32_t o) { return (lsw_vext_ptr(o) || (o >= 0x80000000u && o < 0xC0000000u)); };
     if (gil_on() && blockwait_on()) {
         auto try_take = [&]() -> int {
             if (wait_all) {
@@ -4058,7 +4152,7 @@ PPC_FUNC(__imp__ExCreateThread) {
     uint32_t flags      = ctx.r9.u32;
 
     uint32_t fake_handle = ++g_fake_handle_counter;
-    if (handle_ptr >= 0x82000000u && kout_ok(handle_ptr))
+    if ((handle_ptr >= 0x82000000u || lsw_vext_ptr(handle_ptr)) && kout_ok(handle_ptr))
         PPC_STORE_U32(handle_ptr, fake_handle);
 
     dbg_ram("[ExCreateThread] entry=0x%08X arg=0x%08X apiStartup=0x%08X flags=0x%X -> handle=0x%08X lr=0x%08X\n",
@@ -4194,7 +4288,7 @@ PPC_FUNC(__imp__RtlNtStatusToDosError)      { PPC_FUNC_PROLOGUE(); ctx.r3.u32 = 
 PPC_FUNC(__imp__RtlTimeToTimeFields) {
     PPC_FUNC_PROLOGUE();
     uint32_t tp = ctx.r3.u32, out = ctx.r4.u32;
-    if (tp < 0x80000000u || tp >= 0xC0000000u || out < 0x80000000u || out >= 0xC0000000u) return;
+    if ((!lsw_vext_ptr(tp) && (tp < 0x80000000u || tp >= 0xC0000000u)) || (!lsw_vext_ptr(out) && (out < 0x80000000u || out >= 0xC0000000u))) return;
     uint64_t t = PPC_LOAD_U64(tp);
     FILETIME ft; ft.dwLowDateTime = uint32_t(t); ft.dwHighDateTime = uint32_t(t >> 32);
     SYSTEMTIME st{};
@@ -4216,7 +4310,7 @@ PPC_FUNC(__imp__XamVoiceCreate) {
     PPC_FUNC_PROLOGUE(); LSW_XSTUB_LOG();
     static const bool net = [] { const char* e = getenv("LSWTCS_NET"); return e && atoi(e) >= 1; }();
     if (!net) { ctx.r3.u32 = 0; return; }
-    if (ctx.r5.u32 >= 0x80000000u && ctx.r5.u32 < 0xE0000000u) PPC_STORE_U32(ctx.r5.u32, 0);
+    if ((lsw_vext_ptr(ctx.r5.u32) || (ctx.r5.u32 >= 0x80000000u && ctx.r5.u32 < 0xE0000000u))) PPC_STORE_U32(ctx.r5.u32, 0);
     ctx.r3.u32 = 5;   // ERROR_ACCESS_DENIED
 }
 PPC_FUNC(__imp__XamVoiceClose)              { PPC_FUNC_PROLOGUE(); }
@@ -4284,8 +4378,8 @@ PPC_FUNC(__imp__XNotifyGetNext) {
                 n, ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32);
     if (!notify_old()) {
         uint32_t id_ptr = ctx.r5.u32, param_ptr = ctx.r6.u32, match = ctx.r4.u32;
-        bool id_ok = id_ptr >= 0x80000000u && id_ptr < 0x94000000u;
-        bool param_ok = param_ptr >= 0x80000000u && param_ptr < 0x94000000u;
+        bool id_ok = lsw_gptr80(id_ptr);
+        bool param_ok = lsw_gptr80(param_ptr);
         if (param_ok) PPC_STORE_U32(param_ptr, 0);
         if (!id_ok) { ctx.r3.u32 = 0; return; }
         PPC_STORE_U32(id_ptr, 0);
@@ -4321,8 +4415,8 @@ PPC_FUNC(__imp__XNotifyGetNext) {
     else if (stage == 1) { deliver_id = 0x00000009u; deliver_param = 0; }  // XN_SYS_UI closed
     if (deliver_id && (filter == 0 || filter == deliver_id)) {
         stage++;
-        if (ctx.r5.u32 >= 0x80000000u) PPC_STORE_U32(ctx.r5.u32, deliver_id);
-        if (ctx.r6.u32 >= 0x80000000u) PPC_STORE_U32(ctx.r6.u32, deliver_param);
+        if (ctx.r5.u32 >= 0x80000000u || lsw_vext_ptr(ctx.r5.u32)) PPC_STORE_U32(ctx.r5.u32, deliver_id);
+        if (ctx.r6.u32 >= 0x80000000u || lsw_vext_ptr(ctx.r6.u32)) PPC_STORE_U32(ctx.r6.u32, deliver_param);
         dbg_ram("[XAM] XNotifyGetNext delivered id=0x%08X param=%u (stage %d)\n", deliver_id, deliver_param, stage);
         ctx.r3.u32 = 1;
         return;
@@ -4342,7 +4436,7 @@ static bool lsw_net_xmsg(uint32_t app, uint32_t msg, uint32_t buf, uint32_t len,
 static uint64_t lsw_net_user_xuid(uint32_t user);
 static uint32_t xam_ovl_return(uint8_t* base, uint32_t ovl, uint32_t result, uint32_t length);
 static void xmsg_complete_overlapped(uint8_t* base, uint32_t ovl, const char* who) {
-    if (ovl < 0x80000000u || ovl >= 0x94000000u) return;
+    if (!lsw_gptr80(ovl)) return;
     uint32_t ev = PPC_LOAD_U32(ovl + 12);
     PPC_STORE_U32(ovl + 0, 0);   // InternalLow  = result 0 (success)
     PPC_STORE_U32(ovl + 4, 0);   // InternalHigh = length 0
@@ -4358,16 +4452,16 @@ static void xmsg_complete_overlapped(uint8_t* base, uint32_t ovl, const char* wh
 // network library deleted every session it hosted and the game showed "load failed" (Switch, 2026-10-15).
 static void guest_set_last_error(PPCContext& ctx, uint8_t* base, uint32_t err) {
     const uint32_t pcr = ctx.r13.u32;
-    if (pcr < 0x80000000u || pcr >= 0xE0000000u || PPC_LOAD_U32(pcr + 336) != 0) return;
+    if ((!lsw_vext_ptr(pcr) && (pcr < 0x80000000u || pcr >= 0xE0000000u)) || PPC_LOAD_U32(pcr + 336) != 0) return;
     const uint32_t kt = PPC_LOAD_U32(pcr + 256);
-    if (kt >= 0x80000000u && kt < 0xE0000000u) PPC_STORE_U32(kt + 352, err);
+    if ((lsw_vext_ptr(kt) || (kt >= 0x80000000u && kt < 0xE0000000u))) PPC_STORE_U32(kt + 352, err);
 }
 PPC_FUNC(__imp__XMsgStartIORequest) {
     PPC_FUNC_PROLOGUE();
     static int n = 0; if (n < 12) { n++;
         dbg_ram("[XAM] XMsgStartIORequest app=0x%X msg=0x%08X ovl=0x%08X buf=0x%08X len=%u\n",
                 ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32); }
-    if (ctx.r3.u32 == 0xFB && ctx.r5.u32 >= 0x80000000u && ctx.r5.u32 < 0xE0000000u) {   // DIAG: XOVERLAPPED of session calls
+    if (ctx.r3.u32 == 0xFB && (lsw_vext_ptr(ctx.r5.u32) || (ctx.r5.u32 >= 0x80000000u && ctx.r5.u32 < 0xE0000000u))) {   // DIAG: XOVERLAPPED of session calls
         static int m = 0; if (m++ < 32) { printf("[XMSGOVL] msg=%08X ovl=%08X event=%08X routine=%08X context=%08X lr=%08X\n",
             ctx.r4.u32, ctx.r5.u32, PPC_LOAD_U32(ctx.r5.u32 + 12), PPC_LOAD_U32(ctx.r5.u32 + 16), PPC_LOAD_U32(ctx.r5.u32 + 20), (uint32_t)ctx.lr); fflush(stdout); }
     }
@@ -7327,7 +7421,7 @@ static void pm4_fire_interrupt(uint32_t cpu_mask) {
     if (g_gfx_interrupt_data) {
         uint8_t* base = g_base;
         uint32_t mp = PPC_LOAD_U32(g_gfx_interrupt_data + 10900);
-        if (mp >= 0x82000000u && mp < 0x94000000u)
+        if (lsw_gptr82(mp))
             PPC_STORE_U32(mp, 0);
     }
     // TILEDRAIN (LSWTCS_TILEDRAIN, default on): the predicated-tiling callback 0x822D2BA0 only
@@ -8378,9 +8472,9 @@ PPC_FUNC(__imp__VdSwap) {
 
     // r8 = frontbuffer_ptr (pointer to physical address).
     // If the texture fetch constant gave phys=0, fall back to dereferencing r8.
-    if (frontbuffer_phys == 0 && ctx.r8.u32 >= 0x80000000u && ctx.r8.u32 < 0x94000000u) {
+    if (frontbuffer_phys == 0 && lsw_gptr80(ctx.r8.u32)) {
         uint32_t r8val = PPC_LOAD_U32(ctx.r8.u32);
-        if (r8val >= 0x80000000u && r8val < 0x94000000u)
+        if (lsw_gptr80(r8val))
             frontbuffer_phys = r8val;
     }
 
@@ -8412,13 +8506,13 @@ PPC_FUNC(__imp__VdSwap) {
     bool is_first_nonzero = (frontbuffer_phys != 0 && !first_nonzero_fb);
     if (is_first_nonzero) first_nonzero_fb = true;
     if (count < 3 || count % 60 == 0 || is_first_nonzero) {
-        uint32_t r8val = (ctx.r8.u32 >= 0x80000000u && ctx.r8.u32 < 0x94000000u)
+        uint32_t r8val = (lsw_gptr80(ctx.r8.u32))
                           ? PPC_LOAD_U32(ctx.r8.u32) : 0;
         dbg_ram("[FPS] present #%d at t=%llums\n", count, _kstub_start_ms());
         dbg_ram("[RGATE] enable[0x82E7EF5C]=0x%08X pause[0x82FCD16C]=0x%08X  (render needs enable!=0 && pause==0)\n",
                PPC_LOAD_U32(0x82E7EF5Cu), PPC_LOAD_U32(0x82FCD16Cu));
         { uint32_t glob   = PPC_LOAD_U32(0x82F211BCu);   // device ptr, expect 0x82F21190
-          uint32_t m16    = (glob>=0x82000000u&&glob<0x94000000u) ? PPC_LOAD_U32(glob+16) : 0xDEAD;
+          uint32_t m16    = (lsw_gptr82(glob)) ? PPC_LOAD_U32(glob+16) : 0xDEAD;
           uint32_t direct = PPC_LOAD_U32(0x82F211A0u);   // static vtable[+16], expect 0x8213DBD0
           dbg_ram("[FSDEV] glob[0x82F211BC]=0x%08X *(glob+16)=0x%08X  *(0x82F211A0)=0x%08X (expect 0x8213DBD0)\n",
                  glob, m16, direct); }
@@ -8911,7 +9005,7 @@ PPC_FUNC(__imp__VdSwap) {
             // Zero the mask directly to unblock the per-frame spin-wait.
             if (g_gfx_interrupt_data) {
                 uint32_t mp = PPC_LOAD_U32(g_gfx_interrupt_data + 10900);
-                if (mp >= 0x82000000u && mp < 0x94000000u)
+                if (lsw_gptr82(mp))
                     PPC_STORE_U32(mp, 0);
             }
 
@@ -9033,7 +9127,7 @@ PPC_FUNC(__imp__XamGetSystemVersion)      { PPC_FUNC_PROLOGUE(); LSW_XSTUB_LOG()
 PPC_FUNC(__imp__XGetVideoMode) {
     PPC_FUNC_PROLOGUE();
     uint32_t p = ctx.r3.u32;
-    if (p >= 0x80000000u && p < 0x94000000u) {
+    if (lsw_gptr80(p)) {
         for (int i = 0; i < 48; i += 4) PPC_STORE_U32(p + i, 0);
         PPC_STORE_U32(p + 0, 1280);         // display width
         PPC_STORE_U32(p + 4, 720);          // display height
@@ -9054,7 +9148,7 @@ PPC_FUNC(__imp__XUsbcamSnapshot)               { PPC_FUNC_PROLOGUE(); ctx.r3.u32
 PPC_FUNC(__imp__KeResetEvent) {
     PPC_FUNC_PROLOGUE();
     uint32_t ptr = ctx.r3.u32;
-    if (ptr >= 0x80000000u && ptr < 0x94000000u)
+    if (lsw_gptr80(ptr))
         PPC_STORE_U32(ptr + 4, 0);
     ctx.r3.u32 = 0;
 }
@@ -9092,7 +9186,7 @@ PPC_FUNC(__imp__KeInitializeSemaphore) {
     // r3=*KSEMAPHORE, r4=count, r5=limit. X_KSEMAPHORE = DISPATCHER_HEADER(16) + limit(+16).
     // Was a no-op, so in-memory semaphores kept garbage/zero state (Xenia: xboxkrnl_threading).
     uint32_t s = ctx.r3.u32;
-    if (s >= 0x80000000u && s < 0x94000000u) {
+    if (lsw_gptr80(s)) {
         PPC_STORE_U8(s + 0, 5);                 // SemaphoreObject
         PPC_STORE_U8(s + 2, 5);                 // size in dwords (header 4 + limit 1)
         PPC_STORE_U32(s + 4, ctx.r4.u32);       // SignalState = initial count
@@ -9127,7 +9221,7 @@ PPC_FUNC(__imp__KeReleaseSemaphore) {
     // r3=*KSEMAPHORE, r4=increment (priority boost), r5=adjustment, r6=wait. Returns the
     // previous count (Xenia xeKeReleaseSemaphore). Was a no-op → releases were lost.
     uint32_t s = ctx.r3.u32, prev = 0;
-    if (s >= 0x80000000u && s < 0x94000000u) {
+    if (lsw_gptr80(s)) {
         prev = PPC_LOAD_U32(s + 4);
         PPC_STORE_U32(s + 4, prev + ctx.r5.u32);
     }
@@ -9394,7 +9488,7 @@ PPC_FUNC(__imp__XMsgStartIORequestEx) {
     static int n = 0; if (n < 12) { n++;
         dbg_ram("[XAM] XMsgStartIORequestEx app=0x%X msg=0x%08X ovl=0x%08X buf=0x%08X len=%u\n",
                 ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32); }
-    if (ctx.r3.u32 == 0xFB && ctx.r5.u32 >= 0x80000000u && ctx.r5.u32 < 0xE0000000u) {   // DIAG: XOVERLAPPED of session calls
+    if (ctx.r3.u32 == 0xFB && (lsw_vext_ptr(ctx.r5.u32) || (ctx.r5.u32 >= 0x80000000u && ctx.r5.u32 < 0xE0000000u))) {   // DIAG: XOVERLAPPED of session calls
         static int m = 0; if (m++ < 32) { printf("[XMSGOVL] Ex msg=%08X ovl=%08X event=%08X routine=%08X context=%08X lr=%08X\n",
             ctx.r4.u32, ctx.r5.u32, PPC_LOAD_U32(ctx.r5.u32 + 12), PPC_LOAD_U32(ctx.r5.u32 + 16), PPC_LOAD_U32(ctx.r5.u32 + 20), (uint32_t)ctx.lr); fflush(stdout); }
     }
@@ -9420,7 +9514,7 @@ PPC_FUNC(__imp__XMsgSystemProcessCall) {
 PPC_FUNC(__imp__XamAlloc) {
     PPC_FUNC_PROLOGUE();
     uint32_t a = expool_alloc(ctx.r4.u32);
-    if (ctx.r5.u32 >= 0x80000000u && ctx.r5.u32 < 0xE0000000u) PPC_STORE_U32(ctx.r5.u32, a);
+    if ((lsw_vext_ptr(ctx.r5.u32) || (ctx.r5.u32 >= 0x80000000u && ctx.r5.u32 < 0xE0000000u))) PPC_STORE_U32(ctx.r5.u32, a);
     ctx.r3.u32 = a ? 0u : 0x8007000Eu;
 }
 PPC_FUNC(__imp__XamCreateEnumeratorHandle) { PPC_FUNC_PROLOGUE(); LSW_XSTUB_LOG(); ctx.r3.u32 = 0; }
@@ -9504,7 +9598,7 @@ static bool content_exists(const std::string& pkg_dir) {
 }
 // Completes an XOVERLAPPED like Xenia CompleteOverlappedImmediateEx: result, length, extended error, event.
 static void xam_ovl_complete(uint8_t* base, uint32_t ovl, uint32_t result, uint32_t length) {
-    if (ovl < 0x80000000u || ovl >= 0x94000000u) return;
+    if (!lsw_gptr80(ovl)) return;
     PPC_STORE_U32(ovl + 0, result);
     PPC_STORE_U32(ovl + 4, length);
     PPC_STORE_U32(ovl + 24, result ? (0x80070000u | (result & 0xFFFFu)) : 0u);   // X_HRESULT_FROM_WIN32
@@ -9513,13 +9607,13 @@ static void xam_ovl_complete(uint8_t* base, uint32_t ovl, uint32_t result, uint3
 }
 // Synchronous result, or IO_PENDING with the result in the overlapped (failures read FUNCTION_FAILED).
 static uint32_t xam_ovl_return(uint8_t* base, uint32_t ovl, uint32_t result, uint32_t length) {
-    if (ovl < 0x80000000u || ovl >= 0x94000000u) return result;
+    if (!lsw_gptr80(ovl)) return result;
     xam_ovl_complete(base, ovl, result, length);
     if (result) PPC_STORE_U32(ovl + 0, 0x0000065Bu);   // X_ERROR_FUNCTION_FAILED; extended error keeps the cause
     return 0x000003E5u;                                 // X_ERROR_IO_PENDING
 }
 static std::string guest_cstr(uint8_t* base, uint32_t p, uint32_t max = 64) {
-    std::string s; if (p < 0x80000000u || p >= 0x94000000u) return s;
+    std::string s; if (!lsw_gptr80(p)) return s;
     for (uint32_t i = 0; i < max; ++i) { char c = (char)PPC_LOAD_U8(p + i); if (!c) break; s += c; }
     return s;
 }
@@ -9553,7 +9647,7 @@ PPC_FUNC(__imp__XamContentCreateEnumerator) {
     PPC_FUNC_PROLOGUE();
     uint32_t dev = ctx.r4.u32, type = ctx.r5.u32, items = ctx.r7.u32 ? ctx.r7.u32 : 1;
     if (dev != 0 && !(dev == 1 || dev == 2)) {   // unknown device (Xenia: X_E_INVALIDARG)
-        if (ctx.r8.u32 >= 0x80000000u && ctx.r8.u32 < 0x94000000u) PPC_STORE_U32(ctx.r8.u32, 0);
+        if (lsw_gptr80(ctx.r8.u32)) PPC_STORE_U32(ctx.r8.u32, 0);
         ctx.r3.u32 = 0x80070057u; return;
     }
     XContentEnum e; e.per = items;
@@ -9577,8 +9671,8 @@ PPC_FUNC(__imp__XamContentCreateEnumerator) {
     uint32_t h = g_content_enum_next++;
     dbg_ram("[SAVE] XamContentCreateEnumerator dev=%u type=0x%X items/call=%u -> %zu packages, handle 0x%08X\n", dev, type, items, e.items.size(), h);
     g_content_enums[h] = std::move(e);
-    if (ctx.r8.u32 >= 0x80000000u && ctx.r8.u32 < 0x94000000u) PPC_STORE_U32(ctx.r8.u32, items * kXContentDataSize);
-    if (ctx.r9.u32 >= 0x80000000u && ctx.r9.u32 < 0x94000000u) PPC_STORE_U32(ctx.r9.u32, h);
+    if (lsw_gptr80(ctx.r8.u32)) PPC_STORE_U32(ctx.r8.u32, items * kXContentDataSize);
+    if (lsw_gptr80(ctx.r9.u32)) PPC_STORE_U32(ctx.r9.u32, h);
     ctx.r3.u32 = 0;
 }
 // XamContentCreateEx(r3 user, r4 root_name, r5 XCONTENT_DATA*, r6 flags, r7 disposition*, r8 license*,
@@ -9589,7 +9683,7 @@ PPC_FUNC(__imp__XamContentCreateEx) {
     uint32_t ovl = PPC_LOAD_U32(ctx.r1.u32 + 0x54);
     std::string root = content_lower(guest_cstr(base, ctx.r4.u32));
     while (!root.empty() && root.back() == ':') root.pop_back();
-    if (data < 0x80000000u || data >= 0x94000000u) { ctx.r3.u32 = 0x57u; return; }
+    if (!lsw_gptr80(data)) { ctx.r3.u32 = 0x57u; return; }
     uint32_t type = PPC_LOAD_U32(data + 4);
     std::string name = content_name(base, data);
     if (!lsw_save::package_name(root) || name.empty()) { ctx.r3.u32 = xam_ovl_return(base, ovl, 0x7Bu, 0); return; }
@@ -9620,8 +9714,8 @@ PPC_FUNC(__imp__XamContentCreateEx) {
         std::lock_guard<std::mutex> lk(g_content_mtx);
         g_content_mounts[root] = pkg + "/";
     }
-    if (disp_p >= 0x80000000u && disp_p < 0x94000000u) PPC_STORE_U32(disp_p, disposition);
-    if (!result && lic_p >= 0x80000000u && lic_p < 0x94000000u) PPC_STORE_U32(lic_p, 0);
+    if (lsw_gptr80(disp_p)) PPC_STORE_U32(disp_p, disposition);
+    if (!result && lsw_gptr80(lic_p)) PPC_STORE_U32(lic_p, 0);
     dbg_ram("[SAVE] XamContentCreateEx root='%s' type=0x%X name='%s' flags=0x%X ovl=0x%08X -> result=0x%X disposition=%u (%s)\n",
             root.c_str(), type, name.c_str(), flags, ovl, result, disposition, pkg.c_str());
     ctx.r3.u32 = xam_ovl_return(base, ovl, result, disposition);
@@ -9630,7 +9724,7 @@ PPC_FUNC(__imp__XamContentCreateEx) {
 PPC_FUNC(__imp__XamContentDelete) {
     PPC_FUNC_PROLOGUE();
     uint32_t data = ctx.r4.u32, result = 0x57u;
-    if (data >= 0x80000000u && data < 0x94000000u) {
+    if (lsw_gptr80(data)) {
         const std::string name = content_name(base, data);
         if (name.empty()) { ctx.r3.u32 = xam_ovl_return(base, ctx.r5.u32, 0x7Bu, 0); return; }
         std::string pkg = content_type_dir(PPC_LOAD_U32(data + 4)) + name;
@@ -9663,13 +9757,13 @@ PPC_FUNC(__imp__XamContentFlush) {
 PPC_FUNC(__imp__XamContentGetCreator) {
     PPC_FUNC_PROLOGUE();
     uint32_t data = ctx.r4.u32, is_p = ctx.r5.u32, xuid_p = ctx.r6.u32, result = 0;
-    if (is_p < 0x80000000u || is_p >= 0x94000000u || data < 0x80000000u || data >= 0x94000000u) { ctx.r3.u32 = 0x57u; return; }
+    if (!lsw_gptr80(is_p) || !lsw_gptr80(data)) { ctx.r3.u32 = 0x57u; return; }
     uint32_t type = PPC_LOAD_U32(data + 4);
     if (!content_exists(content_type_dir(type) + content_name(base, data))) result = 3u;   // PATH_NOT_FOUND
     else {
         bool save = type == 1;   // saved games are always the user's own
         PPC_STORE_U32(is_p, save ? 1u : 0u);
-        if (xuid_p >= 0x80000000u && xuid_p < 0x94000000u) PPC_STORE_U64(xuid_p, save ? lsw_net_user_xuid(0) : 0ull);
+        if (lsw_gptr80(xuid_p)) PPC_STORE_U64(xuid_p, save ? lsw_net_user_xuid(0) : 0ull);
     }
     ctx.r3.u32 = xam_ovl_return(base, ctx.r7.u32, result, 0);
 }
@@ -9683,7 +9777,7 @@ PPC_FUNC(__imp__XamContentGetDeviceData) {
     uint32_t dev = ctx.r3.u32, p = ctx.r4.u32;
     static int n = 0; if (n < 8) { n++; dbg_ram("[XAM] XamContentGetDeviceData dev=0x%X out=0x%08X lr=0x%08X\n", dev, p, (uint32_t)ctx.lr); }
     if (!xam_device_known(dev)) { ctx.r3.u32 = 0x0000048Fu; return; }
-    if (p >= 0x80000000u && p < 0x94000000u) {
+    if (lsw_gptr80(p)) {
         const uint64_t GB = 1024ull * 1024ull * 1024ull;
         bool hdd = dev == 1;
         for (uint32_t i = 0; i < 0x50; i += 4) PPC_STORE_U32(p + i, 0);
@@ -9706,7 +9800,7 @@ PPC_FUNC(__imp__XamContentGetDeviceState) {
     uint32_t dev = ctx.r3.u32, ovl = ctx.r4.u32;
     static int n = 0; if (n < 8) { n++; dbg_ram("[XAM] XamContentGetDeviceState dev=0x%X ovl=0x%08X lr=0x%08X\n", dev, ovl, (uint32_t)ctx.lr); }
     uint32_t result = xam_device_known(dev) ? 0u : 0x0000048Fu;
-    if (ovl >= 0x80000000u && ovl < 0x94000000u) {
+    if (lsw_gptr80(ovl)) {
         xmsg_complete_overlapped(base, ovl, "XamContentGetDeviceState");
         if (result) { PPC_STORE_U32(ovl + 0, 0x0000065Bu); PPC_STORE_U32(ovl + 24, result); }   // FUNCTION_FAILED + ext error
         ctx.r3.u32 = 0x000003E5u;
@@ -9720,7 +9814,7 @@ PPC_FUNC(__imp__XamContentGetLicenseMask) { PPC_FUNC_PROLOGUE(); LSW_XSTUB_LOG()
 PPC_FUNC(__imp__XamContentGetThumbnail) {
     PPC_FUNC_PROLOGUE();
     uint32_t data = ctx.r4.u32, buf = ctx.r5.u32, size_p = ctx.r6.u32, result = 0;
-    if (data < 0x80000000u || data >= 0x94000000u || size_p < 0x80000000u || size_p >= 0x94000000u) { ctx.r3.u32 = 0x57u; return; }
+    if (!lsw_gptr80(data) || !lsw_gptr80(size_p)) { ctx.r3.u32 = 0x57u; return; }
     std::string png = content_type_dir(PPC_LOAD_U32(data + 4)) + content_name(base, data) + ".png";
     std::vector<uint8_t> img;
     if (FILE* fp = fopen(png.c_str(), "rb")) {
@@ -9732,7 +9826,7 @@ PPC_FUNC(__imp__XamContentGetThumbnail) {
     else {
         uint32_t cap = PPC_LOAD_U32(size_p);
         PPC_STORE_U32(size_p, uint32_t(img.size()));
-        if (buf >= 0x80000000u && buf < 0x94000000u && cap >= img.size()) lsw_guest::copy(base + buf, img.data(), img.size());
+        if (lsw_gptr80(buf) && cap >= img.size()) lsw_guest::copy(base + buf, img.data(), img.size());
         else if (buf) result = 0x7Au;   // ERROR_INSUFFICIENT_BUFFER
     }
     ctx.r3.u32 = xam_ovl_return(base, ctx.r7.u32, result, 0);
@@ -9742,7 +9836,7 @@ PPC_FUNC(__imp__XamContentInstall) { PPC_FUNC_PROLOGUE(); LSW_XSTUB_LOG(); ctx.r
 PPC_FUNC(__imp__XamContentSetThumbnail) {
     PPC_FUNC_PROLOGUE();
     uint32_t data = ctx.r4.u32, img = ctx.r5.u32, n = ctx.r6.u32, result = 0x57u;
-    if (data >= 0x80000000u && data < 0x94000000u && img >= 0x80000000u && img < 0x94000000u && n && n < (1u << 20)) {
+    if (lsw_gptr80(data) && lsw_gptr80(img) && n && n < (1u << 20)) {
         std::string pkg = content_type_dir(PPC_LOAD_U32(data + 4)) + content_name(base, data);
         if (!content_exists(pkg)) result = 3u;
         else if (FILE* fp = fopen((pkg + ".png").c_str(), "wb")) { lsw_guest::read(lsw_host(img), n, [&] { return fwrite(lsw_host(img), 1, n, fp); }); fclose(fp); result = 0; }
@@ -9828,7 +9922,7 @@ PPC_FUNC(__imp__NtSignalAndWaitForSingleObjectEx) {
     if (sh) SetEvent(sh);
     if (wh) {
         DWORD ms = INFINITE;
-        if (ctx.r7.u32 >= 0x80000000u && ctx.r7.u32 < 0x94000000u) {
+        if (lsw_gptr80(ctx.r7.u32)) {
             int64_t t = (int64_t)PPC_LOAD_U64(ctx.r7.u32);
             if (t == 0) ms = 0;
             else if (t < 0) { uint64_t rel = (uint64_t)(-t); ms = (DWORD)(rel / 10000u); if (!ms) ms = 1; }
@@ -9855,7 +9949,7 @@ PPC_FUNC(__imp__XamContentGetDeviceName) {
     const char* name = dev == 1 ? "Save data" : "Game data";
     uint32_t len = (uint32_t)strlen(name);
     if (cap < len + 1) { ctx.r3.u32 = 0x0000007Au; return; }   // ERROR_INSUFFICIENT_BUFFER
-    if (p >= 0x80000000u && p < 0x94000000u)
+    if (lsw_gptr80(p))
         for (uint32_t i = 0; i <= len; ++i) PPC_STORE_U16(p + i * 2, (uint16_t)name[i]);
     ctx.r3.u32 = 0;
 }
@@ -9881,15 +9975,15 @@ PPC_FUNC(__imp__XamEnumerate) {
     if (ce != g_content_enums.end()) {
         XContentEnum& e = ce->second;
         uint32_t buf = ctx.r5.u32, cb = ctx.r6.u32, n = 0;
-        if (buf >= 0x80000000u && buf < 0x94000000u)
+        if (lsw_gptr80(buf))
             while (e.pos < e.items.size() && n < e.per && (n + 1) * kXContentDataSize <= cb) {
                 lsw_guest::copy(lsw_host(buf + n * kXContentDataSize), e.items[e.pos].data(), kXContentDataSize);
                 ++n; ++e.pos;
             }
         uint32_t result = n ? 0u : 0x12u;   // ERROR_NO_MORE_FILES
         dbg_ram("[SAVE] XamEnumerate content handle=0x%08X -> %u items (result %u)\n", ctx.r3.u32, n, result);
-        if (ctx.r7.u32 >= 0x80000000u && ctx.r7.u32 < 0x94000000u) PPC_STORE_U32(ctx.r7.u32, n);
-        if (ctx.r8.u32 >= 0x80000000u && ctx.r8.u32 < 0x94000000u) {
+        if (lsw_gptr80(ctx.r7.u32)) PPC_STORE_U32(ctx.r7.u32, n);
+        if (lsw_gptr80(ctx.r8.u32)) {
             xam_ovl_complete(base, ctx.r8.u32, result, n);
             ctx.r3.u32 = 0x000003E5u;   // IO_PENDING (result in the overlapped, as before)
             return;
@@ -9897,8 +9991,8 @@ PPC_FUNC(__imp__XamEnumerate) {
         ctx.r3.u32 = result;
         return;
     }
-    if (ctx.r7.u32 >= 0x80000000u && ctx.r7.u32 < 0x94000000u) PPC_STORE_U32(ctx.r7.u32, 0);
-    if (ctx.r8.u32 >= 0x80000000u && ctx.r8.u32 < 0x94000000u) {
+    if (lsw_gptr80(ctx.r7.u32)) PPC_STORE_U32(ctx.r7.u32, 0);
+    if (lsw_gptr80(ctx.r8.u32)) {
         // Async: the result goes in the overlapped (InternalLow), the call returns IO_PENDING.
         xmsg_complete_overlapped(base, ctx.r8.u32, "XamEnumerate");
         PPC_STORE_U32(ctx.r8.u32 + 0, 0x00000012u);   // ERROR_NO_MORE_FILES
@@ -10073,7 +10167,7 @@ PPC_FUNC(__imp__RtlTimeFieldsToTime) {
     PPC_FUNC_PROLOGUE();
     uint32_t in = ctx.r3.u32, out = ctx.r4.u32;
     ctx.r3.u32 = 0;
-    if (in < 0x80000000u || in >= 0xC0000000u || out < 0x80000000u || out >= 0xC0000000u) return;
+    if ((!lsw_vext_ptr(in) && (in < 0x80000000u || in >= 0xC0000000u)) || (!lsw_vext_ptr(out) && (out < 0x80000000u || out >= 0xC0000000u))) return;
     SYSTEMTIME st{};
     st.wYear = PPC_LOAD_U16(in + 0); st.wMonth = PPC_LOAD_U16(in + 2); st.wDay = PPC_LOAD_U16(in + 4);
     st.wHour = PPC_LOAD_U16(in + 6); st.wMinute = PPC_LOAD_U16(in + 8); st.wSecond = PPC_LOAD_U16(in + 10);
@@ -10086,7 +10180,7 @@ PPC_FUNC(__imp__RtlTimeFieldsToTime) {
 PPC_FUNC(__imp__XamGetExecutionId) {
     PPC_FUNC_PROLOGUE();
     static int n = 0; if (n < 4) { n++; dbg_ram("[XAM] XamGetExecutionId out*=0x%08X (null-filled)\n", ctx.r3.u32); }
-    if (ctx.r3.u32 >= 0x80000000u && ctx.r3.u32 < 0x94000000u) PPC_STORE_U32(ctx.r3.u32, 0);
+    if (lsw_gptr80(ctx.r3.u32)) PPC_STORE_U32(ctx.r3.u32, 0);
     ctx.r3.u32 = 0;
 }
 PPC_FUNC(__imp__XamShowAchievementsUI) { PPC_FUNC_PROLOGUE(); LSW_XSTUB_LOG(); ctx.r3.u32 = 0; }
@@ -10099,16 +10193,16 @@ static uint32_t xam_dispatch_headless(uint8_t* base, uint32_t ovl, uint32_t resu
     if (notify_old()) { xmsg_complete_overlapped(base, ovl, who); return 0; }
     notify_broadcast(0x00000009u, 1);
     xmsg_complete_overlapped(base, ovl, who);
-    if (ovl >= 0x80000000u && ovl < 0x94000000u) PPC_STORE_U32(ovl + 0, result);
+    if (lsw_gptr80(ovl)) PPC_STORE_U32(ovl + 0, result);
     notify_broadcast(0x00000009u, 0, 100);
-    return (ovl >= 0x80000000u && ovl < 0x94000000u) ? 0x000003E5u : result;   // ERROR_IO_PENDING
+    return (lsw_gptr80(ovl)) ? 0x000003E5u : result;   // ERROR_IO_PENDING
 }
 PPC_FUNC(__imp__XamShowDeviceSelectorUI) {
     PPC_FUNC_PROLOGUE();
     static int n = 0; if (n < 8) { n++;
         dbg_ram("[XAM] XamShowDeviceSelectorUI user=0x%X type=0x%X flags=0x%X bytes=0x%llX dev*=0x%08X ovl=0x%08X lr=0x%08X\n",
                 ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u64, ctx.r7.u32, ctx.r8.u32, (uint32_t)ctx.lr); }
-    if (ctx.r7.u32 >= 0x80000000u && ctx.r7.u32 < 0x94000000u) PPC_STORE_U32(ctx.r7.u32, 1);   // HDD
+    if (lsw_gptr80(ctx.r7.u32)) PPC_STORE_U32(ctx.r7.u32, 1);   // HDD
     ctx.r3.u32 = xam_dispatch_headless(base, ctx.r8.u32, 0, "XamShowDeviceSelectorUI");
 }
 PPC_FUNC(__imp__XamShowFriendsUI) { PPC_FUNC_PROLOGUE(); LSW_XSTUB_LOG(); ctx.r3.u32 = 0; }
@@ -10235,11 +10329,11 @@ PPC_FUNC(__imp__VdGetSystemCommandBuffer) {
                ctx.r3.u32, ctx.r4.u32);
         logged = true;
     }
-    if (ctx.r3.u32 >= 0x80000000u && ctx.r3.u32 < 0x94000000u) {
+    if (lsw_gptr80(ctx.r3.u32)) {
         lsw_guest::fill(lsw_host(ctx.r3.u32), 0, 0x94);        // zero 0x94 bytes like Xenia
         PPC_STORE_U32(ctx.r3.u32, 0xBEEF0000u);
     }
-    if (ctx.r4.u32 >= 0x80000000u && ctx.r4.u32 < 0x94000000u)
+    if (lsw_gptr80(ctx.r4.u32))
         PPC_STORE_U32(ctx.r4.u32, 0xBEEF0001u);
 }
 PPC_FUNC(__imp__VdInitializeEngines) {

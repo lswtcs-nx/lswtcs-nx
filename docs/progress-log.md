@@ -5312,3 +5312,33 @@ then crashed in the player (`82814098`, a garbage pointer): the next limit. Each
 is address space until pages are committed. Quick and full routes: same game, no out-of-memory line.
 
 **Build `0.0.99-log134`.**
+
+## log135: virtual reservations past the 512 MB get memory only when committed; no reuse of released ranges
+
+Goal: the title movie played again by a third or fourth new player ran out of memory (log134). Findings and changes, all
+in the emulator (`tests/scripts/idle_title_movie_twice.txt`, 600 s runs):
+
+- **The leak is the game's, not the FFmpeg hook's.** With every reservation and release logged (a probe taken out
+  again), `LSWTCS_MOVIEFF=0` and FFmpeg gave the same sequence: the old decoder's buffers (`829EEE78`, freed by
+  `829EEEC8`) are released at teardown either way. What stays are segments of the game's growable heap (`822A0A80`
+  reserving at `822A0BB0`: 2, 4, 8 MB, then 16 or 32 MB for a new player): the heap decommits their pages but keeps the
+  reservation. On the console that is address space; here every reserved byte was memory.
+- **Reservations past the 512 MB** (`kernel_stubs.cpp`, `LSWTCS_VEXT=0` turns it off): once the bump allocator and the
+  range after the image are used, a reservation gets address space at 0x60000000-0x70000000, and memory is mapped into the
+  guest window in 1 MB chunks only when the game commits pages there (`lsw_switch_guest_map` in `platform_switch.cpp`, the
+  boot ranges' mapping; at most 192 MB). Never-used address space goes first; released space only once the range is full.
+- **Pointer checks widened:** the runtime and the hand patches in the generated heap code accepted guest pointers only in
+  0x80000000/0x82000000-0x94000000. `workspace-tools/widen_guest_ptr_checks.py` rewrites those checks (and the kernel
+  object checks up to 0xC0000000/0xE0000000) to the helpers in `LSWTCSRuntime/include/lsw_guest_ptr.h`: 126 in the
+  generated code (`ppc_recomp.337/342/346/407/437/473.cpp`, applied to `output` and `output_nv`, which are not in Git:
+  run the script again after regenerating them) and 75 in `kernel_stubs.cpp`.
+- **No reuse of released ranges by default** (`LSWTCS_VREUSEFREE=1` turns log132's reuse back on): with it, 2 of 10
+  new-player runs crashed in the game's heap (`822A15D0`) or on a player object whose vtable read as data (`82814098`, a
+  third player whose threads exited at once), with no refusal printed; without it, none of 10. The game seems to touch some
+  ranges after releasing them, harmless while nothing reuses them (as up to log131). Not proven.
+- A request at a fixed address outside the known reservations now takes that range out of the free lists.
+
+**Emulator, final build:** 4 runs, no crash; in 3 the game made three players and the range held their reservations with
+1-2 MB mapped (the heap's 16 MB reservation: 0 MB mapped). Quick and full routes: same game, no out-of-memory line.
+
+**Build `0.0.99-log135`.**

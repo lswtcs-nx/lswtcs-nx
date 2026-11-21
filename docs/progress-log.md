@@ -5388,3 +5388,12 @@ One session (`run128-log137`, 307 s): the title screen left idle (the movie), th
   responding: the next button presses started the game and `Gungan_A` loaded normally.
 - No crash, no other out-of-memory line, no scheduler stall. Heavy frames as before (`[GLSPAN]` p50 16.6 ms swap to swap).
 - log137 goes out as v0.5.0.
+
+## 21 November 2026: lighter emulator runs
+
+tools/emu_run.py now starts Ryubing below normal priority (the PC stays responsive; an idle PC still gives it everything),
+with `--cores N` to keep it on the first N logical cores and `--vsync` to cap it at 60 Hz (`--vsync-mode Switch`);
+emu_test.py passes both on. It also copies the emulator's own log (crash stack and registers) into the run folder as
+ryujinx.log, because Ryubing keeps only its last few logs. Check: the quick route with `--cores 8 --vsync` played the
+same game as baseline "main" (796 frames), work within 2.2 %, done in 195.8 s (recent runs: 170-202 s). Ryujinx's
+logging was left as it is: about 4 KB per run, nothing to save there.

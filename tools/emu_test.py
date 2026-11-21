@@ -23,7 +23,8 @@ Usage:
   python tools/emu_test.py --compare <run folder> --baseline main   # report on a finished run, no new run
   python tools/emu_test.py --cold --baseline main          # a player's first session (no shader caches)
 Options: --nro (default source/switch/build-nvpgo/lswtcs.nro), --elf (default beside it), --route quick|full,
-         --noise PCT, --env KEY=VALUE (repeatable, e.g. an A/B switch), --keep-going (no stop on the first failure)
+         --noise PCT, --env KEY=VALUE (repeatable, e.g. an A/B switch), --keep-going (no stop on the first failure),
+         --cores N (emulator on N logical cores), --vsync (emulator capped at 60 Hz); it always runs below normal priority
 """
 import argparse
 import json
@@ -180,6 +181,8 @@ def main():
     ap.add_argument("--noise", type=float, default=5.0)
     ap.add_argument("--boot-retries", type=int, default=2, help="runs again when the emulator fails before the first level")
     ap.add_argument("--env", action="append", default=[])
+    ap.add_argument("--cores", type=int, default=0, help="emulator on the first N logical cores only (emu_run --cores)")
+    ap.add_argument("--vsync", action="store_true", help="cap the emulator at 60 Hz (emu_run --vsync)")
     ap.add_argument("--cold", action="store_true", help="a player's first session: no saved shader caches (emu_run "
                     "--cold-caches); baselines of cold runs are kept apart")
     args = ap.parse_args()
@@ -196,6 +199,10 @@ def main():
             cmd += ["--env", e]
         if args.cold:
             cmd.append("--cold-caches")
+        if args.cores:
+            cmd += ["--cores", str(args.cores)]
+        if args.vsync:
+            cmd.append("--vsync")
         # The emulator dies or hangs at boot now and then (before the first level: GL start-up, the guest scheduler), with
         # builds before and after log114 alike (18 November 2026: 5 of about 30 runs). Such a run says nothing about the
         # build, so it is run again, up to --boot-retries times.

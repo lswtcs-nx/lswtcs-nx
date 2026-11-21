@@ -43,6 +43,27 @@ RYUBING_ARGS = ("--no-gui --disable-docked-mode --skip-user-profiles-manager --i
 # never came back and the boot deadlocked.
 EMU_ENV = ["LSWTCS_CLOCKLOG=0", "LSWTCS_HWPROF=0"]
 GDB = Path("C:/devkitPro/msys2/opt/devkitpro/devkitA64/bin/aarch64-none-elf-gdb.exe")
+# 21 November 2026: the emulator ran at normal priority on every core, so the PC was sluggish during a run. Now it
+# starts below normal (other programs win when they need the CPU; an idle PC still gives it everything) and, with
+# --cores N, on the first N logical cores only. Neither changes what the game does: --fixed-dt makes the replay
+# frame-exact whatever the speed. --vsync caps the emulator at the console's 60 Hz (Ryubing --vsync-mode Switch).
+BELOW_NORMAL_PRIORITY_CLASS = 0x4000
+
+
+def limit_cores(pid, n):
+    """Pin a Windows process to its first n logical cores (SetProcessAffinityMask); False if it could not."""
+    if os.name != "nt" or n <= 0:
+        return False
+    import ctypes
+    k32 = ctypes.windll.kernel32
+    k32.OpenProcess.restype = ctypes.c_void_p
+    h = k32.OpenProcess(0x0200 | 0x0400, False, pid)   # PROCESS_SET_INFORMATION | PROCESS_QUERY_INFORMATION
+    if not h:
+        return False
+    try:
+        return bool(k32.SetProcessAffinityMask(ctypes.c_void_p(h), ctypes.c_size_t((1 << n) - 1)))
+    finally:
+        k32.CloseHandle(ctypes.c_void_p(h))
 QUIET_OK = ("[THREADS]", "[CLOCK]", "[HEAP]", "[HEAPGL]", "[CPULOAD]", "[AUDIO]", "[AUDIOQ]", "[AUDIOOFF]", "[OFFCORE]",
             "[GLSTEP]", "[GLPROG]", "[NVC0DEDUP]", "[LONGWAIT]", "[KWAITLONG]")
 CRASH_MARKS = ["[CRASH]", "[FATAL]", "std::bad_alloc", "terminate called", "[EXCEPTION]"]
@@ -114,6 +135,11 @@ def main():
                          "for a stuck game whose timer lines keep the log growing, e.g. the title movie's end)")
     ap.add_argument("--elf", help="the ELF the NRO was made from, for --gdb-on-stall and --gdb-at")
     ap.add_argument("--gdb", default=str(GDB))
+    ap.add_argument("--priority", choices=["below", "normal"], default="below",
+                    help="the emulator's process priority (default below normal: the PC stays responsive)")
+    ap.add_argument("--cores", type=int, default=0, metavar="N",
+                    help="run the emulator on the first N logical cores only (default: all)")
+    ap.add_argument("--vsync", action="store_true", help="cap the emulator at 60 Hz (--vsync-mode Switch)")
     ap.add_argument("--gdb-port", type=int, default=55555)
     ap.add_argument("--nro-base", default="0x8500000", help="where the emulator loads the NRO (Ryubing 1.3.3: 0x8500000)")
     ap.add_argument("--gdb-ex", action="append", default=[], help="a GDB command to run after the stacks (repeatable)")
@@ -234,6 +260,8 @@ def main():
         args.input_id = "0"
     if args.input_id:
         emu_args = emu_args.replace("{nro}", f"--input-id-1 {args.input_id} {{nro}}")
+    if args.vsync:
+        emu_args = emu_args.replace("--vsync-mode Unbounded", "--vsync-mode Switch")
     cmd = [str(emu), *[a.replace("{nro}", str(nro)) for a in shlex.split(emu_args, posix=False)]]
     if args.record:
         print("recording: play in the emulator's window, then close it to stop")
@@ -245,7 +273,11 @@ def main():
     last_growth = time.time()
     thread_dump = None
     try:
-        proc = subprocess.Popen(cmd, cwd=str(emu.parent), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        flags = BELOW_NORMAL_PRIORITY_CLASS if os.name == "nt" and args.priority == "below" else 0
+        proc = subprocess.Popen(cmd, cwd=str(emu.parent), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                creationflags=flags)
+        if args.cores and not limit_cores(proc.pid, args.cores):
+            print(f"could not limit the emulator to {args.cores} cores; running on all")
         started_at = time.time()
         frames_size, frames_growth = 0, time.time()
         while time.time() - t0 < args.timeout:
@@ -335,6 +367,12 @@ def main():
         if thread_dump is not None and thread_dump.exists():
             shutil.move(str(thread_dump), str(dest / "threads.txt"))
             print("guest threads:", dest / "threads.txt")
+        # The emulator's own log (crash stack and registers: PrintGuestStackTrace) is kept beside the run: Ryubing
+        # keeps only its last few logs and deletes older ones.
+        emu_logs = sorted((emu.parent / "portable/Logs").glob("Ryujinx_*.log"), key=lambda f: f.stat().st_mtime)
+        if emu_logs and emu_logs[-1].stat().st_mtime >= t0:
+            shutil.copyfile(emu_logs[-1], dest / "ryujinx.log")
+            print("emulator log:", dest / "ryujinx.log")
         if (dest / "frames.log").exists() and (ROOT / "tools/analyze_run.py").exists():
             subprocess.run([sys.executable, str(ROOT / "tools/analyze_run.py"), str(dest)])
     else:
